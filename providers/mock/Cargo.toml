@@ -1,0 +1,17 @@
+[package]
+name = "malus-provider-mock"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "malus-provider-mock"
+path = "src/main.rs"
+
+[dependencies]
+malus-provider-sdk = { path = "../../crates/malus-provider-sdk" }
+async-trait = "0.1"
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", "io-util", "sync"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
