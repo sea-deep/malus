@@ -2,6 +2,7 @@
 use crate::{
     app::{AppState, Cursor, ListKind, Msg},
     components::{Button, ButtonVariant},
+    model::LyricLine,
 };
 use ratatui::{
     layout::Rect,
@@ -426,5 +427,191 @@ impl Component<AppState, Msg> for Slider {
                 }
             })
             .map_or(EventResult::Ignored, EventResult::Emit)
+    }
+}
+
+pub struct LyricsList {
+    pub lyrics: Vec<LyricLine>,
+    pub current_time: f64,
+    pub scroll_offset: Option<usize>,
+    pub area: Rect,
+}
+
+impl Component<AppState, Msg> for LyricsList {
+    fn declare(&mut self, ctx: &mut DeclareCtx<'_, AppState, Msg>) {
+        self.area = ctx.area();
+    }
+    fn scope_options(&self) -> ScopeOptions {
+        ScopeOptions::default().focusable(true)
+    }
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, AppState>) {
+        let a = ctx.area();
+        if a.is_empty() || self.lyrics.is_empty() {
+            return;
+        }
+        let t = *ctx.theme;
+        let height = a.height as usize;
+        let center = height / 2;
+
+        let mut active_idx = None;
+        for (i, line) in self.lyrics.iter().enumerate() {
+            if self.current_time >= line.start_secs {
+                active_idx = Some(i);
+            } else {
+                break;
+            }
+        }
+
+        let auto_start = active_idx.unwrap_or(0).saturating_sub(center);
+        let max_start = self.lyrics.len().saturating_sub(height);
+        let start = self.scroll_offset.unwrap_or(auto_start).min(max_start);
+
+        let hover = ctx
+            .hover_position()
+            .filter(|p| a.contains(*p))
+            .map(|p| start + p.y.saturating_sub(a.y) as usize);
+
+        for (row_offset, (index, line)) in self
+            .lyrics
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(height)
+            .enumerate()
+        {
+            let y = a.y + row_offset as u16;
+            let line_area = Rect::new(a.x, y, a.width, 1);
+            let is_active = Some(index) == active_idx;
+            let is_past = active_idx.is_some_and(|cur| index < cur);
+            let is_hovered = hover == Some(index);
+
+            let bg = if is_hovered {
+                t.field
+            } else if is_active {
+                t.secondary
+            } else {
+                t.background
+            };
+
+            let fg = if is_active {
+                t.primary
+            } else if is_past {
+                t.muted_foreground
+            } else {
+                t.foreground
+            };
+
+            let mut style = Style::default().bg(bg).fg(fg);
+            if is_active {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+
+            let prefix = if is_active {
+                "▶ "
+            } else if is_hovered {
+                "↳ "
+            } else {
+                "  "
+            };
+
+            let mins = line.time_secs / 60;
+            let secs = line.time_secs % 60;
+            let time_str = format!("{mins}:{secs:02}");
+
+            let time_width = 7;
+            let prefix_width = 2;
+            let content_width = a.width.saturating_sub(time_width + prefix_width + 1);
+            let text_fit = fit(&line.text, content_width);
+
+            let spans = vec![
+                Span::styled(
+                    prefix,
+                    Style::default().fg(if is_active || is_hovered {
+                        t.primary
+                    } else {
+                        t.muted_foreground
+                    }),
+                ),
+                Span::styled(text_fit, style),
+                Span::styled(
+                    format!(" {time_str:>5}"),
+                    Style::default().fg(t.muted_foreground),
+                ),
+            ];
+
+            ctx.widget(Paragraph::new(Line::from(spans)).style(style), line_area);
+        }
+
+        if self.lyrics.len() > height && a.width > 0 {
+            let thumb = (height * height / self.lyrics.len()).max(1);
+            let top = start * (height - thumb) / self.lyrics.len().saturating_sub(height).max(1);
+            let color = t.border;
+            ctx.with_buffer(|buf| {
+                for y in 0..height {
+                    if let Some(c) = buf.cell_mut((a.right() - 1, a.y + y as u16)) {
+                        c.set_char(if y >= top && y < top + thumb {
+                            '┃'
+                        } else {
+                            '│'
+                        })
+                        .set_fg(color);
+                    }
+                }
+            });
+        }
+    }
+
+    fn handle_event(
+        &mut self,
+        event: &Event,
+        _state: &AppState,
+        _ctx: &mut EventCtx<'_>,
+    ) -> EventResult<Msg> {
+        let height = self.area.height as usize;
+        let center = height / 2;
+        let mut active_idx = None;
+        for (i, line) in self.lyrics.iter().enumerate() {
+            if self.current_time >= line.start_secs {
+                active_idx = Some(i);
+            } else {
+                break;
+            }
+        }
+        let auto_start = active_idx.unwrap_or(0).saturating_sub(center);
+        let max_start = self.lyrics.len().saturating_sub(height);
+        let start = self.scroll_offset.unwrap_or(auto_start).min(max_start);
+
+        let message = match event {
+            Event::Key(k) => match k.code {
+                KeyCode::Up | KeyCode::Char('k') => Some(Msg::ScrollLyrics(-1)),
+                KeyCode::Down | KeyCode::Char('j') => Some(Msg::ScrollLyrics(1)),
+                KeyCode::PageUp => Some(Msg::ScrollLyrics(-(height as i32))),
+                KeyCode::PageDown => Some(Msg::ScrollLyrics(height as i32)),
+                KeyCode::Home => Some(Msg::ScrollLyrics(-(self.lyrics.len() as i32))),
+                KeyCode::End => Some(Msg::ScrollLyrics(self.lyrics.len() as i32)),
+                KeyCode::Char('c') if !k.modifiers.ctrl => Some(Msg::ResetLyricsScroll),
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    let target_idx = (start + center).min(self.lyrics.len().saturating_sub(1));
+                    self.lyrics
+                        .get(target_idx)
+                        .map(|line| Msg::EngineSeek(line.start_secs))
+                }
+                _ => None,
+            },
+            Event::Mouse(m) => {
+                let index = start + m.row.saturating_sub(self.area.y) as usize;
+                match m.kind {
+                    MouseKind::Scroll(ScrollDirection::Down) => Some(Msg::ScrollLyrics(2)),
+                    MouseKind::Scroll(ScrollDirection::Up) => Some(Msg::ScrollLyrics(-2)),
+                    MouseKind::Click(MouseButton::Left) => self
+                        .lyrics
+                        .get(index)
+                        .map(|line| Msg::EngineSeek(line.start_secs)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        message.map_or(EventResult::Ignored, EventResult::Emit)
     }
 }

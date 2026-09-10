@@ -17,10 +17,7 @@ pub fn bounds(area: Rect, overlay: &Overlay) -> Rect {
         84
     }
     .min(area.width.saturating_sub(4));
-    let height = if matches!(
-        overlay,
-        Overlay::Settings | Overlay::ContextMenu(_) | Overlay::Lyrics
-    ) {
+    let height = if matches!(overlay, Overlay::Settings | Overlay::ContextMenu(_)) {
         14
     } else {
         25
@@ -299,13 +296,61 @@ pub fn render(ctx: &mut DeclareCtx<'_, AppState, Msg>, s: &AppState, t: &Theme, 
             );
         }
         Overlay::Lyrics => {
-            empty(
+            let current_track = s.player.current_track();
+            let Some(track) = current_track else {
+                empty(
+                    ctx,
+                    t,
+                    content,
+                    "No music playing",
+                    "Start playing a track to view synchronized lyrics.",
+                );
+                return;
+            };
+
+            text(
                 ctx,
-                t,
-                content,
-                "Lyrics aren't available here yet.",
-                "Apple Music's current bridge does not supply synchronized lyrics for this track.",
+                format!("{} — {}", track.title, track.artist),
+                row(content, 0),
+                t.muted_foreground,
+                false,
             );
+
+            let lyrics_area = Rect::new(
+                content.x,
+                content.y + 2.min(content.height),
+                content.width,
+                content.height.saturating_sub(2),
+            );
+
+            if s.lyrics_loading {
+                text(
+                    ctx,
+                    "Fetching synchronized lyrics from Apple Music…",
+                    row(lyrics_area, 1),
+                    t.muted_foreground,
+                    false,
+                );
+            } else if s.player.lyrics.is_empty() {
+                empty(
+                    ctx,
+                    t,
+                    lyrics_area,
+                    "Lyrics unavailable",
+                    "No synchronized lyrics available for this track on Apple Music.",
+                );
+            } else {
+                ctx.component(
+                    "lyrics",
+                    LyricsList {
+                        lyrics: s.player.lyrics.clone(),
+                        current_time: s.position_secs(),
+                        scroll_offset: s.lyrics_scroll_offset,
+                        area: lyrics_area,
+                    },
+                    lyrics_area,
+                );
+            }
         }
     }
 }

@@ -35,20 +35,7 @@ impl RepeatMode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LyricLine {
-    pub time_secs: u64,
-    pub text: String,
-}
-
-impl LyricLine {
-    pub fn new(time_secs: u64, text: impl Into<String>) -> Self {
-        Self {
-            time_secs,
-            text: text.into(),
-        }
-    }
-}
+pub use super::lyrics::LyricLine;
 
 #[derive(Debug, Clone)]
 pub struct PlayerState {
@@ -60,6 +47,7 @@ pub struct PlayerState {
     pub repeat: RepeatMode,
     pub queue: Vec<Track>,
     pub history: Vec<Track>,
+    pub lyrics: Vec<LyricLine>,
     pub lyrics_sync_enabled: bool,
 }
 
@@ -74,6 +62,7 @@ impl Default for PlayerState {
             repeat: RepeatMode::Off,
             queue: Vec::new(),
             history: Vec::new(),
+            lyrics: Vec::new(),
             lyrics_sync_enabled: true,
         }
     }
@@ -89,6 +78,7 @@ impl PlayerState {
             self.history.push(prev);
         }
         self.current_track = Some(track);
+        self.lyrics.clear();
         self.elapsed_secs = 0;
         self.status = PlaybackStatus::Playing;
     }
@@ -231,27 +221,30 @@ impl PlayerState {
         self.queue.clear();
     }
 
-    /// Lyrics are populated only when a supported provider supplies them.
-    pub fn current_lyrics(&self) -> Vec<LyricLine> {
-        Vec::new()
+    /// Returns the currently active lyrics slice.
+    pub fn current_lyrics(&self) -> &[LyricLine] {
+        &self.lyrics
     }
 
-    /// Finds the index of the active lyric line according to elapsed playback time.
+    /// Finds the index of the active lyric line according to second playback time.
     pub fn current_lyric_index(&self) -> Option<usize> {
-        let lyrics = self.current_lyrics();
-        if lyrics.is_empty() {
+        self.lyric_index_at(self.elapsed_secs as f64)
+    }
+
+    /// Finds the index of the active lyric line according to sub-second playback time.
+    pub fn lyric_index_at(&self, elapsed_secs: f64) -> Option<usize> {
+        if self.lyrics.is_empty() {
             return None;
         }
-
-        let mut current = 0;
-        for (i, line) in lyrics.iter().enumerate() {
-            if self.elapsed_secs >= line.time_secs {
-                current = i;
+        let mut current = None;
+        for (i, line) in self.lyrics.iter().enumerate() {
+            if elapsed_secs >= line.start_secs {
+                current = Some(i);
             } else {
                 break;
             }
         }
-        Some(current)
+        current
     }
 
     pub fn current_track(&self) -> Option<&Track> {

@@ -13,6 +13,7 @@ pub enum DataRequest {
     Radio,
     Playlist(String),
     Search(String),
+    Lyrics(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +69,10 @@ pub enum MusicKitEvent {
     },
     RadioLoaded {
         stations: Vec<RadioStation>,
+    },
+    LyricsLoaded {
+        track_id: String,
+        ttml: Option<String>,
     },
     QueueChanged {
         tracks: Vec<Track>,
@@ -287,6 +292,27 @@ impl MusicKitDriver {
             }
         }
         Ok(values)
+    }
+    pub async fn fetch_lyrics(&self, song_id: &str) -> io::Result<Option<String>> {
+        let res = self
+            .cdp
+            .call_function(
+                r#"async function(songId) {
+            const mk = window.MusicKit && MusicKit.getInstance();
+            if (!mk || !mk.api) return { ttml: null, error: 'not_ready' };
+            const storefront = mk.storefrontId || 'us';
+            try {
+                const res = await mk.api.music(`/v1/catalog/${storefront}/songs/${songId}/lyrics`);
+                const ttml = res?.data?.data?.[0]?.attributes?.ttml || null;
+                return { ttml: ttml };
+            } catch (err) {
+                return { ttml: null, error: err?.status || err?.message || 'not_found' };
+            }
+        }"#,
+                &[json!(song_id)],
+            )
+            .await?;
+        Ok(res["ttml"].as_str().map(|s| s.to_string()))
     }
 }
 pub fn parse_tracks(value: &Value) -> Vec<Track> {

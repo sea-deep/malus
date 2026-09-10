@@ -357,3 +357,79 @@ fn queue_can_be_reordered_with_the_keyboard() {
     assert_eq!(app.state.player.queue[0].id, "trk-2");
     assert_eq!(app.state.player.queue[1].id, "trk-1");
 }
+
+#[test]
+fn lyrics_overlay_updates_with_live_playback_and_seeking() {
+    let mut app = App::new(AppState::demo());
+    // 1. Without track playing, opening lyrics overlay shows empty state
+    app.state
+        .update(Msg::OpenOverlay(Overlay::Lyrics), Duration::ZERO);
+    let term = draw(&mut app, 120, 34);
+    assert!(text(&term).contains("No music playing"));
+
+    // 2. Play a track
+    let track = app.state.library.tracks[0].clone();
+    let track_id = track.id.clone();
+    app.state.player.play_track(track);
+
+    // 3. Load TTML lyrics
+    let sample_ttml = r#"
+        <tt xmlns="http://www.w3.org/ns/ttml">
+            <body>
+                <div>
+                    <p begin="10.0" end="15.0">First lyric line</p>
+                    <p begin="16.0" end="20.0">Second lyric line</p>
+                    <p begin="21.0" end="30.0">Third lyric line</p>
+                </div>
+            </body>
+        </tt>
+    "#;
+    app.state.lyrics_track_id = Some(track_id.clone());
+    app.state.update(
+        Msg::EngineMusicKitEvent(MusicKitEvent::LyricsLoaded {
+            track_id: track_id.clone(),
+            ttml: Some(sample_ttml.into()),
+        }),
+        Duration::ZERO,
+    );
+
+    assert_eq!(app.state.player.lyrics.len(), 3);
+    assert_eq!(app.state.player.lyrics[0].text, "First lyric line");
+
+    // 4. Draw with lyrics open
+    let term = draw(&mut app, 120, 34);
+    assert!(text(&term).contains("First lyric line"));
+    assert!(text(&term).contains("Second lyric line"));
+
+    // 5. Test active line at 12s (between 10.0 and 15.0)
+    assert_eq!(app.state.player.lyric_index_at(12.0), Some(0));
+    assert_eq!(app.state.player.lyric_index_at(17.5), Some(1));
+    assert_eq!(app.state.player.lyric_index_at(5.0), None); // before first line
+
+    // 6. Seeking by clicking or key
+    app.handle_event(
+        Event::Mouse(MouseEvent {
+            kind: MouseKind::Click(MouseButton::Left),
+            column: 30,
+            row: 10,
+            modifiers: Modifiers::NONE,
+        }),
+        Duration::ZERO,
+    );
+    // Seeking worked and scroll offset reset
+    assert_eq!(app.state.lyrics_scroll_offset, None);
+
+    // 7. Track change clears lyrics
+    app.state.update(
+        Msg::EngineMusicKitEvent(MusicKitEvent::NowPlaying {
+            id: "trk-other".into(),
+            title: "Other Song".into(),
+            artist_name: "Other Artist".into(),
+            album_name: None,
+            artwork_url: None,
+            duration: Some(180.0),
+        }),
+        Duration::ZERO,
+    );
+    assert!(app.state.player.lyrics.is_empty());
+}

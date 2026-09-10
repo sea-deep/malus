@@ -133,6 +133,8 @@ pub enum Msg {
     EngineMusicKitEvent(MusicKitEvent),
     EngineError(String),
     EngineSeek(f64),
+    ScrollLyrics(i32),
+    ResetLyricsScroll,
 }
 
 pub struct AppState {
@@ -164,6 +166,10 @@ pub struct AppState {
     pub reconnect_requested: bool,
     pub library_loading: bool,
     pub catalog_loading: bool,
+    pub lyrics_track_id: Option<String>,
+    pub lyrics_loading: bool,
+    pub lyrics_error: Option<String>,
+    pub lyrics_scroll_offset: Option<usize>,
     pub now: Duration,
     pub transition_at: Duration,
     pub reduced_motion: bool,
@@ -208,6 +214,10 @@ impl AppState {
             reconnect_requested: false,
             library_loading: true,
             catalog_loading: false,
+            lyrics_track_id: None,
+            lyrics_loading: false,
+            lyrics_error: None,
+            lyrics_scroll_offset: None,
             now: Duration::ZERO,
             transition_at: Duration::ZERO,
             reduced_motion: std::env::var_os("MALUS_REDUCED_MOTION").is_some(),
@@ -362,7 +372,27 @@ impl AppState {
     }
     fn close_overlay(&mut self) {
         self.active_overlay = None;
+        self.lyrics_scroll_offset = None;
         self.modals.close(&mut self.focus);
+    }
+    pub fn ensure_lyrics(&mut self) {
+        if self.demo {
+            return;
+        }
+        let Some(track) = &self.player.current_track else {
+            self.player.lyrics.clear();
+            self.lyrics_track_id = None;
+            return;
+        };
+        let target_id = track.playback_id().to_string();
+        if self.lyrics_track_id.as_deref() == Some(&target_id) || self.lyrics_loading {
+            return;
+        }
+        self.lyrics_track_id = Some(target_id.clone());
+        self.lyrics_loading = true;
+        self.lyrics_error = None;
+        self.player.lyrics.clear();
+        self.send(EngineCommand::FetchLyrics(target_id));
     }
     fn open_overlay(&mut self, overlay: Overlay) {
         self.close_overlay();
@@ -370,11 +400,15 @@ impl AppState {
         if overlay == Overlay::CommandPalette {
             self.command_filter.clear();
         }
+        if overlay == Overlay::Lyrics {
+            self.ensure_lyrics();
+        }
         let _ = self.modals.open("overlay", &mut self.focus);
         self.focus = match overlay {
             Overlay::Search | Overlay::Queue | Overlay::CommandPalette | Overlay::Help => {
                 FocusState::intent(["overlay", "list"])
             }
+            Overlay::Lyrics => FocusState::intent(["overlay", "lyrics"]),
             Overlay::ContextMenu(_) => FocusState::intent(["overlay", "action0"]),
             _ => FocusState::intent(["overlay", "close"]),
         };
@@ -665,6 +699,7 @@ impl AppState {
             Msg::EngineSeek(s) => {
                 if s.is_finite() {
                     let s = s.clamp(0.0, self.player.duration_ms() as f64 / 1000.0);
+                    self.lyrics_scroll_offset = None;
                     if self.demo {
                         self.progress_secs = s;
                         self.progress_at = now;
@@ -673,6 +708,27 @@ impl AppState {
                         self.send(EngineCommand::Seek(s));
                     }
                 }
+            }
+            Msg::ScrollLyrics(delta) => {
+                let len = self.player.lyrics.len();
+                if len > 0 {
+                    let current = self.lyrics_scroll_offset.unwrap_or_else(|| {
+                        let active = self
+                            .player
+                            .lyric_index_at(self.position_secs())
+                            .unwrap_or(0);
+                        active.saturating_sub(6)
+                    });
+                    let next = if delta < 0 {
+                        current.saturating_sub((-delta) as usize)
+                    } else {
+                        (current + delta as usize).min(len.saturating_sub(1))
+                    };
+                    self.lyrics_scroll_offset = Some(next);
+                }
+            }
+            Msg::ResetLyricsScroll => {
+                self.lyrics_scroll_offset = None;
             }
             Msg::JumpQueue(i) => {
                 if self.demo {
@@ -877,18 +933,22 @@ impl AppState {
                 artwork_url,
                 duration,
             } => {
-                if self
+                let track_changed = self
                     .player
                     .current_track
                     .as_ref()
-                    .is_none_or(|t| t.id != id)
-                {
+                    .is_none_or(|t| t.id != id);
+                if track_changed {
                     if let Some(t) = self.player.current_track.take() {
                         self.player.history.push(t);
                     }
                     self.progress_secs = 0.0;
                     self.progress_at = self.now;
                     self.player.elapsed_secs = 0;
+                    self.player.lyrics.clear();
+                    self.lyrics_track_id = None;
+                    self.lyrics_loading = false;
+                    self.lyrics_error = None;
                 }
                 let mut track = self.find_track(&id).cloned().unwrap_or_else(|| {
                     Track::new(
@@ -906,6 +966,9 @@ impl AppState {
                 track.artist = artist_name;
                 track.artwork_url = artwork_url.or(track.artwork_url);
                 self.player.current_track = Some(track);
+                if self.active_overlay == Some(Overlay::Lyrics) {
+                    self.ensure_lyrics();
+                }
             }
             MusicKitEvent::LibraryLoaded { tracks } => {
                 self.library.replace_tracks(tracks);
@@ -961,11 +1024,25 @@ impl AppState {
                         .min(self.player.queue.len().saturating_sub(1));
                 }
             }
+            MusicKitEvent::LyricsLoaded { track_id, ttml } => {
+                if self.lyrics_track_id.as_deref() == Some(&track_id) {
+                    self.lyrics_loading = false;
+                    if let Some(xml) = ttml {
+                        let lines = crate::model::lyrics::parse_ttml(&xml);
+                        self.player.lyrics = lines;
+                        self.lyrics_error = None;
+                    } else {
+                        self.player.lyrics.clear();
+                        self.lyrics_error = None;
+                    }
+                }
+            }
             MusicKitEvent::Error { message } => {
                 self.toasts.push(Toast::error(message), self.now);
             }
             MusicKitEvent::RequestFailed { request, message } => {
                 use crate::engine::musickit::DataRequest;
+                let is_lyrics = matches!(request, DataRequest::Lyrics(_));
                 match request {
                     DataRequest::Search(q) => {
                         if q != self.search_query.trim() {
@@ -982,9 +1059,15 @@ impl AppState {
                         self.catalog_loading = false;
                         self.engine_error = Some(message.clone());
                     }
+                    DataRequest::Lyrics(id) if self.lyrics_track_id.as_deref() == Some(&id) => {
+                        self.lyrics_loading = false;
+                        self.lyrics_error = Some(message.clone());
+                    }
                     _ => {}
                 }
-                self.toasts.push(Toast::error(message), self.now);
+                if !is_lyrics {
+                    self.toasts.push(Toast::error(message), self.now);
+                }
             }
             MusicKitEvent::Disconnected => self.update(Msg::EngineDisconnected, self.now),
         }

@@ -48,6 +48,7 @@ pub enum EngineCommand {
     FetchCatalog,
     FetchRadio,
     FetchPlaylist(String),
+    FetchLyrics(String),
     Shutdown,
 }
 pub struct EngineHandle {
@@ -130,7 +131,7 @@ pub async fn start_engine(
                         }
                     }
                     if matches!(cmd,EngineCommand::Shutdown){break;}
-                    if matches!(cmd,EngineCommand::FetchLibrary|EngineCommand::Search(_)|EngineCommand::FetchCatalog|EngineCommand::FetchRadio|EngineCommand::FetchPlaylist(_)) {
+                    if matches!(cmd,EngineCommand::FetchLibrary|EngineCommand::Search(_)|EngineCommand::FetchCatalog|EngineCommand::FetchRadio|EngineCommand::FetchPlaylist(_)|EngineCommand::FetchLyrics(_)) {
                         if matches!(cmd,EngineCommand::FetchLibrary) && library_task.as_ref().is_some_and(|t|!t.is_finished()){continue;}
                         let is_search=matches!(cmd,EngineCommand::Search(_));
                         let is_library=matches!(cmd,EngineCommand::FetchLibrary);
@@ -140,6 +141,7 @@ pub async fn start_engine(
                             EngineCommand::FetchPlaylist(id)=>musickit::DataRequest::Playlist(id.clone()),
                             EngineCommand::FetchCatalog=>musickit::DataRequest::Catalog,
                             EngineCommand::FetchRadio=>musickit::DataRequest::Radio,
+                            EngineCommand::FetchLyrics(id)=>musickit::DataRequest::Lyrics(id.clone()),
                             _=>musickit::DataRequest::Library,
                         };
                         let driver=driver.clone();let out=bridge_tx.clone();
@@ -283,6 +285,10 @@ async fn load_data(
                     .filter_map(musickit::parse_musickit_track)
                     .collect(),
             }
+        }
+        EngineCommand::FetchLyrics(track_id) => {
+            let ttml = driver.fetch_lyrics(&track_id).await?;
+            MusicKitEvent::LyricsLoaded { track_id, ttml }
         }
         _ => return Ok(()),
     };
