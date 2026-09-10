@@ -156,7 +156,7 @@ Split-pane rendering (`panels` component) combining artwork, spectrum bars, and 
 | **Infinite Autoplay (`∞`)** | ⚡ **Easy Tweak** | When `queue.len() <= 1`, query Apple Music API `/v1/catalog/{sf}/songs/{id}/similar` and append tracks via `mk.playLater()`. |
 | **Real-Time Synced Lyrics** | ⚡ **Medium Tweak** | Fetch time-coded `.lrc` from Apple Music API; auto-scroll Ratatui list based on `currentPlaybackTime`. |
 | **Authentic Quality Badges** | ⚡ **Easy Tweak** | Parse `attributes.contentRating == "explicit"` (`[E]`) and `attributes.audioTraits` (`[MASTER]`, `[AAC 256]`). |
-| **Toast Notifications** | ⚡ **Easy Tweak** | Integrate `demos/toast` from cloned `ratcn` repo for actions like *"Added to Queue"*, *"Volume 80%"*. |
+| **In-Place Status Feedback** | ✅ **Native** | Quiet inline UI updates (instant volume slider value, queue counter badge, status bar text) instead of intrusive popups. |
 | **ASCII Spectrum Visualizer** | ⚡ **Medium Tweak** | Integrate `demos/barchart` from cloned `ratcn` driven by WebAudio `AnalyserNode` frequency bins. |
 | **Waybar / Status Line Flag** | ⚡ **Easy Tweak** | Add `malus status --json` or `--waybar` output for instant Hyprland/Polybar integration. |
 | **ALAC Lossless 24-bit/192kHz** | ❌ **NON-VIABLE** | **Do Not Implement.** Apple Web Player/MusicKit JS strictly streams 256 kbps AAC. Claims of Lossless on web are fabricated. |
