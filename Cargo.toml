@@ -18,3 +18,4 @@ zbus = { version = "5", default-features = false, features = ["tokio"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 unicode-width = "0.2"
+toml = "1.1.5"

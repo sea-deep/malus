@@ -514,13 +514,8 @@ impl Component<AppState, Msg> for LyricsList {
                 "  "
             };
 
-            let mins = line.time_secs / 60;
-            let secs = line.time_secs % 60;
-            let time_str = format!("{mins}:{secs:02}");
-
-            let time_width = 7;
             let prefix_width = 2;
-            let content_width = a.width.saturating_sub(time_width + prefix_width + 1);
+            let content_width = a.width.saturating_sub(prefix_width);
             let text_fit = fit(&line.text, content_width);
 
             let spans = vec![
@@ -533,10 +528,6 @@ impl Component<AppState, Msg> for LyricsList {
                     }),
                 ),
                 Span::styled(text_fit, style),
-                Span::styled(
-                    format!(" {time_str:>5}"),
-                    Style::default().fg(t.muted_foreground),
-                ),
             ];
 
             ctx.widget(Paragraph::new(Line::from(spans)).style(style), line_area);

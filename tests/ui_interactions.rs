@@ -433,3 +433,38 @@ fn lyrics_overlay_updates_with_live_playback_and_seeking() {
     );
     assert!(app.state.player.lyrics.is_empty());
 }
+
+#[test]
+fn custom_keymap_allows_rebinding_keys() {
+    use malus::config::Keymap;
+    let custom_toml = r#"
+        [bindings]
+        "x" = "toggle_play"
+        "ctrl+x" = "quit"
+        "m" = "toggle_lyrics"
+    "#;
+    let custom_keymap = Keymap::load_from_str(custom_toml).unwrap();
+    let mut app = App::new(AppState::demo()).with_keymap(custom_keymap);
+    draw(&mut app, 120, 34);
+
+    // Initial state: not playing, no lyrics overlay
+    assert_eq!(app.state.player.status, PlaybackStatus::Stopped);
+    assert_eq!(app.state.active_overlay, None);
+
+    // Press 'm' -> should toggle lyrics overlay
+    key(&mut app, KeyCode::Char('m'));
+    assert_eq!(app.state.active_overlay, Some(Overlay::Lyrics));
+
+    // Press 'ctrl+x' -> should quit
+    app.handle_event(
+        Event::Key(KeyEvent {
+            code: KeyCode::Char('x'),
+            modifiers: Modifiers {
+                ctrl: true,
+                ..Modifiers::NONE
+            },
+        }),
+        Duration::ZERO,
+    );
+    assert!(app.state.should_quit);
+}

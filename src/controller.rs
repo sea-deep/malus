@@ -1,6 +1,7 @@
 //! Input routing shared by the terminal application and interaction tests.
 use crate::{
     app::{AppState, ListKind, Msg, Overlay, Screen},
+    config::{Action, KeyScope, Keymap},
     ui,
 };
 use ratatui::{
@@ -14,6 +15,7 @@ use ratcn::{
 use std::time::Duration;
 pub struct App {
     pub state: AppState,
+    pub keymap: Keymap,
     pub ratcn: Ratcn<AppState, Msg>,
     pub area: Rect,
 }
@@ -21,6 +23,7 @@ impl App {
     pub fn new(state: AppState) -> Self {
         Self {
             state,
+            keymap: Keymap::load(),
             area: Rect::default(),
             ratcn: Ratcn::new()
                 .focus(|s: &AppState| &s.focus, Msg::FocusChanged)
@@ -28,67 +31,76 @@ impl App {
                 .tab_wrap(TabWrap::Wrap),
         }
     }
+    pub fn with_keymap(mut self, keymap: Keymap) -> Self {
+        self.keymap = keymap;
+        self
+    }
     pub fn handle_event(&mut self, event: impl TryInto<Event>, now: Duration) {
         let Ok(event) = event.try_into() else {
             return;
         };
         let message = match &event {
             Event::Key(key) => {
-                let code = key.code;
-                let ctrl = key.modifiers.ctrl;
-                if ctrl && code == KeyCode::Char('c') {
-                    Some(Msg::Quit)
-                } else if code == KeyCode::Esc {
-                    Some(if self.state.active_overlay.is_some() {
-                        Msg::CloseOverlay
-                    } else {
-                        Msg::NavigateBack
-                    })
-                } else if ctrl && code == KeyCode::Char('k') {
-                    Some(Msg::ToggleOverlay(Overlay::CommandPalette))
-                } else if ctrl && code == KeyCode::Char('r') {
-                    Some(Msg::Refresh)
+                let scope = match self.state.active_overlay {
+                    Some(Overlay::Search) => KeyScope::Search,
+                    Some(Overlay::CommandPalette) => KeyScope::CommandPalette,
+                    Some(Overlay::Queue) => KeyScope::Queue,
+                    Some(Overlay::Lyrics) => KeyScope::Lyrics,
+                    _ => KeyScope::Global,
+                };
+
+                if let Some(action) = self.keymap.resolve(scope, key) {
+                    match action {
+                        Action::Quit => Some(Msg::Quit),
+                        Action::Escape => Some(if self.state.active_overlay.is_some() {
+                            Msg::CloseOverlay
+                        } else {
+                            Msg::NavigateBack
+                        }),
+                        Action::CloseOverlay => Some(Msg::CloseOverlay),
+                        Action::NavigateBack => Some(Msg::NavigateBack),
+                        Action::ToggleCommandPalette => {
+                            Some(Msg::ToggleOverlay(Overlay::CommandPalette))
+                        }
+                        Action::ToggleHelp => Some(Msg::ToggleOverlay(Overlay::Help)),
+                        Action::ToggleSettings => Some(Msg::ToggleOverlay(Overlay::Settings)),
+                        Action::ToggleLyrics => Some(Msg::ToggleOverlay(Overlay::Lyrics)),
+                        Action::ToggleQueue => Some(Msg::ToggleOverlay(Overlay::Queue)),
+                        Action::OpenSearch => Some(Msg::OpenOverlay(Overlay::Search)),
+                        Action::Refresh => Some(Msg::Refresh),
+                        Action::TogglePlay => Some(Msg::TogglePlay),
+                        Action::NextTrack => Some(Msg::NextTrack),
+                        Action::PrevTrack => Some(Msg::PrevTrack),
+                        Action::VolumeUp => Some(Msg::VolumeUp),
+                        Action::VolumeDown => Some(Msg::VolumeDown),
+                        Action::ToggleShuffle => Some(Msg::ToggleShuffle),
+                        Action::CycleRepeat => Some(Msg::CycleRepeat),
+                        Action::NavigateListenNow => Some(Msg::Navigate(Screen::ListenNow)),
+                        Action::NavigateBrowse => Some(Msg::Navigate(Screen::Browse)),
+                        Action::NavigateRadio => Some(Msg::Navigate(Screen::Radio)),
+                        Action::NavigateLibrary => Some(Msg::Navigate(Screen::Library)),
+                        Action::NavigateNowPlaying => Some(Msg::Navigate(Screen::NowPlaying)),
+                        Action::SearchClear => Some(Msg::SearchClear),
+                        Action::SearchBackspace => Some(Msg::SearchBackspace),
+                        Action::CommandBackspace => Some(Msg::CommandBackspace),
+                        _ => None,
+                    }
                 } else if self.state.active_overlay == Some(Overlay::Search) {
-                    match code {
-                        KeyCode::Backspace => Some(Msg::SearchBackspace),
-                        KeyCode::Char('u') if ctrl => Some(Msg::SearchClear),
-                        KeyCode::Char(c) if !ctrl && !key.modifiers.alt => {
+                    match key.code {
+                        KeyCode::Char(c) if !key.modifiers.ctrl && !key.modifiers.alt => {
                             Some(Msg::SearchInput(c))
                         }
                         _ => None,
                     }
                 } else if self.state.active_overlay == Some(Overlay::CommandPalette) {
-                    match code {
-                        KeyCode::Backspace => Some(Msg::CommandBackspace),
-                        KeyCode::Char(c) if !ctrl && !key.modifiers.alt => {
+                    match key.code {
+                        KeyCode::Char(c) if !key.modifiers.ctrl && !key.modifiers.alt => {
                             Some(Msg::CommandInput(c))
                         }
                         _ => None,
                     }
-                } else if ctrl || key.modifiers.alt {
-                    None
                 } else {
-                    match code {
-                        KeyCode::Char(' ') => Some(Msg::TogglePlay),
-                        KeyCode::Char('q') => Some(Msg::ToggleOverlay(Overlay::Queue)),
-                        KeyCode::Char('Q') => Some(Msg::Quit),
-                        KeyCode::Char('n') => Some(Msg::NextTrack),
-                        KeyCode::Char('p') => Some(Msg::PrevTrack),
-                        KeyCode::Char('+') | KeyCode::Char('=') => Some(Msg::VolumeUp),
-                        KeyCode::Char('-') => Some(Msg::VolumeDown),
-                        KeyCode::Char('s') => Some(Msg::ToggleShuffle),
-                        KeyCode::Char('r') => Some(Msg::CycleRepeat),
-                        KeyCode::Char('l') => Some(Msg::ToggleOverlay(Overlay::Lyrics)),
-                        KeyCode::Char('/') => Some(Msg::OpenOverlay(Overlay::Search)),
-                        KeyCode::Char('?') => Some(Msg::ToggleOverlay(Overlay::Help)),
-                        KeyCode::Char(',') => Some(Msg::ToggleOverlay(Overlay::Settings)),
-                        KeyCode::Char('1') => Some(Msg::Navigate(Screen::ListenNow)),
-                        KeyCode::Char('2') => Some(Msg::Navigate(Screen::Browse)),
-                        KeyCode::Char('3') => Some(Msg::Navigate(Screen::Radio)),
-                        KeyCode::Char('4') => Some(Msg::Navigate(Screen::Library)),
-                        KeyCode::Char('5') => Some(Msg::Navigate(Screen::NowPlaying)),
-                        _ => None,
-                    }
+                    None
                 }
             }
             Event::Paste(text) if self.state.active_overlay == Some(Overlay::Search) => {

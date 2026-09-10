@@ -175,17 +175,20 @@ pub fn render(ctx: &mut DeclareCtx<'_, AppState, Msg>, s: &AppState, t: &Theme, 
             let x = a.x + i as u16 * card_width;
             let image_area = Rect::new(x, a.y + 4, 12, 6);
             let track = album.track_ids.first().and_then(|id| s.find_track(id));
-            if let Some(cover) = track
+            let cover = track
                 .and_then(|t| t.artwork_url.as_ref())
                 .and_then(|u| s.artwork.get(u))
-            {
-                ctx.paint_widget(cover.clone(), image_area);
-            } else {
-                ctx.paint_widget(
-                    Paragraph::new("\n    ♫").style(Style::default().fg(t.primary).bg(t.secondary)),
-                    image_area,
-                );
-            }
+                .cloned();
+            ctx.paint_widget(
+                crate::ui::artwork::ArtworkCard {
+                    title: album.title.clone(),
+                    artist: album.artist.clone(),
+                    album: None,
+                    theme: *t,
+                    cover,
+                },
+                image_area,
+            );
             let info = Rect::new(x + 14, a.y + 5, card_width.saturating_sub(16), 1);
             text(ctx, album.title.clone(), info, t.foreground, true);
             text(
@@ -364,14 +367,21 @@ fn now_playing(ctx: &mut DeclareCtx<'_, AppState, Msg>, s: &AppState, t: &Theme,
         art_w,
         art_h,
     );
-    if let Some(cover) = track.artwork_url.as_ref().and_then(|u| s.artwork.get(u)) {
-        ctx.paint_widget(cover.clone(), art);
-    } else {
-        ctx.paint_widget(
-            Paragraph::new("\n\n     ♫").style(Style::default().bg(t.secondary).fg(t.primary)),
-            art,
-        );
-    }
+    let cover = track
+        .artwork_url
+        .as_ref()
+        .and_then(|u| s.artwork.get(u))
+        .cloned();
+    ctx.paint_widget(
+        crate::ui::artwork::ArtworkCard {
+            title: track.title.clone(),
+            artist: track.artist.clone(),
+            album: Some(track.album.clone()),
+            theme: *t,
+            cover,
+        },
+        art,
+    );
     let info = if large {
         Rect::new(
             art.right() + 5,

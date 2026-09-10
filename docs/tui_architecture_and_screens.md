@@ -109,12 +109,12 @@ A focused split-pane view pairing artwork with live karaoke lyrics. **No audio v
 |   │                           │   | I've been on my own for long enough           |
 |   │     [ NATIVE ARTWORK ]    │   | You don't have to say too much                |
 |   │        Kitty / Sixel      │   |                                               |
-|   │             or            │   | ▶ I said, ooh, I'm blinded by the lights 1:00 |
+|   │             or            │   | ▶ I said, ooh, I'm blinded by the lights      |
 |   │     DEFAULT PLACEHOLDER   │   |                                               |
 |   │                           │   | (Upcoming lines - standard)                   |
-|   │                           │   | No, I can't sleep until I feel your touch 1:06|
-|   └───────────────────────────┘   | I said, ooh, I'm drowning in the night   1:12 |
-|                                   | Oh, when I'm like this, you're the one...1:18 |
+|   │                           │   | No, I can't sleep until I feel your touch     |
+|   └───────────────────────────┘   | I said, ooh, I'm drowning in the night        |
+|                                   | Oh, when I'm like this, you're the one...     |
 |   Blinding Lights             [E] |                                               |
 |   The Weeknd                      |                                               |
 |   After Hours · 2020 · AAC 256    | [Click line to seek]  [c] Re-center lyrics    |
