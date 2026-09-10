@@ -55,6 +55,22 @@ impl BrowserProcess {
         if !visible {
             cmd.arg("--headless=new");
             cmd.arg("--disable-gpu");
+            // Footprint reduction: shrink virtual viewport & suppress software rasterization
+            cmd.arg("--window-size=100,100");
+            cmd.arg("--disable-gpu-compositing");
+            cmd.arg("--disable-software-rasterizer");
+            cmd.arg("--disable-gl-drawing-for-tests");
+            // Suppress DOM image bitmap decoding in headless mode (Malus downloads artwork directly)
+            cmd.arg("--blink-settings=imagesEnabled=false");
+            // Clamp V8 heap for headless playback
+            cmd.arg("--js-flags=--max-old-space-size=128");
+            // Clamp renderer process count
+            cmd.arg("--renderer-process-limit=1");
+            // Bound disk & media caches
+            cmd.arg("--disk-cache-size=10485760");
+            cmd.arg("--media-cache-size=20971520");
+            // Disable background network tasks
+            cmd.arg("--disable-background-networking");
         } else {
             // Visible mode (for Apple ID login)
             cmd.arg(format!("--app={}", initial_url));
@@ -65,7 +81,9 @@ impl BrowserProcess {
         cmd.arg("--disable-background-timer-throttling");
         cmd.arg("--disable-backgrounding-occluded-windows");
         cmd.arg("--disable-renderer-backgrounding");
-        cmd.arg("--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling");
+        cmd.arg(
+            "--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,Translate,OptimizationHints,MediaRouter,DialMediaRouteProvider,PaintHolding",
+        );
 
         // Security & Hardening Flags (OWASP A05)
         cmd.arg("--deny-permission-prompts");
