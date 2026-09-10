@@ -6,6 +6,7 @@ members = [
     "crates/malus-provider-sdk",
     "crates/malus-daemon",
     "crates/malus-cli",
+    "crates/malus-web-runtime",
     "providers/mock",
 ]
 
