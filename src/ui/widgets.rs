@@ -462,25 +462,58 @@ impl Component<AppState, Msg> for LyricsList {
             }
         }
 
-        let auto_start = active_idx.unwrap_or(0).saturating_sub(center);
-        let max_start = self.lyrics.len().saturating_sub(height);
-        let start = self.scroll_offset.unwrap_or(auto_start).min(max_start);
+        let is_manual = self.scroll_offset.is_some();
+        let manual_start = self.scroll_offset.unwrap_or(0);
+        let active = active_idx.unwrap_or(0);
 
-        let hover = ctx
+        let hover: Option<usize> = ctx
             .hover_position()
             .filter(|p| a.contains(*p))
-            .map(|p| start + p.y.saturating_sub(a.y) as usize);
+            .and_then(|p| {
+                let r = p.y.saturating_sub(a.y) as usize;
+                if is_manual {
+                    let idx = manual_start + r;
+                    if idx < self.lyrics.len() {
+                        Some(idx)
+                    } else {
+                        None
+                    }
+                } else {
+                    let idx = (active as isize) + (r as isize) - (center as isize);
+                    if idx >= 0 && (idx as usize) < self.lyrics.len() {
+                        Some(idx as usize)
+                    } else {
+                        None
+                    }
+                }
+            });
 
-        for (row_offset, (index, line)) in self
-            .lyrics
-            .iter()
-            .enumerate()
-            .skip(start)
-            .take(height)
-            .enumerate()
-        {
-            let y = a.y + row_offset as u16;
+        for r in 0..height {
+            let line_opt: Option<(usize, &LyricLine)> = if is_manual {
+                let idx = manual_start + r;
+                self.lyrics.get(idx).map(|l| (idx, l))
+            } else {
+                let idx = (active as isize) + (r as isize) - (center as isize);
+                if idx >= 0 && (idx as usize) < self.lyrics.len() {
+                    let u = idx as usize;
+                    self.lyrics.get(u).map(|l| (u, l))
+                } else {
+                    None
+                }
+            };
+
+            let y = a.y + r as u16;
             let line_area = Rect::new(a.x, y, a.width, 1);
+
+            let Some((index, line)) = line_opt else {
+                // Empty row padding before/after lyrics to keep center locked
+                ctx.widget(
+                    Paragraph::new("").style(Style::default().bg(t.background)),
+                    line_area,
+                );
+                continue;
+            };
+
             let is_active = Some(index) == active_idx;
             let is_past = active_idx.is_some_and(|cur| index < cur);
             let is_hovered = hover == Some(index);
@@ -534,8 +567,14 @@ impl Component<AppState, Msg> for LyricsList {
         }
 
         if self.lyrics.len() > height && a.width > 0 {
+            let current_pos = if is_manual {
+                manual_start
+            } else {
+                active.saturating_sub(center)
+            };
             let thumb = (height * height / self.lyrics.len()).max(1);
-            let top = start * (height - thumb) / self.lyrics.len().saturating_sub(height).max(1);
+            let top =
+                current_pos * (height - thumb) / self.lyrics.len().saturating_sub(height).max(1);
             let color = t.border;
             ctx.with_buffer(|buf| {
                 for y in 0..height {
@@ -568,9 +607,9 @@ impl Component<AppState, Msg> for LyricsList {
                 break;
             }
         }
-        let auto_start = active_idx.unwrap_or(0).saturating_sub(center);
-        let max_start = self.lyrics.len().saturating_sub(height);
-        let start = self.scroll_offset.unwrap_or(auto_start).min(max_start);
+        let active = active_idx.unwrap_or(0);
+        let is_manual = self.scroll_offset.is_some();
+        let manual_start = self.scroll_offset.unwrap_or(0);
 
         let message = match event {
             Event::Key(k) => match k.code {
@@ -582,7 +621,11 @@ impl Component<AppState, Msg> for LyricsList {
                 KeyCode::End => Some(Msg::ScrollLyrics(self.lyrics.len() as i32)),
                 KeyCode::Char('c') if !k.modifiers.ctrl => Some(Msg::ResetLyricsScroll),
                 KeyCode::Enter | KeyCode::Char(' ') => {
-                    let target_idx = (start + center).min(self.lyrics.len().saturating_sub(1));
+                    let target_idx = if is_manual {
+                        (manual_start + center).min(self.lyrics.len().saturating_sub(1))
+                    } else {
+                        active
+                    };
                     self.lyrics
                         .get(target_idx)
                         .map(|line| Msg::EngineSeek(line.start_secs))
@@ -590,14 +633,30 @@ impl Component<AppState, Msg> for LyricsList {
                 _ => None,
             },
             Event::Mouse(m) => {
-                let index = start + m.row.saturating_sub(self.area.y) as usize;
+                let r = m.row.saturating_sub(self.area.y) as usize;
                 match m.kind {
                     MouseKind::Scroll(ScrollDirection::Down) => Some(Msg::ScrollLyrics(2)),
                     MouseKind::Scroll(ScrollDirection::Up) => Some(Msg::ScrollLyrics(-2)),
-                    MouseKind::Click(MouseButton::Left) => self
-                        .lyrics
-                        .get(index)
-                        .map(|line| Msg::EngineSeek(line.start_secs)),
+                    MouseKind::Click(MouseButton::Left) => {
+                        let target_idx = if is_manual {
+                            let idx = manual_start + r;
+                            if idx < self.lyrics.len() {
+                                Some(idx)
+                            } else {
+                                None
+                            }
+                        } else {
+                            let idx = (active as isize) + (r as isize) - (center as isize);
+                            if idx >= 0 && (idx as usize) < self.lyrics.len() {
+                                Some(idx as usize)
+                            } else {
+                                None
+                            }
+                        };
+                        target_idx
+                            .and_then(|i| self.lyrics.get(i))
+                            .map(|l| Msg::EngineSeek(l.start_secs))
+                    }
                     _ => None,
                 }
             }

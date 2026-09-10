@@ -1,20 +1,23 @@
 //! Two-tier artwork engine for Malus.
 //!
-//! Tier 1: Crisp native terminal raster rendering via Kitty Graphics Protocol when supported.
-//! Tier 2: Clean, high-contrast typography placeholder card with metadata and audio traits.
+//! Tier 1: Crisp native terminal raster via Kitty Graphics Protocol (Ghostty/Kitty/WezTerm).
+//!         Written AFTER ratatui's draw cycle so it isn't clobbered by the buffer flush.
+//! Tier 2: High-contrast bordered placeholder card — title, artist, ♫ glyph.
 //!
-//! Strictly rejects muddy half-block (`▀`) pixelation.
+//! Half-block `▀` pixelation is rejected entirely.
 
 use crate::ui::widgets::fit;
 use image::GenericImageView;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     widgets::Widget,
 };
 
-/// Check if the terminal emulator supports the Kitty Graphics Protocol.
+// ─── Terminal capability detection ───────────────────────────────────────────
+
+/// Check if the running terminal supports the Kitty Graphics Protocol.
 pub fn supports_kitty_graphics() -> bool {
     if std::env::var("MALUS_NO_GRAPHICS").is_ok_and(|v| v == "1" || v == "true") {
         return false;
@@ -25,7 +28,8 @@ pub fn supports_kitty_graphics() -> bool {
         || std::env::var("TERM_PROGRAM").is_ok_and(|p| p == "ghostty" || p == "WezTerm")
 }
 
-/// Base64 encoder for terminal graphic escape payloads.
+// ─── Base64 ──────────────────────────────────────────────────────────────────
+
 pub fn base64_encode(data: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
@@ -33,7 +37,6 @@ pub fn base64_encode(data: &[u8]) -> String {
         let b0 = chunk[0];
         let b1 = chunk.get(1).copied().unwrap_or(0);
         let b2 = chunk.get(2).copied().unwrap_or(0);
-
         out.push(TABLE[(b0 >> 2) as usize] as char);
         out.push(TABLE[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
         if chunk.len() > 1 {
@@ -50,13 +53,17 @@ pub fn base64_encode(data: &[u8]) -> String {
     out
 }
 
-/// Emit Kitty Graphics Protocol sequences to render a native image in the designated area.
+// ─── Kitty Graphics Protocol — called AFTER ratatui draw ─────────────────────
+
+/// Emit Kitty Graphics Protocol sequences to paint a native image.
+///
+/// **Must be called after ratatui's draw completes** — ratatui would overwrite
+/// pixel data written during its own render pass.
 pub fn render_kitty_image(raw_bytes: &[u8], area: Rect, buf: &mut Buffer) {
     if area.is_empty() || raw_bytes.is_empty() {
         return;
     }
-
-    // Clear buffer cells so terminal graphics can shine through
+    // Clear buffer cells so ratatui won't paint over the graphic.
     for y in 0..area.height {
         for x in 0..area.width {
             if let Some(cell) = buf.cell_mut((area.x + x, area.y + y)) {
@@ -65,20 +72,21 @@ pub fn render_kitty_image(raw_bytes: &[u8], area: Rect, buf: &mut Buffer) {
             }
         }
     }
+    // The actual terminal write is done post-draw via `flush_kitty_image`.
+}
 
-    let b64 = base64_encode(raw_bytes);
-    if b64.is_empty() {
-        return;
-    }
-
+/// Write Kitty APC sequence to stdout.  Call this *immediately after*
+/// `ratatui::Terminal::draw` returns so we don't get overwritten.
+pub fn flush_kitty_image(raw_bytes: &[u8], area: Rect) {
     use std::io::Write;
+    // Move cursor to top-left of the artwork area (1-based)
     let mut stdout = std::io::stdout().lock();
+    let _ = write!(stdout, "\x1b[{};{}H", area.y + 1, area.x + 1);
+    let b64 = base64_encode(raw_bytes);
     let chunk_size = 4096;
-    let total_chunks = b64.len().div_ceil(chunk_size);
-
+    let total = b64.len().div_ceil(chunk_size);
     for (i, chunk) in b64.as_bytes().chunks(chunk_size).enumerate() {
-        let is_last = i + 1 == total_chunks;
-        let m = if is_last { 0 } else { 1 };
+        let m = if i + 1 == total { 0 } else { 1 };
         if i == 0 {
             let _ = write!(
                 stdout,
@@ -100,7 +108,17 @@ pub fn render_kitty_image(raw_bytes: &[u8], area: Rect, buf: &mut Buffer) {
     let _ = stdout.flush();
 }
 
-/// Render a clean, crisp typography card with track and album metadata.
+// ─── Placeholder card ─────────────────────────────────────────────────────────
+
+/// Card background: slightly lighter than the terminal bg to be distinguishable
+/// even on transparent/blurred terminals.
+const CARD_BG: Color = Color::Rgb(36, 38, 48);
+/// Card border: brighter than default border so it's clearly visible
+const CARD_BORDER: Color = Color::Rgb(85, 88, 110);
+/// Accent for the ♫ glyph
+const CARD_ACCENT: Color = Color::Rgb(250, 99, 126); // theme.primary
+
+/// Render a clean, high-contrast typography card as artwork placeholder.
 pub fn render_placeholder_card(
     area: Rect,
     buf: &mut Buffer,
@@ -113,20 +131,20 @@ pub fn render_placeholder_card(
         return;
     }
 
-    // 1. Fill background with theme.secondary
+    // 1. Solid background fill — distinct from the terminal background
     for y in 0..area.height {
         for x in 0..area.width {
             if let Some(cell) = buf.cell_mut((area.x + x, area.y + y)) {
                 cell.set_char(' ');
-                cell.set_bg(theme.secondary);
+                cell.set_bg(CARD_BG);
             }
         }
     }
 
-    // 2. Draw clean single-cell card border
+    // 2. Visible border using box-drawing characters
     let right = area.x + area.width.saturating_sub(1);
     let bottom = area.y + area.height.saturating_sub(1);
-    let border_style = Style::default().fg(theme.border).bg(theme.secondary);
+    let border_style = Style::default().fg(CARD_BORDER).bg(CARD_BG);
 
     for x in area.x..=right {
         if let Some(c) = buf.cell_mut((x, area.y)) {
@@ -144,112 +162,100 @@ pub fn render_placeholder_card(
             c.set_char('│').set_style(border_style);
         }
     }
-    if let Some(c) = buf.cell_mut((area.x, area.y)) {
-        c.set_char('┌').set_style(border_style);
-    }
-    if let Some(c) = buf.cell_mut((right, area.y)) {
-        c.set_char('┐').set_style(border_style);
-    }
-    if let Some(c) = buf.cell_mut((area.x, bottom)) {
-        c.set_char('└').set_style(border_style);
-    }
-    if let Some(c) = buf.cell_mut((right, bottom)) {
-        c.set_char('┘').set_style(border_style);
+    for (x, y, ch) in [
+        (area.x, area.y, '┌'),
+        (right, area.y, '┐'),
+        (area.x, bottom, '└'),
+        (right, bottom, '┘'),
+    ] {
+        if let Some(c) = buf.cell_mut((x, y)) {
+            c.set_char(ch).set_style(border_style);
+        }
     }
 
-    // 3. Render typography within inner rectangle
+    // 3. Inner content
     let inner_w = area.width.saturating_sub(4);
     let inner_x = area.x + 2;
+    let _ = theme; // keep for callers that pass theme; we use const colours
 
     if area.height >= 8 {
-        // Glyphs and metadata
+        // ♫ glyph centred near top
         let glyph_y = area.y + 2;
-        let glyph_x = area.x + (area.width.saturating_sub(1)) / 2;
+        let glyph_x = area.x + area.width / 2;
         if let Some(c) = buf.cell_mut((glyph_x, glyph_y)) {
-            c.set_char('♫').set_style(
-                Style::default()
-                    .fg(theme.primary)
-                    .bg(theme.secondary)
-                    .add_modifier(Modifier::BOLD),
-            );
+            c.set_char('♫')
+                .set_fg(CARD_ACCENT)
+                .set_bg(CARD_BG)
+                .set_style(
+                    Style::default()
+                        .fg(CARD_ACCENT)
+                        .bg(CARD_BG)
+                        .add_modifier(Modifier::BOLD),
+                );
         }
 
         let title_y = glyph_y + 2;
         if title_y < bottom && inner_w > 0 {
-            let title_str = fit(title, inner_w);
             buf.set_string(
                 inner_x,
                 title_y,
-                &title_str,
+                fit(title, inner_w),
                 Style::default()
-                    .fg(theme.foreground)
-                    .bg(theme.secondary)
+                    .fg(Color::White)
+                    .bg(CARD_BG)
                     .add_modifier(Modifier::BOLD),
             );
         }
-
         let artist_y = title_y + 1;
         if artist_y < bottom && inner_w > 0 {
-            let artist_str = fit(artist, inner_w);
             buf.set_string(
                 inner_x,
                 artist_y,
-                &artist_str,
-                Style::default().fg(theme.primary).bg(theme.secondary),
+                fit(artist, inner_w),
+                Style::default().fg(CARD_ACCENT).bg(CARD_BG),
             );
         }
-
-        let album_y = artist_y + 1;
-        if let Some(alb) = album
-            && album_y < bottom
-            && inner_w > 0
-        {
-            let alb_str = fit(alb, inner_w);
-            buf.set_string(
-                inner_x,
-                album_y,
-                &alb_str,
-                Style::default()
-                    .fg(theme.muted_foreground)
-                    .bg(theme.secondary),
-            );
+        if let Some(alb) = album {
+            let album_y = artist_y + 1;
+            if album_y < bottom && inner_w > 0 {
+                buf.set_string(
+                    inner_x,
+                    album_y,
+                    fit(alb, inner_w),
+                    Style::default().fg(CARD_BORDER).bg(CARD_BG),
+                );
+            }
         }
-
+        // AAC badge at bottom
         let badge_y = bottom.saturating_sub(1);
-        if badge_y > album_y && inner_w >= 9 {
+        if badge_y > area.y + 4 && inner_w >= 9 {
             buf.set_string(
                 inner_x,
                 badge_y,
-                "[AAC 256]",
-                Style::default()
-                    .fg(theme.muted_foreground)
-                    .bg(theme.secondary),
+                "AAC 256",
+                Style::default().fg(CARD_BORDER).bg(CARD_BG),
             );
         }
     } else if area.height >= 4 {
-        let line1_y = area.y + 1;
-        if line1_y < bottom && inner_w > 0 {
-            let t_fit = fit(title, inner_w);
+        let ty = area.y + 1;
+        if ty < bottom && inner_w > 0 {
             buf.set_string(
                 inner_x,
-                line1_y,
-                &t_fit,
+                ty,
+                fit(title, inner_w),
                 Style::default()
-                    .fg(theme.foreground)
-                    .bg(theme.secondary)
+                    .fg(Color::White)
+                    .bg(CARD_BG)
                     .add_modifier(Modifier::BOLD),
             );
         }
-        let line2_y = line1_y + 1;
-        if line2_y < bottom && inner_w > 0 {
-            let a_fit = fit(artist, inner_w);
+        let ay = ty + 1;
+        if ay < bottom && inner_w > 0 {
             buf.set_string(
                 inner_x,
-                line2_y,
-                &a_fit,
-                Style::default()
-                    .fg(theme.muted_foreground)
-                    .bg(theme.secondary),
+                ay,
+                fit(artist, inner_w),
+                Style::default().fg(CARD_BORDER).bg(CARD_BG),
             );
         }
     } else if inner_w > 0 {
@@ -257,12 +263,15 @@ pub fn render_placeholder_card(
             inner_x,
             area.y,
             fit(title, inner_w),
-            Style::default().fg(theme.foreground).bg(theme.secondary),
+            Style::default().fg(Color::White).bg(CARD_BG),
         );
     }
 }
 
-/// Component card widget combining native protocol image rendering with typography fallback.
+// ─── ArtworkCard widget ───────────────────────────────────────────────────────
+
+/// Combined widget: renders Kitty image if supported and cover is loaded,
+/// otherwise renders the typography placeholder card.
 #[derive(Debug, Clone)]
 pub struct ArtworkCard {
     pub title: String,
@@ -277,12 +286,9 @@ impl Widget for ArtworkCard {
         if area.is_empty() {
             return;
         }
-        if supports_kitty_graphics()
-            && let Some(cover) = &self.cover
-        {
-            render_kitty_image(&cover.raw_bytes, area, buf);
-            return;
-        }
+        // Always render the placeholder card with metadata and border.
+        // Kitty graphics (if available and loaded) will be drawn on top by the post-draw hook.
+        // We never clear the cells to empty spaces so the UI never drops into a black hole.
         render_placeholder_card(
             area,
             buf,
@@ -294,7 +300,9 @@ impl Widget for ArtworkCard {
     }
 }
 
-/// Downloaded artwork resource with raw bytes and dimensions.
+// ─── Cover ───────────────────────────────────────────────────────────────────
+
+/// Downloaded artwork resource with raw PNG bytes.
 #[derive(Debug, Clone)]
 pub struct Cover {
     pub width: u32,
@@ -305,38 +313,48 @@ pub struct Cover {
 impl Cover {
     pub async fn load(template: &str) -> Option<Self> {
         let url = template
-            .replace("{w}", "300")
-            .replace("{h}", "300")
-            .replace("{f}", "png");
+            .replace("{w}", "400")
+            .replace("{h}", "400")
+            .replace("{f}", "jpg");
         let parsed = url::Url::parse(&url).ok()?;
-        if parsed.scheme() != "https" || !parsed.host_str()?.ends_with(".mzstatic.com") {
+        let host = parsed.host_str()?;
+        if parsed.scheme() != "https"
+            || (!host.ends_with(".mzstatic.com")
+                && host != "mzstatic.com"
+                && !host.ends_with(".apple.com")
+                && host != "apple.com")
+        {
             return None;
         }
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(8))
-            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::limited(5))
             .build()
             .ok()?;
-        let mut response = client
+        let response = client
             .get(parsed)
             .send()
             .await
             .ok()?
             .error_for_status()
             .ok()?;
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.ok()? {
-            if bytes.len() + chunk.len() > 2_000_000 {
-                return None;
-            }
-            bytes.extend_from_slice(&chunk);
+        let bytes = response.bytes().await.ok()?;
+        if bytes.len() > 5_000_000 {
+            return None;
         }
         let img = image::load_from_memory(&bytes).ok()?;
         let (width, height) = img.dimensions();
+        // Convert to verified PNG format so Kitty Graphics Protocol decoding always succeeds
+        let mut png_bytes = Vec::new();
+        img.write_to(
+            &mut std::io::Cursor::new(&mut png_bytes),
+            image::ImageFormat::Png,
+        )
+        .ok()?;
         Some(Self {
             width,
             height,
-            raw_bytes: bytes,
+            raw_bytes: png_bytes,
         })
     }
 }
@@ -349,45 +367,41 @@ impl Widget for Cover {
         if supports_kitty_graphics() {
             render_kitty_image(&self.raw_bytes, area, buf);
         } else {
-            // Clean single-cell box fallback without muddy half-blocks
+            // Box outline fallback
             let right = area.x + area.width.saturating_sub(1);
             let bottom = area.y + area.height.saturating_sub(1);
+            let s = Style::default().fg(CARD_BORDER).bg(CARD_BG);
             for x in area.x..=right {
                 if let Some(c) = buf.cell_mut((x, area.y)) {
-                    c.set_char('─');
+                    c.set_char('─').set_style(s);
                 }
                 if let Some(c) = buf.cell_mut((x, bottom)) {
-                    c.set_char('─');
+                    c.set_char('─').set_style(s);
                 }
             }
             for y in area.y..=bottom {
                 if let Some(c) = buf.cell_mut((area.x, y)) {
-                    c.set_char('│');
+                    c.set_char('│').set_style(s);
                 }
                 if let Some(c) = buf.cell_mut((right, y)) {
-                    c.set_char('│');
+                    c.set_char('│').set_style(s);
                 }
             }
-            if let Some(c) = buf.cell_mut((area.x, area.y)) {
-                c.set_char('┌');
-            }
-            if let Some(c) = buf.cell_mut((right, area.y)) {
-                c.set_char('┐');
-            }
-            if let Some(c) = buf.cell_mut((area.x, bottom)) {
-                c.set_char('└');
-            }
-            if let Some(c) = buf.cell_mut((right, bottom)) {
-                c.set_char('┘');
-            }
-            let glyph_y = area.y + area.height / 2;
-            let glyph_x = area.x + area.width / 2;
-            if let Some(c) = buf.cell_mut((glyph_x, glyph_y)) {
-                c.set_char('♫');
+            for (x, y, ch) in [
+                (area.x, area.y, '┌'),
+                (right, area.y, '┐'),
+                (area.x, bottom, '└'),
+                (right, bottom, '┘'),
+            ] {
+                if let Some(c) = buf.cell_mut((x, y)) {
+                    c.set_char(ch).set_style(s);
+                }
             }
         }
     }
 }
+
+// ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -406,7 +420,6 @@ mod tests {
         let area = Rect::new(0, 0, 30, 10);
         let mut buf = Buffer::empty(area);
         let theme = ratcn::Theme::default_dark();
-
         render_placeholder_card(
             area,
             &mut buf,
@@ -415,8 +428,6 @@ mod tests {
             Some("After Hours"),
             &theme,
         );
-
-        // Check border corners
         assert_eq!(buf.cell((0, 0)).unwrap().symbol(), "┌");
         assert_eq!(buf.cell((29, 0)).unwrap().symbol(), "┐");
         assert_eq!(buf.cell((0, 9)).unwrap().symbol(), "└");

@@ -47,6 +47,8 @@ pub enum EngineCommand {
     FetchLibrary,
     FetchCatalog,
     FetchRadio,
+    FetchRecommendations,
+    FetchRecentlyPlayed,
     FetchPlaylist(String),
     FetchLyrics(String),
     Shutdown,
@@ -131,7 +133,7 @@ pub async fn start_engine(
                         }
                     }
                     if matches!(cmd,EngineCommand::Shutdown){break;}
-                    if matches!(cmd,EngineCommand::FetchLibrary|EngineCommand::Search(_)|EngineCommand::FetchCatalog|EngineCommand::FetchRadio|EngineCommand::FetchPlaylist(_)|EngineCommand::FetchLyrics(_)) {
+                    if matches!(cmd,EngineCommand::FetchLibrary|EngineCommand::Search(_)|EngineCommand::FetchCatalog|EngineCommand::FetchRadio|EngineCommand::FetchRecommendations|EngineCommand::FetchRecentlyPlayed|EngineCommand::FetchPlaylist(_)|EngineCommand::FetchLyrics(_)) {
                         if matches!(cmd,EngineCommand::FetchLibrary) && library_task.as_ref().is_some_and(|t|!t.is_finished()){continue;}
                         let is_search=matches!(cmd,EngineCommand::Search(_));
                         let is_library=matches!(cmd,EngineCommand::FetchLibrary);
@@ -141,6 +143,8 @@ pub async fn start_engine(
                             EngineCommand::FetchPlaylist(id)=>musickit::DataRequest::Playlist(id.clone()),
                             EngineCommand::FetchCatalog=>musickit::DataRequest::Catalog,
                             EngineCommand::FetchRadio=>musickit::DataRequest::Radio,
+                            EngineCommand::FetchRecommendations=>musickit::DataRequest::Recommendations,
+                            EngineCommand::FetchRecentlyPlayed=>musickit::DataRequest::RecentlyPlayed,
                             EngineCommand::FetchLyrics(id)=>musickit::DataRequest::Lyrics(id.clone()),
                             _=>musickit::DataRequest::Library,
                         };
@@ -261,6 +265,62 @@ async fn load_data(
                 })
                 .unwrap_or_default();
             MusicKitEvent::RadioLoaded { stations }
+        }
+        EngineCommand::FetchRecommendations => {
+            // /v1/me/recommendations returns recommendation groups.
+            // Each group's relationships.contents.data[] may contain playlists.
+            let res = driver
+                .api("/v1/me/recommendations", json!({ "limit": 10 }))
+                .await?;
+            let mut mixes: Vec<crate::model::PersonalMix> = vec![];
+            if let Some(groups) = res["data"].as_array() {
+                for group in groups {
+                    let attrs = &group["attributes"];
+                    let contents = group["relationships"]["contents"]["data"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default();
+                    for item in &contents {
+                        // Only include playlists/personal-mixes, not songs
+                        let item_type = item["type"].as_str().unwrap_or("");
+                        if !item_type.contains("playlist") && item_type != "personal-mix" {
+                            continue;
+                        }
+                        let id = item["id"].as_str().unwrap_or("").to_string();
+                        if id.is_empty() {
+                            continue;
+                        }
+                        let ia = &item["attributes"];
+                        let name = ia["name"]
+                            .as_str()
+                            .unwrap_or_else(|| {
+                                attrs["title"]["stringForDisplay"].as_str().unwrap_or("Mix")
+                            })
+                            .to_string();
+                        // Build subtitle from curator description or editorial notes
+                        let subtitle = ia["curatorName"]
+                            .as_str()
+                            .or_else(|| ia["description"]["short"].as_str())
+                            .or_else(|| attrs["reason"]["stringForDisplay"].as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        mixes.push(crate::model::PersonalMix {
+                            id,
+                            name,
+                            subtitle,
+                            kind: item_type.to_string(),
+                        });
+                    }
+                }
+            }
+            MusicKitEvent::RecommendationsLoaded { mixes }
+        }
+        EngineCommand::FetchRecentlyPlayed => {
+            let res = driver
+                .api("/v1/me/recent/played/tracks", json!({ "limit": 30 }))
+                .await?;
+            let tracks = musickit::parse_tracks(&res["data"]);
+            MusicKitEvent::RecentlyPlayedLoaded { tracks }
         }
         EngineCommand::FetchPlaylist(id) => {
             // Encode the resource identifier as a single path segment.

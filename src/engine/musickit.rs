@@ -11,6 +11,8 @@ pub enum DataRequest {
     Library,
     Catalog,
     Radio,
+    Recommendations,
+    RecentlyPlayed,
     Playlist(String),
     Search(String),
     Lyrics(String),
@@ -69,6 +71,12 @@ pub enum MusicKitEvent {
     },
     RadioLoaded {
         stations: Vec<RadioStation>,
+    },
+    RecommendationsLoaded {
+        mixes: Vec<crate::model::PersonalMix>,
+    },
+    RecentlyPlayedLoaded {
+        tracks: Vec<Track>,
     },
     LyricsLoaded {
         track_id: String,
@@ -363,5 +371,9 @@ pub fn parse_musickit_track(value: &Value) -> Option<Track> {
         track.artist_id = id.to_string();
     }
     track.primary_artist = artist["attributes"]["name"].as_str().map(str::to_string);
+    track.date_added = attrs["dateAdded"]
+        .as_str()
+        .or_else(|| value["dateAdded"].as_str())
+        .map(str::to_string);
     Some(track)
 }

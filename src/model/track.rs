@@ -32,6 +32,8 @@ pub struct Track {
     pub primary_artist: Option<String>,
     #[serde(default = "default_disc")]
     pub disc_number: u32,
+    #[serde(default)]
+    pub date_added: Option<String>,
     pub title: String,
     pub artist: String,
     pub artist_id: String,
@@ -65,6 +67,7 @@ impl Track {
             album_artist: None,
             primary_artist: None,
             disc_number: 1,
+            date_added: None,
             title: title.into(),
             artist: artist_str,
             artist_id,

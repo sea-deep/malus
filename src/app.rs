@@ -50,6 +50,7 @@ pub enum Overlay {
     Help,
     Settings,
 }
+pub use crate::config::{LibrarySort, LibrarySortField, LibrarySortOrder};
 #[derive(Debug, Clone)]
 pub struct CommandItem {
     pub title: &'static str,
@@ -135,6 +136,9 @@ pub enum Msg {
     EngineSeek(f64),
     ScrollLyrics(i32),
     ResetLyricsScroll,
+    CycleLibrarySortField,
+    ToggleLibrarySortOrder,
+    SetLibrarySort(LibrarySortField, LibrarySortOrder),
 }
 
 pub struct AppState {
@@ -170,6 +174,8 @@ pub struct AppState {
     pub lyrics_loading: bool,
     pub lyrics_error: Option<String>,
     pub lyrics_scroll_offset: Option<usize>,
+    pub lyrics_user_scrolled_at: Option<Duration>,
+    pub library_sort: LibrarySort,
     pub now: Duration,
     pub transition_at: Duration,
     pub reduced_motion: bool,
@@ -218,6 +224,8 @@ impl AppState {
             lyrics_loading: false,
             lyrics_error: None,
             lyrics_scroll_offset: None,
+            lyrics_user_scrolled_at: None,
+            library_sort: LibrarySort::load(),
             now: Duration::ZERO,
             transition_at: Duration::ZERO,
             reduced_motion: std::env::var_os("MALUS_REDUCED_MOTION").is_some(),
@@ -241,6 +249,7 @@ impl AppState {
         self.library
             .tracks
             .iter()
+            .chain(&self.library.recently_played)
             .chain(&self.search_results)
             .chain(&self.catalog)
             .chain(self.resource_tracks.values())
@@ -290,7 +299,49 @@ impl AppState {
         if matches!(self.active_screen, Screen::Browse) {
             return self.catalog.clone();
         }
-        self.library.tracks.clone()
+        let mut tracks = self.library.tracks.clone();
+        if matches!(self.active_screen, Screen::Library)
+            && self.library_subtab == LibrarySubTab::Songs
+        {
+            match self.library_sort.field {
+                LibrarySortField::RecentlyAdded => {
+                    tracks.sort_by(|a, b| match (&a.date_added, &b.date_added) {
+                        (Some(da), Some(db)) => db.cmp(da),
+                        (Some(_), None) => std::cmp::Ordering::Less,
+                        (None, Some(_)) => std::cmp::Ordering::Greater,
+                        (None, None) => std::cmp::Ordering::Equal,
+                    });
+                    if self.library_sort.order == LibrarySortOrder::Asc {
+                        tracks.reverse();
+                    }
+                }
+                LibrarySortField::Title => {
+                    tracks.sort_by_key(|a| a.title.to_lowercase());
+                    if self.library_sort.order == LibrarySortOrder::Desc {
+                        tracks.reverse();
+                    }
+                }
+                LibrarySortField::Artist => {
+                    tracks.sort_by_key(|a| a.artist.to_lowercase());
+                    if self.library_sort.order == LibrarySortOrder::Desc {
+                        tracks.reverse();
+                    }
+                }
+                LibrarySortField::Album => {
+                    tracks.sort_by_key(|a| a.album.to_lowercase());
+                    if self.library_sort.order == LibrarySortOrder::Desc {
+                        tracks.reverse();
+                    }
+                }
+                LibrarySortField::Duration => {
+                    tracks.sort_by_key(|a| a.duration_secs);
+                    if self.library_sort.order == LibrarySortOrder::Desc {
+                        tracks.reverse();
+                    }
+                }
+            }
+        }
+        tracks
     }
     pub fn list_len(&self, kind: ListKind) -> usize {
         match kind {
@@ -558,6 +609,14 @@ impl AppState {
                 if screen == Screen::Radio && self.library.radio_stations.is_empty() && !self.demo {
                     self.send(EngineCommand::FetchRadio);
                 }
+                if screen == Screen::ListenNow && !self.demo {
+                    if self.library.personal_mixes.is_empty() {
+                        self.send(EngineCommand::FetchRecommendations);
+                    }
+                    if self.library.recently_played.is_empty() {
+                        self.send(EngineCommand::FetchRecentlyPlayed);
+                    }
+                }
                 self.navigate_to(screen);
             }
             Msg::NavigateBack => self.navigate_back(),
@@ -725,10 +784,30 @@ impl AppState {
                         (current + delta as usize).min(len.saturating_sub(1))
                     };
                     self.lyrics_scroll_offset = Some(next);
+                    self.lyrics_user_scrolled_at = Some(now);
                 }
             }
             Msg::ResetLyricsScroll => {
                 self.lyrics_scroll_offset = None;
+                self.lyrics_user_scrolled_at = None;
+            }
+            Msg::CycleLibrarySortField => {
+                let next_field = self.library_sort.field.next();
+                self.library_sort.order = next_field.default_order();
+                self.library_sort.field = next_field;
+                self.library_sort.save();
+                self.cursor = Cursor::default();
+            }
+            Msg::ToggleLibrarySortOrder => {
+                self.library_sort.order = self.library_sort.order.toggle();
+                self.library_sort.save();
+                self.cursor = Cursor::default();
+            }
+            Msg::SetLibrarySort(field, order) => {
+                self.library_sort.field = field;
+                self.library_sort.order = order;
+                self.library_sort.save();
+                self.cursor = Cursor::default();
             }
             Msg::JumpQueue(i) => {
                 if self.demo {
@@ -850,6 +929,13 @@ impl AppState {
                     self.search_loading =
                         self.send(EngineCommand::Search(self.search_query.trim().to_string()));
                 }
+                if self
+                    .lyrics_user_scrolled_at
+                    .is_some_and(|t| now.saturating_sub(t) >= Duration::from_millis(3500))
+                {
+                    self.lyrics_scroll_offset = None;
+                    self.lyrics_user_scrolled_at = None;
+                }
                 if self.demo
                     && self.player.status == PlaybackStatus::Playing
                     && now.saturating_sub(self.progress_at) >= Duration::from_secs(1)
@@ -892,6 +978,8 @@ impl AppState {
                 self.is_authorized = is_authorized;
                 if is_authorized && changed {
                     self.library_loading = self.send(EngineCommand::FetchLibrary);
+                    self.send(EngineCommand::FetchRecommendations);
+                    self.send(EngineCommand::FetchRecentlyPlayed);
                 } else if !is_authorized {
                     self.library_loading = false;
                 }
@@ -1001,6 +1089,12 @@ impl AppState {
                 }
             }
             MusicKitEvent::RadioLoaded { stations } => self.library.radio_stations = stations,
+            MusicKitEvent::RecommendationsLoaded { mixes } => {
+                self.library.personal_mixes = mixes;
+            }
+            MusicKitEvent::RecentlyPlayedLoaded { tracks } => {
+                self.library.recently_played = tracks;
+            }
             MusicKitEvent::QueueChanged {
                 tracks,
                 shuffle,

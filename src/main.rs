@@ -183,6 +183,29 @@ fn main() -> io::Result<()> {
             session
                 .terminal_mut()
                 .draw(|frame| app.draw(frame, &theme, now))?;
+            // Flush Kitty image AFTER ratatui draw so the buffer flush doesn't clobber it.
+            if malus::ui::artwork::supports_kitty_graphics()
+                && let Some(track) = app.state.player.current_track()
+                && app.state.active_screen == malus::app::Screen::NowPlaying
+                && let Some(url) = track.artwork_url.as_ref()
+                && let Some(cover) = app.state.artwork.get(url)
+            {
+                // Reproduce the exact content geometry from ui/mod.rs
+                let term = session.terminal_mut().size()?;
+                let margin: u16 = if term.width >= 65 { 2 } else { 1 };
+                let top_h: u16 = if term.height >= 22 { 3 } else { 1 };
+                let content_y = top_h + 2; // top_bar + rule + inset(1)
+                let content_h = term.height.saturating_sub(top_h + 6); // top(top_h) + rule(1) + margin(1) + margin(1) + rule(1) + player(3)
+                let content_w = term.width.saturating_sub(margin * 2);
+                if content_w >= 78 {
+                    let left_w = (content_w * 38 / 100)
+                        .clamp(34, 44)
+                        .min(content_w.saturating_sub(20));
+                    let art_h = left_w.min(content_h.saturating_sub(4));
+                    let art_rect = ratatui::layout::Rect::new(margin, content_y, left_w, art_h);
+                    malus::ui::artwork::flush_kitty_image(&cover.raw_bytes, art_rect);
+                }
+            }
             let moving = !app.state.reduced_motion
                 && (app.state.connecting
                     || app.state.player.status == malus::model::PlaybackStatus::Playing

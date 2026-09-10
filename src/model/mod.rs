@@ -8,5 +8,5 @@ pub mod track;
 
 pub use lyrics::{LyricLine, parse_ttml};
 pub use player::{PlaybackStatus, PlayerState, RepeatMode};
-pub use playlist::{CuratedMix, Library, Playlist, RadioStation};
+pub use playlist::{CuratedMix, Library, PersonalMix, Playlist, RadioStation};
 pub use track::{Album, Artist, AudioFormat, Track};

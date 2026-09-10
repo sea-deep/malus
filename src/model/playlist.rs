@@ -49,6 +49,18 @@ pub struct CuratedMix {
     pub track_ids: Vec<String>,
 }
 
+/// A personalised playlist recommendation from Apple Music (Heavy Rotation,
+/// Your Essentials, Get Up!, Chill, New Music, etc.)
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PersonalMix {
+    pub id: String,
+    pub name: String,
+    /// Short description or artist list shown beneath the name
+    pub subtitle: String,
+    /// Playlist kind tag from the API ("curator-playlist", "personal-mix", etc.)
+    pub kind: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Library {
     pub tracks: Vec<Track>,
@@ -57,6 +69,10 @@ pub struct Library {
     pub playlists: Vec<Playlist>,
     pub radio_stations: Vec<RadioStation>,
     pub curated_mixes: Vec<CuratedMix>,
+    /// Personalised recommendation playlists fetched from /v1/me/recommendations
+    pub personal_mixes: Vec<PersonalMix>,
+    /// Actual recently played tracks fetched from /v1/me/recent/played/tracks
+    pub recently_played: Vec<Track>,
 }
 
 impl Library {
@@ -437,6 +453,8 @@ impl Library {
             playlists,
             radio_stations,
             curated_mixes,
+            personal_mixes: vec![],
+            recently_played: vec![],
         }
     }
 
