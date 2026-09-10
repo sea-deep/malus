@@ -44,6 +44,9 @@ pub enum WebError {
     #[error("Operation timed out: {0}")]
     Timeout(String),
 
+    #[error("Internal runtime error: {0}")]
+    Internal(String),
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }

@@ -535,6 +535,7 @@ dependencies = [
  "malus-protocol",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
  "tracing",
@@ -550,6 +551,23 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+]
+
+[[package]]
+name = "malus-provider-apple"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "directories",
+ "malus-protocol",
+ "malus-provider-sdk",
+ "malus-web-runtime",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

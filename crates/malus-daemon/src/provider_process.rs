@@ -11,22 +11,29 @@
 use malus_protocol::{
     DEFAULT_MAX_PAYLOAD_BYTES,
     codec::{FrameError, decode_message, read_frame, write_message},
-    provider::{PROVIDER_PROTOCOL, ProviderRequest, ProviderResponse},
-    wire::{ActionRequestV0, MediaIdWire, PlayerStatusWire, QueueWire, TrackWire},
+    provider::{
+        PROVIDER_PROTOCOL, ProviderEvent, ProviderRequest, ProviderRequestEnvelope,
+        ProviderResponse, ProviderWireMessage,
+    },
+    wire::{ActionRequestV0, AuthStatusWire, MediaIdWire, PlayerStatusWire, QueueWire, TrackWire},
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     fmt,
     path::{Path, PathBuf},
     process::Stdio,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 use thiserror::Error;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
-    process::{Child, ChildStdin, ChildStdout, Command},
-    sync::Mutex,
+    process::{Child, Command},
+    sync::{Mutex, mpsc, oneshot},
     time::{sleep, timeout},
 };
 use tracing::{debug, error, info, warn};
@@ -112,11 +119,13 @@ pub enum ProviderProcessError {
 
 struct ChildHandle {
     child: Child,
-    stdin: ChildStdin,
-    stdout: ChildStdout,
-    read_buf: Vec<u8>,
+    stdin_tx: mpsc::Sender<ProviderRequestEnvelope>,
     pid: Option<u32>,
+    reader_task: tokio::task::JoinHandle<()>,
+    writer_task: tokio::task::JoinHandle<()>,
 }
+
+pub type ProviderEventCallback = Arc<dyn Fn(ProviderEvent) + Send + Sync>;
 
 pub struct ProviderProcess {
     id: String,
@@ -128,6 +137,9 @@ pub struct ProviderProcess {
     capabilities: Arc<Mutex<Vec<String>>>,
     retry_count: Arc<Mutex<u32>>,
     handle: Arc<Mutex<Option<ChildHandle>>>,
+    pending_requests: Arc<Mutex<HashMap<u64, oneshot::Sender<ProviderResponse>>>>,
+    next_request_id: Arc<AtomicU64>,
+    event_callback: Arc<Mutex<Option<ProviderEventCallback>>>,
 }
 
 impl ProviderProcess {
@@ -164,6 +176,9 @@ impl ProviderProcess {
             capabilities: Arc::new(Mutex::new(Vec::new())),
             retry_count: Arc::new(Mutex::new(0)),
             handle: Arc::new(Mutex::new(None)),
+            pending_requests: Arc::new(Mutex::new(HashMap::new())),
+            next_request_id: Arc::new(AtomicU64::new(1)),
+            event_callback: Arc::new(Mutex::new(None)),
         };
 
         proc.start_process().await?;
@@ -190,6 +205,10 @@ impl ProviderProcess {
         matches!(*self.state.lock().await, ProviderSupervisorState::Ready)
     }
 
+    pub async fn set_event_callback(&self, cb: ProviderEventCallback) {
+        *self.event_callback.lock().await = Some(cb);
+    }
+
     /// Internal method to spawn the child process and perform handshake.
     async fn start_process(&self) -> Result<(), ProviderProcessError> {
         *self.state.lock().await = ProviderSupervisorState::Starting;
@@ -207,8 +226,8 @@ impl ProviderProcess {
             .spawn()?;
 
         let pid = child.id();
-        let stdin = child.stdin.take().expect("Child stdin was piped");
-        let stdout = child.stdout.take().expect("Child stdout was piped");
+        let mut stdin = child.stdin.take().expect("Child stdin was piped");
+        let mut stdout = child.stdout.take().expect("Child stdout was piped");
         let stderr = child.stderr.take().expect("Child stderr was piped");
 
         // Forward child stderr to daemon tracing logs
@@ -220,41 +239,83 @@ impl ProviderProcess {
             }
         });
 
-        let mut handle = ChildHandle {
+        let (stdin_tx, mut stdin_rx) = mpsc::channel::<ProviderRequestEnvelope>(64);
+        let pending_for_writer = self.pending_requests.clone();
+        let writer_task = tokio::spawn(async move {
+            while let Some(req_env) = stdin_rx.recv().await {
+                if let Err(e) = write_message(&mut stdin, &req_env).await {
+                    debug!("Failed to write to provider stdin: {e}");
+                    let mut map = pending_for_writer.lock().await;
+                    map.remove(&req_env.id);
+                    break;
+                }
+            }
+        });
+
+        let pending = self.pending_requests.clone();
+        let event_cb = self.event_callback.clone();
+        let provider_id_for_reader = self.id.clone();
+        let reader_task = tokio::spawn(async move {
+            let mut read_buf = Vec::new();
+            loop {
+                match read_frame(&mut stdout, &mut read_buf, DEFAULT_MAX_PAYLOAD_BYTES).await {
+                    Ok(Some(frame)) => match decode_message::<ProviderWireMessage>(&frame) {
+                        Ok(ProviderWireMessage::Response { id, response }) => {
+                            let mut map = pending.lock().await;
+                            if let Some(tx) = map.remove(&id) {
+                                let _ = tx.send(response);
+                            }
+                        }
+                        Ok(ProviderWireMessage::Event { event }) => {
+                            let cb = {
+                                let guard = event_cb.lock().await;
+                                guard.clone()
+                            };
+                            if let Some(cb) = cb {
+                                cb(event);
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Malformed message from provider '{}': {e}",
+                                provider_id_for_reader
+                            );
+                        }
+                    },
+                    Ok(None) => {
+                        debug!("Provider '{}' stdout reached EOF", provider_id_for_reader);
+                        let mut map = pending.lock().await;
+                        map.clear();
+                        break;
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Error reading provider '{}' stdout: {e}",
+                            provider_id_for_reader
+                        );
+                        let mut map = pending.lock().await;
+                        map.clear();
+                        break;
+                    }
+                }
+            }
+        });
+
+        let handle = ChildHandle {
             child,
-            stdin,
-            stdout,
-            read_buf: Vec::new(),
+            stdin_tx,
             pid,
+            reader_task,
+            writer_task,
         };
 
+        *self.handle.lock().await = Some(handle);
         *self.state.lock().await = ProviderSupervisorState::Handshaking;
 
         // Perform handshake with timeout
-        let handshake_fut = async {
-            // First send Hello request
-            let hello_req = ProviderRequest::Hello {
-                version: PROVIDER_PROTOCOL,
-            };
-            write_message(&mut handle.stdin, &hello_req).await?;
-
-            let frame = match read_frame(
-                &mut handle.stdout,
-                &mut handle.read_buf,
-                DEFAULT_MAX_PAYLOAD_BYTES,
-            )
-            .await?
-            {
-                Some(f) => f,
-                None => {
-                    let status = handle.child.try_wait().ok().flatten();
-                    return Err(ProviderProcessError::ProcessExited(status));
-                }
-            };
-
-            let resp: ProviderResponse = decode_message(&frame)?;
-            Ok::<ProviderResponse, ProviderProcessError>(resp)
-        };
+        let handshake_fut = self.send_request(ProviderRequest::Hello {
+            version: PROVIDER_PROTOCOL,
+        });
 
         match timeout(self.policy.handshake_timeout, handshake_fut).await {
             Ok(Ok(ProviderResponse::Hello {
@@ -270,7 +331,6 @@ impl ProviderProcess {
                     );
                     warn!("Provider '{}' handshake failed: {reason}", self.id);
                     *self.state.lock().await = ProviderSupervisorState::Incompatible { reason };
-                    *self.handle.lock().await = Some(handle);
                     return Ok(());
                 }
 
@@ -289,15 +349,12 @@ impl ProviderProcess {
                     self.state().await,
                     capabilities
                 );
-                *self.handle.lock().await = Some(handle);
                 Ok(())
             }
             Ok(Ok(ProviderResponse::Capabilities(caps))) => {
-                // Compatible fallback for simple capability responses
                 *self.capabilities.lock().await = caps.clone();
                 *self.retry_count.lock().await = 0;
                 *self.state.lock().await = ProviderSupervisorState::Ready;
-                *self.handle.lock().await = Some(handle);
                 Ok(())
             }
             Ok(Ok(other)) => {
@@ -306,7 +363,6 @@ impl ProviderProcess {
                 *self.state.lock().await = ProviderSupervisorState::Degraded {
                     reason: reason.clone(),
                 };
-                *self.handle.lock().await = Some(handle);
                 Err(ProviderProcessError::UnexpectedResponse(Box::new(other)))
             }
             Ok(Err(e)) => {
@@ -314,7 +370,6 @@ impl ProviderProcess {
                 *self.state.lock().await = ProviderSupervisorState::Degraded {
                     reason: e.to_string(),
                 };
-                *self.handle.lock().await = Some(handle);
                 Err(e)
             }
             Err(_) => {
@@ -326,7 +381,6 @@ impl ProviderProcess {
                 *self.state.lock().await = ProviderSupervisorState::Degraded {
                     reason: reason.clone(),
                 };
-                *self.handle.lock().await = Some(handle);
                 Err(ProviderProcessError::HandshakeTimeout(
                     self.policy.handshake_timeout,
                 ))
@@ -339,39 +393,74 @@ impl ProviderProcess {
         &self,
         req: ProviderRequest,
     ) -> Result<ProviderResponse, ProviderProcessError> {
-        let mut guard = self.handle.lock().await;
-        let handle = guard.as_mut().ok_or(ProviderProcessError::NotReady(
-            ProviderSupervisorState::Stopped,
-        ))?;
-
-        if let Err(e) = write_message(&mut handle.stdin, &req).await {
-            drop(guard);
-            self.handle_unexpected_exit(None).await;
-            return Err(ProviderProcessError::Protocol(e));
+        let id = self.next_request_id.fetch_add(1, Ordering::SeqCst);
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut map = self.pending_requests.lock().await;
+            map.insert(id, tx);
         }
 
-        match read_frame(
-            &mut handle.stdout,
-            &mut handle.read_buf,
-            DEFAULT_MAX_PAYLOAD_BYTES,
-        )
-        .await
-        {
-            Ok(Some(frame)) => {
-                let resp: ProviderResponse = decode_message(&frame)?;
-                if let ProviderResponse::Error { code, message } = resp {
-                    Err(ProviderProcessError::ServerError { code, message })
-                } else {
-                    Ok(resp)
-                }
+        let (stdin_tx, is_dead) = {
+            let guard = self.handle.lock().await;
+            match guard.as_ref() {
+                Some(h) => (Some(h.stdin_tx.clone()), h.reader_task.is_finished()),
+                None => (None, false),
             }
-            Ok(None) => {
-                let status = handle.child.try_wait().ok().flatten();
-                drop(guard);
+        };
+
+        let stdin_tx = match stdin_tx {
+            Some(tx) => tx,
+            None => {
+                self.pending_requests.lock().await.remove(&id);
+                return Err(ProviderProcessError::NotReady(self.state().await));
+            }
+        };
+
+        if is_dead {
+            self.pending_requests.lock().await.remove(&id);
+            let status = {
+                let mut guard = self.handle.lock().await;
+                guard
+                    .as_mut()
+                    .and_then(|h| h.child.try_wait().ok().flatten())
+            };
+            self.handle_unexpected_exit(status).await;
+            return Err(ProviderProcessError::ProcessExited(status));
+        }
+
+        let req_env = ProviderRequestEnvelope::new(id, req);
+        if stdin_tx.send(req_env).await.is_err() {
+            self.pending_requests.lock().await.remove(&id);
+            self.handle_unexpected_exit(None).await;
+            return Err(ProviderProcessError::ProcessExited(None));
+        }
+
+        let resp = match timeout(Duration::from_secs(30), rx).await {
+            Ok(Ok(resp)) => resp,
+            Ok(Err(_)) => {
+                self.pending_requests.lock().await.remove(&id);
+                let status = {
+                    let mut guard = self.handle.lock().await;
+                    guard
+                        .as_mut()
+                        .and_then(|h| h.child.try_wait().ok().flatten())
+                };
                 self.handle_unexpected_exit(status).await;
-                Err(ProviderProcessError::ProcessExited(status))
+                return Err(ProviderProcessError::ProcessExited(status));
             }
-            Err(e) => Err(ProviderProcessError::Protocol(e)),
+            Err(_) => {
+                // Timeout: remove waiter so it does not leak
+                self.pending_requests.lock().await.remove(&id);
+                return Err(ProviderProcessError::HandshakeTimeout(Duration::from_secs(
+                    30,
+                )));
+            }
+        };
+
+        if let ProviderResponse::Error { code, message } = resp {
+            Err(ProviderProcessError::ServerError { code, message })
+        } else {
+            Ok(resp)
         }
     }
 
@@ -442,10 +531,8 @@ impl ProviderProcess {
             debug!("Initiating graceful shutdown for provider '{}'", self.id);
 
             // 1. Try sending ProviderRequest::Shutdown RPC
-            let shutdown_rpc = async {
-                let _ = write_message(&mut handle.stdin, &ProviderRequest::Shutdown).await;
-            };
-            let _ = timeout(Duration::from_millis(500), shutdown_rpc).await;
+            let shutdown_env = ProviderRequestEnvelope::new(0, ProviderRequest::Shutdown);
+            let _ = handle.stdin_tx.send(shutdown_env).await;
 
             // 2. Wait up to shutdown_grace_period for child to exit
             let wait_exit = async {
@@ -480,7 +567,7 @@ impl ProviderProcess {
                     // Kill timeout expired: send SIGKILL
                     if let Some(pid) = handle.pid {
                         error!(
-                            "Provider '{}' did not exit after SIGTERM. Sending SIGKILL to PID {}",
+                            "Provider '{}' did not terminate after SIGTERM. Sending SIGKILL to PID {}",
                             self.id, pid
                         );
                         #[cfg(unix)]
@@ -488,10 +575,16 @@ impl ProviderProcess {
                             libc::kill(pid as libc::pid_t, libc::SIGKILL);
                         }
                     }
-                    let _ = handle.child.kill().await;
+                    let _ = handle.child.wait().await;
                 }
             }
+
+            handle.reader_task.abort();
+            handle.writer_task.abort();
         }
+
+        let mut pending = self.pending_requests.lock().await;
+        pending.clear();
     }
 
     pub async fn search(&self, query: &str) -> Result<Vec<TrackWire>, ProviderProcessError> {
@@ -642,6 +735,33 @@ impl ProviderProcess {
             .await?;
         if let ProviderResponse::ActionResult(res) = resp {
             Ok(res)
+        } else {
+            Err(ProviderProcessError::UnexpectedResponse(Box::new(resp)))
+        }
+    }
+
+    pub async fn auth_status(&self) -> Result<AuthStatusWire, ProviderProcessError> {
+        let resp = self.send_request(ProviderRequest::GetAuthStatus).await?;
+        if let ProviderResponse::AuthStatus(status) = resp {
+            Ok(status)
+        } else {
+            Err(ProviderProcessError::UnexpectedResponse(Box::new(resp)))
+        }
+    }
+
+    pub async fn auth_begin(&self) -> Result<AuthStatusWire, ProviderProcessError> {
+        let resp = self.send_request(ProviderRequest::AuthBegin).await?;
+        if let ProviderResponse::AuthStatus(status) = resp {
+            Ok(status)
+        } else {
+            Err(ProviderProcessError::UnexpectedResponse(Box::new(resp)))
+        }
+    }
+
+    pub async fn auth_logout(&self) -> Result<AuthStatusWire, ProviderProcessError> {
+        let resp = self.send_request(ProviderRequest::AuthLogout).await?;
+        if let ProviderResponse::AuthStatus(status) = resp {
+            Ok(status)
         } else {
             Err(ProviderProcessError::UnexpectedResponse(Box::new(resp)))
         }

@@ -25,6 +25,9 @@ pub enum ClientRequest {
     ClearQueue,
     GetCapabilities { provider: String },
     ListProviders,
+    GetAuthStatus { provider: String },
+    AuthBegin { provider: String },
+    AuthLogout { provider: String },
     Action(ActionRequestV0),
     SubscribeEvents,
 }

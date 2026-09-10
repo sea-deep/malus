@@ -390,7 +390,7 @@ async fn test_malformed_provider_output_isolation() {
 
     // Spawn a process that completes handshake then outputs garbage
     let script = r#"
-printf "Content-Length: 108\r\n\r\n{\"type\":\"Hello\",\"data\":{\"id\":\"garbage\",\"name\":\"Garbage\",\"version\":[0,1],\"capabilities\":[],\"status\":\"ready\"}}"
+printf "Content-Length: 133\r\n\r\n{\"kind\":\"response\",\"id\":1,\"type\":\"Hello\",\"data\":{\"id\":\"garbage\",\"name\":\"Garbage\",\"version\":[0,1],\"capabilities\":[],\"status\":\"ready\"}}"
 head -n 3 > /dev/null
 printf "GARBAGE_WITHOUT_LSP_CONTENT_LENGTH\r\n\r\n"
 exit 0
@@ -474,5 +474,108 @@ async fn test_event_broadcasting() {
             assert_eq!(status.volume, 82);
         }
         other => panic!("Expected StatusChanged event, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_provider_discovery_scanner() {
+    let bin = mock_bin_path();
+    let discovered = malus_daemon::discovery::discover_providers(Some(&bin));
+    assert!(discovered.contains_key("mock"));
+    assert_eq!(discovered["mock"].id, "mock");
+}
+
+#[tokio::test]
+async fn test_discovery_and_lazy_spawn() {
+    let sock_path = std::env::temp_dir().join(format!(
+        "malus-discovery-{}-{}.sock",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+
+    let engine = Arc::new(Engine::new());
+    let bin = mock_bin_path();
+    assert!(bin.exists());
+
+    // Register mock binary as discovered (not running)
+    engine
+        .register_discovered(malus_daemon::discovery::DiscoveredProvider {
+            id: "mock".to_string(),
+            executable: bin,
+        })
+        .await;
+
+    // Verify provider is listed as stopped and consumes 0 running processes
+    let providers = engine.list_providers().await;
+    let mock_info = providers.iter().find(|p| p.id == "mock").unwrap();
+    assert_eq!(mock_info.state, "stopped");
+    assert!(mock_info.capabilities.is_empty());
+
+    let server = Server::new(&sock_path, engine.clone());
+    let handle = tokio::spawn(async move {
+        let _ = server.run().await;
+    });
+
+    for _ in 0..50 {
+        if sock_path.exists() && tokio::net::UnixStream::connect(&sock_path).await.is_ok() {
+            break;
+        }
+        sleep(Duration::from_millis(20)).await;
+    }
+
+    let mut client = Client::connect(&sock_path).await.unwrap();
+
+    // Query capabilities which triggers lazy spawn on demand
+    let resp = client
+        .send(&ClientRequest::GetCapabilities {
+            provider: "mock".to_string(),
+        })
+        .await
+        .unwrap();
+
+    match resp {
+        ClientResponse::Capabilities {
+            provider,
+            capabilities,
+        } => {
+            assert_eq!(provider, "mock");
+            assert!(capabilities.contains(&"playback".to_string()));
+        }
+        other => panic!("Expected Capabilities response, got {other:?}"),
+    }
+
+    // Now provider should be running
+    let providers_after = engine.list_providers().await;
+    let mock_after = providers_after.iter().find(|p| p.id == "mock").unwrap();
+    assert_eq!(mock_after.state, "ready");
+
+    handle.abort();
+    let _ = std::fs::remove_file(&sock_path);
+}
+
+#[tokio::test]
+async fn test_auth_status_rpc() {
+    let server = TestServer::start().await;
+    let mut client = Client::connect(&server.sock_path).await.unwrap();
+
+    let resp = client
+        .send(&ClientRequest::GetAuthStatus {
+            provider: "mock".to_string(),
+        })
+        .await
+        .unwrap();
+
+    match resp {
+        ClientResponse::AuthStatus(status) => {
+            assert_eq!(status.provider, "mock");
+            assert_eq!(
+                status.state,
+                malus_protocol::wire::AuthStateWire::Authenticated
+            );
+        }
+        other => panic!("Expected AuthStatus response, got {other:?}"),
     }
 }

@@ -1,6 +1,6 @@
 //! Provider asynchronous events streamed by provider child processes to `malusd`.
 
-use crate::wire::{PlayerStatusWire, QueueWire};
+use crate::wire::{AuthStatusWire, PlayerStatusWire, QueueWire};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -9,5 +9,6 @@ pub enum ProviderEvent {
     StatusChanged(PlayerStatusWire),
     QueueChanged(QueueWire),
     NeedsAuth { message: String },
+    AuthChanged(AuthStatusWire),
     Error { code: String, message: String },
 }

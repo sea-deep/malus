@@ -23,5 +23,8 @@ pub enum ProviderRequest {
     GetQueue,
     Enqueue { track: TrackWire },
     Action(ActionRequestV0),
+    GetAuthStatus,
+    AuthBegin,
+    AuthLogout,
     Shutdown,
 }

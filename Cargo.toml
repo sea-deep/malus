@@ -8,6 +8,7 @@ members = [
     "crates/malus-cli",
     "crates/malus-web-runtime",
     "providers/mock",
+    "providers/apple",
 ]
 
 [workspace.package]

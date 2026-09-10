@@ -18,7 +18,7 @@ async fn test_chromium_headless_smoke_and_lifecycle() {
     };
 
     println!("Launching headless browser session...");
-    let mut runtime = WebRuntime::launch(options)
+    let runtime = WebRuntime::launch(options)
         .await
         .expect("Failed to launch WebRuntime with installed browser");
 

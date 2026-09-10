@@ -1,6 +1,6 @@
 //! Client RPC response types returned by `malusd` to frontends.
 
-use crate::wire::{PlayerStatusWire, ProviderInfoWire, QueueWire, TrackWire};
+use crate::wire::{AuthStatusWire, PlayerStatusWire, ProviderInfoWire, QueueWire, TrackWire};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -18,6 +18,7 @@ pub enum ClientResponse {
     },
     Providers(Vec<ProviderInfoWire>),
     ActionResult(serde_json::Value),
+    AuthStatus(AuthStatusWire),
     Ok,
     Error {
         code: String,

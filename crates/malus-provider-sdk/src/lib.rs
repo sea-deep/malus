@@ -131,8 +131,9 @@ mod tests {
             let _ = serve_io(provider, server_read, server_write).await;
         });
 
-        // Send Ping
-        let req_bytes = encode_message(&ProviderRequest::Ping).unwrap();
+        // Send Ping in envelope
+        let env = malus_protocol::provider::ProviderRequestEnvelope::new(1, ProviderRequest::Ping);
+        let req_bytes = encode_message(&env).unwrap();
         client_write.write_all(&req_bytes).await.unwrap();
         client_write.flush().await.unwrap();
 
@@ -144,8 +145,110 @@ mod tests {
         let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
             .unwrap()
             .unwrap();
-        let resp: ProviderResponse = decode_message(&frame).unwrap();
-        assert_eq!(resp, ProviderResponse::Pong);
+        let msg: malus_protocol::provider::ProviderWireMessage = decode_message(&frame).unwrap();
+        assert_eq!(
+            msg,
+            malus_protocol::provider::ProviderWireMessage::response(1, ProviderResponse::Pong)
+        );
+
+        drop(client_write);
+        drop(client_read);
+        let _ = srv_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_serve_io_event_emission() {
+        use malus_protocol::codec::read_frame;
+        use malus_protocol::provider::ProviderEvent;
+        use tokio::io::AsyncWriteExt;
+        use tokio::sync::Mutex;
+
+        struct EventProvider {
+            sink: Mutex<Option<tokio::sync::mpsc::UnboundedSender<ProviderEvent>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl Provider for EventProvider {
+            fn id(&self) -> &str {
+                "event-dummy"
+            }
+            fn name(&self) -> &str {
+                "Event Dummy"
+            }
+            fn capabilities(&self) -> Vec<String> {
+                vec![]
+            }
+            fn register_event_sink(&self, sink: tokio::sync::mpsc::UnboundedSender<ProviderEvent>) {
+                *self.sink.try_lock().unwrap() = Some(sink);
+            }
+        }
+
+        let (client_io, server_io) = duplex(4096);
+        let (server_read, server_write) = tokio::io::split(server_io);
+        let (mut client_read, mut client_write) = tokio::io::split(client_io);
+
+        let provider = Arc::new(EventProvider {
+            sink: Mutex::new(None),
+        });
+        let prov_clone = provider.clone();
+        let srv_handle = tokio::spawn(async move {
+            let _ = serve_io(prov_clone, server_read, server_write).await;
+        });
+
+        // Give server a tick to register sink
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        // Provider emits an event
+        let status = PlayerStatusWire {
+            state: PlaybackStateWire::Playing,
+            current_track: None,
+            position_ms: 500,
+            duration_ms: 1000,
+            volume: 100,
+            muted: false,
+            shuffle: false,
+            repeat: RepeatModeWire::Off,
+        };
+        let sink = provider.sink.lock().await.clone().unwrap();
+        sink.send(ProviderEvent::StatusChanged(status.clone()))
+            .unwrap();
+
+        // Also client sends Ping request
+        let env = malus_protocol::provider::ProviderRequestEnvelope::new(42, ProviderRequest::Ping);
+        let req_bytes = encode_message(&env).unwrap();
+        client_write.write_all(&req_bytes).await.unwrap();
+        client_write.flush().await.unwrap();
+
+        // Client reads frames: both event and response arrive
+        let mut buf = Vec::new();
+        let frame1 = read_frame(&mut client_read, &mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .await
+            .unwrap()
+            .unwrap();
+        let msg1: malus_protocol::provider::ProviderWireMessage = decode_message(&frame1).unwrap();
+
+        let frame2 = read_frame(&mut client_read, &mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .await
+            .unwrap()
+            .unwrap();
+        let msg2: malus_protocol::provider::ProviderWireMessage = decode_message(&frame2).unwrap();
+
+        let msgs = [msg1, msg2];
+        let has_event = msgs.iter().any(|m| match m {
+            malus_protocol::provider::ProviderWireMessage::Event { event } => {
+                matches!(event, ProviderEvent::StatusChanged(_))
+            }
+            _ => false,
+        });
+        let has_resp = msgs.iter().any(|m| match m {
+            malus_protocol::provider::ProviderWireMessage::Response { id, response } => {
+                *id == 42 && matches!(response, ProviderResponse::Pong)
+            }
+            _ => false,
+        });
+
+        assert!(has_event, "Expected StatusChanged event in stream");
+        assert!(has_resp, "Expected Pong response in stream");
 
         drop(client_write);
         drop(client_read);

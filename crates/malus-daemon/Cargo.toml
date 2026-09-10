@@ -19,3 +19,4 @@ libc = "0.2"
 
 [dev-dependencies]
 malus-cli = { path = "../malus-cli" }
+tempfile = "3.17"

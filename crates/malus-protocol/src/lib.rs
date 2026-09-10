@@ -86,4 +86,40 @@ mod tests {
         assert_eq!(client::CLIENT_PROTOCOL, (0, 1));
         assert_eq!(provider::PROVIDER_PROTOCOL, (0, 1));
     }
+
+    #[test]
+    fn test_auth_request_and_response_roundtrip() {
+        let auth_req = client::ClientRequest::GetAuthStatus {
+            provider: "apple".to_string(),
+        };
+        let encoded = encode_message(&auth_req).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientRequest = decode_message(&frame).unwrap();
+        assert_eq!(auth_req, decoded);
+
+        let auth_res = client::ClientResponse::AuthStatus(AuthStatusWire::with_message(
+            "apple",
+            AuthStateWire::NeedsAuth,
+            "Sign-in required",
+        ));
+        let encoded_res = encode_message(&auth_res).unwrap();
+        let mut buf_res = encoded_res;
+        let frame_res = decode_frame(&mut buf_res, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded_res: client::ClientResponse = decode_message(&frame_res).unwrap();
+        assert_eq!(auth_res, decoded_res);
+
+        let prov_req = provider::ProviderRequest::AuthBegin;
+        let prov_encoded = encode_message(&prov_req).unwrap();
+        let mut prov_buf = prov_encoded;
+        let prov_frame = decode_frame(&mut prov_buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let prov_decoded: provider::ProviderRequest = decode_message(&prov_frame).unwrap();
+        assert_eq!(prov_req, prov_decoded);
+    }
 }

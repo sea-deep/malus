@@ -5,10 +5,12 @@
 //!
 //! Strictly does NOT depend on `malus-provider-sdk`.
 
+pub mod discovery;
 pub mod engine;
 pub mod provider_process;
 pub mod server;
 
+pub use discovery::{DiscoveredProvider, discover_providers};
 pub use engine::Engine;
 pub use provider_process::{
     ProviderProcess, ProviderProcessError, ProviderSupervisorState, SupervisorPolicy,

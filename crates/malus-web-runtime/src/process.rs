@@ -37,7 +37,7 @@ pub enum ProcessStatus {
 }
 
 pub struct BrowserProcess {
-    child: Option<Child>,
+    child: std::sync::Mutex<Option<Child>>,
     pid: u32,
     pgid: i32,
     port: u16,
@@ -171,7 +171,7 @@ impl BrowserProcess {
         let browser_ws_url = format!("ws://127.0.0.1:{}{}", port, browser_target_path);
 
         Ok(Self {
-            child: Some(child),
+            child: std::sync::Mutex::new(Some(child)),
             pid,
             pgid,
             port,
@@ -197,8 +197,12 @@ impl BrowserProcess {
     }
 
     /// Check the current status of the browser child process.
-    pub fn check_status(&mut self) -> Result<ProcessStatus, WebError> {
-        if let Some(ref mut child) = self.child {
+    pub fn check_status(&self) -> Result<ProcessStatus, WebError> {
+        let mut guard = self
+            .child
+            .lock()
+            .map_err(|_| WebError::Internal("Process mutex poisoned".into()))?;
+        if let Some(ref mut child) = *guard {
             match child.try_wait() {
                 Ok(None) => Ok(ProcessStatus::Running {
                     pid: self.pid,
@@ -216,22 +220,45 @@ impl BrowserProcess {
 
     /// Explicitly terminate the browser process group with async SIGTERM -> grace -> SIGKILL escalation.
     pub async fn shutdown(&mut self) -> Result<(), WebError> {
-        if let Some(mut child) = self.child.take() {
+        let child_opt = self.child.lock().map(|mut g| g.take()).unwrap_or(None);
+        if let Some(mut child) = child_opt {
+            let pid = self.pid as i32;
             let pgid = self.pgid;
 
-            // 1. Send SIGTERM to the process group
-            unsafe {
-                libc::kill(-pgid, libc::SIGTERM);
+            // 1. Check if process already exited (e.g. from CDP Browser.close)
+            if let Ok(Some(status)) = child.try_wait() {
+                tracing::debug!(
+                    "Browser process {} already exited with status: {:?}",
+                    pid,
+                    status
+                );
+                let _ = fs::remove_file(&self.port_file);
+                return Ok(());
             }
 
-            // 2. Wait up to 1.5s for process to exit cleanly
+            // 2. Wait up to 1.5s for process to finish clean exit
             let grace = tokio::time::timeout(Duration::from_millis(1500), child.wait()).await;
+            if let Ok(Ok(status)) = grace {
+                tracing::debug!(
+                    "Browser process {} exited cleanly with status: {:?}",
+                    pid,
+                    status
+                );
+                let _ = fs::remove_file(&self.port_file);
+                return Ok(());
+            }
 
-            match grace {
+            // 3. Send SIGTERM to the main browser process to allow internal SQLite flush
+            unsafe {
+                libc::kill(pid, libc::SIGTERM);
+            }
+
+            let grace2 = tokio::time::timeout(Duration::from_millis(1500), child.wait()).await;
+            match grace2 {
                 Ok(Ok(status)) => {
                     tracing::debug!(
-                        "Browser process group {} exited cleanly with status: {:?}",
-                        pgid,
+                        "Browser process {} exited after SIGTERM with status: {:?}",
+                        pid,
                         status
                     );
                 }
@@ -257,19 +284,22 @@ impl BrowserProcess {
 
 impl Drop for BrowserProcess {
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
+        let child_opt = self.child.lock().map(|mut g| g.take()).unwrap_or(None);
+        if let Some(mut child) = child_opt {
+            let pid = self.pid as i32;
             let pgid = self.pgid;
             // Best-effort emergency cleanup in Drop
-            unsafe {
-                libc::kill(-pgid, libc::SIGTERM);
-            }
-            // Brief wait before forceful SIGKILL
-            std::thread::sleep(Duration::from_millis(50));
             if let Ok(None) = child.try_wait() {
                 unsafe {
-                    libc::kill(-pgid, libc::SIGKILL);
+                    libc::kill(pid, libc::SIGTERM);
                 }
-                let _ = child.try_wait();
+                std::thread::sleep(Duration::from_millis(100));
+                if let Ok(None) = child.try_wait() {
+                    unsafe {
+                        libc::kill(-pgid, libc::SIGKILL);
+                    }
+                    let _ = child.try_wait();
+                }
             }
             let _ = fs::remove_file(&self.port_file);
         }

@@ -4,7 +4,7 @@
 //! Designed so alternative backends (such as Gecko) can be introduced without modifying
 //! the provider-facing API.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
@@ -129,7 +129,7 @@ impl ChromiumBackend {
         })
     }
 
-    async fn check_health(&mut self) -> Result<RuntimeHealth, WebError> {
+    async fn check_health(&self) -> Result<RuntimeHealth, WebError> {
         let status = self.process.check_status()?;
         let page_health = self.page.check_health().await?;
 
@@ -158,6 +158,18 @@ impl ChromiumBackend {
     }
 
     async fn shutdown(mut self) -> Result<(), WebError> {
+        // Issue graceful Browser.close command over CDP if connected so Chromium flushes cookies/storage.
+        if self.client.is_connected() {
+            let _ = self
+                .client
+                .send_command(
+                    None,
+                    "Browser.close",
+                    serde_json::json!({}),
+                    Duration::from_millis(1500),
+                )
+                .await;
+        }
         self.process.shutdown().await
     }
 }
@@ -195,6 +207,13 @@ impl WebRuntime {
         }
     }
 
+    /// Access a clone of the primary attached web page handle.
+    pub fn page_handle(&self) -> Arc<WebPage> {
+        match &self.backend {
+            RuntimeBackend::Chromium(b) => Arc::clone(&b.page),
+        }
+    }
+
     /// Information about the active browser candidate executing this runtime.
     pub fn candidate(&self) -> &BrowserCandidate {
         match &self.backend {
@@ -203,8 +222,8 @@ impl WebRuntime {
     }
 
     /// Query structured diagnostic health for the running runtime and page.
-    pub async fn check_health(&mut self) -> Result<RuntimeHealth, WebError> {
-        match &mut self.backend {
+    pub async fn check_health(&self) -> Result<RuntimeHealth, WebError> {
+        match &self.backend {
             RuntimeBackend::Chromium(b) => b.check_health().await,
         }
     }

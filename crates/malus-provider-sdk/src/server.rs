@@ -10,37 +10,75 @@ use crate::traits::Provider;
 use malus_protocol::{
     DEFAULT_MAX_PAYLOAD_BYTES,
     codec::{decode_message, read_frame, write_message},
-    provider::{PROVIDER_PROTOCOL, ProviderRequest, ProviderResponse},
+    provider::{
+        PROVIDER_PROTOCOL, ProviderEvent, ProviderRequest, ProviderRequestEnvelope,
+        ProviderResponse, ProviderWireMessage,
+    },
 };
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 /// Serve a provider over an arbitrary async reader and writer.
-pub async fn serve_io<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
+pub async fn serve_io<R: AsyncRead + Unpin, W: AsyncWrite + Unpin + Send + 'static>(
     provider: Arc<dyn Provider>,
     mut reader: R,
     mut writer: W,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut buf = Vec::new();
+    let (msg_tx, mut msg_rx) = tokio::sync::mpsc::unbounded_channel::<ProviderWireMessage>();
 
+    // Register event sink
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<ProviderEvent>();
+    provider.register_event_sink(event_tx);
+
+    // Dedicated writer task: serializes all outgoing responses and events atomically
+    let writer_handle = tokio::spawn(async move {
+        while let Some(msg) = msg_rx.recv().await {
+            if write_message(&mut writer, &msg).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // Dedicated event forwarder: forwards ProviderEvent into ProviderWireMessage::Event
+    let msg_tx_events = msg_tx.clone();
+    let event_fwd_handle = tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            if msg_tx_events
+                .send(ProviderWireMessage::event(event))
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+
+    let mut buf = Vec::new();
     while let Some(frame) = read_frame(&mut reader, &mut buf, DEFAULT_MAX_PAYLOAD_BYTES).await? {
-        let req: ProviderRequest = match decode_message(&frame) {
+        let req_env: ProviderRequestEnvelope = match decode_message(&frame) {
             Ok(r) => r,
             Err(e) => {
-                let err_res = ProviderResponse::err("INVALID_REQUEST", e.to_string());
-                write_message(&mut writer, &err_res).await?;
+                let err_res = ProviderWireMessage::response(
+                    0,
+                    ProviderResponse::err("INVALID_REQUEST", e.to_string()),
+                );
+                let _ = msg_tx.send(err_res);
                 continue;
             }
         };
 
-        let is_shutdown = matches!(req, ProviderRequest::Shutdown);
-        let resp = handle_request(&*provider, req).await;
-        write_message(&mut writer, &resp).await?;
+        let req_id = req_env.id;
+        let is_shutdown = matches!(req_env.request, ProviderRequest::Shutdown);
+        let resp = handle_request(&*provider, req_env.request).await;
+        let _ = msg_tx.send(ProviderWireMessage::response(req_id, resp));
 
         if is_shutdown {
             break;
         }
     }
+
+    drop(msg_tx);
+    event_fwd_handle.abort();
+    let _ = writer_handle.await;
 
     Ok(())
 }
@@ -154,6 +192,21 @@ async fn handle_request(provider: &dyn Provider, req: ProviderRequest) -> Provid
                 Err(e) => ProviderResponse::err("ACTION_FAILED", e.to_string()),
             }
         }
+
+        ProviderRequest::GetAuthStatus => match provider.auth_status().await {
+            Ok(status) => ProviderResponse::AuthStatus(status),
+            Err(e) => ProviderResponse::err("AUTH_FAILED", e.to_string()),
+        },
+
+        ProviderRequest::AuthBegin => match provider.auth_begin().await {
+            Ok(status) => ProviderResponse::AuthStatus(status),
+            Err(e) => ProviderResponse::err("AUTH_FAILED", e.to_string()),
+        },
+
+        ProviderRequest::AuthLogout => match provider.auth_logout().await {
+            Ok(status) => ProviderResponse::AuthStatus(status),
+            Err(e) => ProviderResponse::err("AUTH_FAILED", e.to_string()),
+        },
 
         ProviderRequest::Shutdown => {
             let _ = provider.shutdown().await;

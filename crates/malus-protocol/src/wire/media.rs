@@ -292,6 +292,62 @@ impl ActionRequestV0 {
     }
 }
 
+/// Normalized service authentication state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuthStateWire {
+    Unknown,
+    Checking,
+    NeedsAuth,
+    Authenticating,
+    Authenticated,
+    Failed,
+}
+
+impl fmt::Display for AuthStateWire {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unknown => write!(f, "unknown"),
+            Self::Checking => write!(f, "checking"),
+            Self::NeedsAuth => write!(f, "needs-auth"),
+            Self::Authenticating => write!(f, "authenticating"),
+            Self::Authenticated => write!(f, "authenticated"),
+            Self::Failed => write!(f, "failed"),
+        }
+    }
+}
+
+/// Wire representation of provider service authentication status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthStatusWire {
+    pub provider: String,
+    pub state: AuthStateWire,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl AuthStatusWire {
+    pub fn new(provider: impl Into<String>, state: AuthStateWire) -> Self {
+        Self {
+            provider: provider.into(),
+            state,
+            message: None,
+        }
+    }
+
+    pub fn with_message(
+        provider: impl Into<String>,
+        state: AuthStateWire,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            provider: provider.into(),
+            state,
+            message: Some(message.into()),
+        }
+    }
+}
+
 /// Wire representation of provider status and registration metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderInfoWire {
@@ -299,6 +355,8 @@ pub struct ProviderInfoWire {
     pub name: String,
     pub state: String,
     pub capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_state: Option<AuthStateWire>,
 }
 
 #[cfg(test)]

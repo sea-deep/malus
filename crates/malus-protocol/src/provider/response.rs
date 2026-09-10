@@ -1,6 +1,6 @@
 //! Provider RPC response types returned by provider child processes to `malusd`.
 
-use crate::wire::{PlayerStatusWire, QueueWire, TrackWire};
+use crate::wire::{AuthStatusWire, PlayerStatusWire, QueueWire, TrackWire};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +21,7 @@ pub enum ProviderResponse {
     Status(PlayerStatusWire),
     Queue(QueueWire),
     ActionResult(serde_json::Value),
+    AuthStatus(AuthStatusWire),
     Ok,
     Error {
         code: String,
