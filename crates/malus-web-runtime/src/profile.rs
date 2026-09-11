@@ -121,7 +121,32 @@ impl ProfileManager {
         // 4. Stale lock recovery
         self.cleanup_stale_locks()?;
 
+        // 5. Clean crash recovery state in Preferences to prevent "Restore pages?" dialogs
+        self.sanitize_preferences();
+
         Ok(())
+    }
+
+    /// Reset any dirty exit flags in Chromium's Preferences file.
+    pub fn sanitize_preferences(&self) {
+        let pref_path = self.profile_dir.join("Default").join("Preferences");
+        if let Ok(content) = fs::read_to_string(&pref_path) {
+            let mut changed = false;
+            let mut sanitized = content;
+            if sanitized.contains(r#""exit_type":"Crashed""#) {
+                sanitized =
+                    sanitized.replace(r#""exit_type":"Crashed""#, r#""exit_type":"Normal""#);
+                changed = true;
+            }
+            if sanitized.contains(r#""exited_cleanly":false"#) {
+                sanitized =
+                    sanitized.replace(r#""exited_cleanly":false"#, r#""exited_cleanly":true"#);
+                changed = true;
+            }
+            if changed {
+                let _ = fs::write(&pref_path, sanitized);
+            }
+        }
     }
 
     /// Conservatively check for and remove dead Chromium `SingletonLock` symlinks.

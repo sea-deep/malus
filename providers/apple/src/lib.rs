@@ -9,6 +9,6 @@ pub use auth::AuthState;
 pub use error::AppleError;
 pub use provider::AppleProvider;
 pub use web::{
-    AppleWebSession, parse_apple_album, parse_apple_artist, parse_apple_artwork,
-    parse_apple_playlist, parse_apple_track,
+    AppleWebSession, ProductionAppleWebSession, parse_apple_album, parse_apple_artist,
+    parse_apple_artwork, parse_apple_playlist, parse_apple_track,
 };

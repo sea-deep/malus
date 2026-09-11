@@ -11,6 +11,7 @@ name = "malus"
 path = "src/main.rs"
 
 [dependencies]
+malus-client = { path = "../malus-client" }
 malus-protocol = { path = "../malus-protocol" }
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net", "io-util"] }

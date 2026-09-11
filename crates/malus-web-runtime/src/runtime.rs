@@ -1,8 +1,6 @@
 //! Public runtime facade and backend supervisor.
 //!
 //! Exposes `WebRuntime` as an opaque facade concealing browser engine internals.
-//! Designed so alternative backends (such as Gecko) can be introduced without modifying
-//! the provider-facing API.
 
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
@@ -32,6 +30,8 @@ pub struct RuntimeOptions {
     pub custom_profile_path: Option<PathBuf>,
     /// Additional command-line arguments to pass to the browser process.
     pub extra_args: Vec<String>,
+    /// Whether to disable background timer and occlusion throttling (defaults to true).
+    pub disable_background_throttling: bool,
 }
 
 impl Default for RuntimeOptions {
@@ -43,6 +43,7 @@ impl Default for RuntimeOptions {
             profile_namespace: None,
             custom_profile_path: None,
             extra_args: Vec::new(),
+            disable_background_throttling: true,
         }
     }
 }
@@ -62,8 +63,6 @@ pub struct RuntimeHealth {
 /// Internal backend implementation variant.
 enum RuntimeBackend {
     Chromium(ChromiumBackend),
-    // Future backend variants can be added here without altering WebRuntime:
-    // Gecko(GeckoBackend),
 }
 
 /// Internal Chromium backend supervisor.
@@ -93,6 +92,7 @@ impl ChromiumBackend {
             options.launch_mode,
             &options.initial_url,
             &options.extra_args,
+            options.disable_background_throttling,
         )
         .await?;
 
@@ -108,16 +108,19 @@ impl ChromiumBackend {
         let targets = client.get_targets().await?;
         let page_target = targets.into_iter().find(|t| t.target_type == "page");
 
-        let target_id = match page_target {
-            Some(t) => t.target_id,
-            None => client.create_target(&options.initial_url).await?,
+        let (target_id, needs_nav) = match page_target {
+            Some(t) => {
+                let needs = options.initial_url != "about:blank" && t.url != options.initial_url;
+                (t.target_id, needs)
+            }
+            None => (client.create_target(&options.initial_url).await?, false),
         };
 
         let session_id = client.attach_to_target(&target_id).await?;
         let page = Arc::new(WebPage::attach(client.clone(), target_id, session_id).await?);
 
-        // If an initial URL other than blank was requested and target was already present, navigate
-        if options.initial_url != "about:blank" {
+        // Only navigate if the discovered page target was not already opened with initial_url
+        if needs_nav {
             let _ = page.navigate(&options.initial_url).await;
         }
 
@@ -166,7 +169,7 @@ impl ChromiumBackend {
                     None,
                     "Browser.close",
                     serde_json::json!({}),
-                    Duration::from_millis(1500),
+                    Duration::from_millis(3000),
                 )
                 .await;
         }
@@ -177,7 +180,7 @@ impl ChromiumBackend {
 /// Provider-facing opaque facade managing web execution.
 ///
 /// Providers interact exclusively with `WebRuntime` and `WebPage`.
-/// Concrete browser engines (Chromium, Gecko) and CDP internals are hidden.
+/// Concrete browser engines (Chromium) and CDP internals are hidden.
 pub struct WebRuntime {
     backend: RuntimeBackend,
 }
@@ -194,9 +197,6 @@ impl WebRuntime {
                     backend: RuntimeBackend::Chromium(backend),
                 })
             }
-            BrowserEngine::Gecko => Err(WebError::Launch(
-                "Gecko backend is not yet implemented".to_string(),
-            )),
         }
     }
 

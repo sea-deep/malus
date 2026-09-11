@@ -16,7 +16,6 @@ use crate::error::WebError;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BrowserEngine {
     Chromium,
-    Gecko,
 }
 
 /// The specific browser distribution or branding.
@@ -38,10 +37,6 @@ pub enum BrowserProduct {
 pub enum LaunchMechanism {
     /// Native host executable invoked directly.
     Native,
-    /// Future Flatpak sandboxed application (deferred in M1a).
-    Flatpak,
-    /// Future Snap sandboxed application (deferred in M1a).
-    Snap,
 }
 
 /// A discovered browser candidate on the host system.
@@ -305,10 +300,7 @@ const KNOWN_NATIVE_SEARCH_MATRIX: &[KnownNative] = &[
 /// Priority:
 /// 1. Explicitly configured binary path (if supplied)
 /// 2. `MALUS_BROWSER` environment variable
-/// 3. `CHROME_BIN` environment variable
-/// 4. PATH search matrix covering Chrome, Brave, Edge, Thorium, Vivaldi, Opera, Chromium, and niche builds
-///
-/// Note: Sandboxed environments (Flatpak, Snap) are deferred in M1a to maintain reliable automation.
+/// 3. PATH search matrix covering Chrome, Brave, Edge, Thorium, Vivaldi, Opera, Chromium, and niche builds
 pub fn discover_browsers(custom_path: Option<&Path>) -> Vec<BrowserCandidate> {
     let mut candidates = Vec::new();
     let mut seen_canonical_paths = HashSet::new();
@@ -335,31 +327,29 @@ pub fn discover_browsers(custom_path: Option<&Path>) -> Vec<BrowserCandidate> {
         seen_canonical_paths.insert(canonical);
     }
 
-    // 2. Environment variables: MALUS_BROWSER, CHROME_BIN
-    for env_var in &["MALUS_BROWSER", "CHROME_BIN"] {
-        if let Ok(val) = env::var(env_var) {
-            let p = PathBuf::from(&val);
-            let resolved = if p.exists() {
-                Some(p)
-            } else {
-                which_in_path(&val)
-            };
+    // 2. Environment variable: MALUS_BROWSER
+    if let Ok(val) = env::var("MALUS_BROWSER") {
+        let p = PathBuf::from(&val);
+        let resolved = if p.exists() {
+            Some(p)
+        } else {
+            which_in_path(&val)
+        };
 
-            if let Some(path) = resolved {
-                let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-                if seen_canonical_paths.insert(canonical) {
-                    let version = query_browser_version(&path);
-                    let product = infer_product_from_name_or_version(&val, version.as_deref());
-                    candidates.push(BrowserCandidate::new(
-                        format!("Env ${} ({})", env_var, path.display()),
-                        BrowserEngine::Chromium,
-                        product,
-                        LaunchMechanism::Native,
-                        path.clone(),
-                        version,
-                        vec![path.to_string_lossy().to_string()],
-                    ));
-                }
+        if let Some(path) = resolved {
+            let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if seen_canonical_paths.insert(canonical) {
+                let version = query_browser_version(&path);
+                let product = infer_product_from_name_or_version(&val, version.as_deref());
+                candidates.push(BrowserCandidate::new(
+                    format!("Env $MALUS_BROWSER ({})", path.display()),
+                    BrowserEngine::Chromium,
+                    product,
+                    LaunchMechanism::Native,
+                    path.clone(),
+                    version,
+                    vec![path.to_string_lossy().to_string()],
+                ));
             }
         }
     }

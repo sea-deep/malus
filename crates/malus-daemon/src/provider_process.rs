@@ -97,8 +97,8 @@ impl Default for SupervisorPolicy {
             max_retries: 3,
             base_backoff_ms: 100,
             handshake_timeout: Duration::from_secs(5),
-            shutdown_grace_period: Duration::from_millis(1000),
-            shutdown_kill_timeout: Duration::from_millis(1000),
+            shutdown_grace_period: Duration::from_millis(4000),
+            shutdown_kill_timeout: Duration::from_millis(2000),
         }
     }
 }
@@ -355,12 +355,6 @@ impl ProviderProcess {
                     self.state().await,
                     capabilities
                 );
-                Ok(())
-            }
-            Ok(Ok(ProviderResponse::Capabilities(caps))) => {
-                *self.capabilities.lock().await = caps.clone();
-                *self.retry_count.lock().await = 0;
-                *self.state.lock().await = ProviderSupervisorState::Ready;
                 Ok(())
             }
             Ok(Ok(other)) => {

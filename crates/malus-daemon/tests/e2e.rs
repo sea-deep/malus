@@ -11,7 +11,7 @@
 //! - `mock.repost` custom action works through normalized action RPC with target
 //! - Supervisor state machine, backoff, and graceful shutdown escalation
 
-use malus_cli::Client;
+use malus_cli::MalusClient;
 use malus_daemon::{Engine, ProviderProcess, ProviderSupervisorState, Server, SupervisorPolicy};
 use malus_protocol::{
     MediaIdWire, PlaybackStateWire,
@@ -100,7 +100,7 @@ impl Drop for TestServer {
 #[tokio::test]
 async fn test_client_daemon_ping_and_capabilities() {
     let server = TestServer::start().await;
-    let mut client = Client::connect(&server.sock_path).await.unwrap();
+    let client = MalusClient::connect(&server.sock_path).await.unwrap();
 
     let resp = client.send(&ClientRequest::Ping).await.unwrap();
     assert_eq!(resp, ClientResponse::Pong);
@@ -136,7 +136,7 @@ async fn test_client_daemon_ping_and_capabilities() {
 #[tokio::test]
 async fn test_search_and_queue_workflow() {
     let server = TestServer::start().await;
-    let mut client = Client::connect(&server.sock_path).await.unwrap();
+    let client = MalusClient::connect(&server.sock_path).await.unwrap();
 
     // 1. Search for tracks via child process MockProvider
     let resp = client
@@ -181,7 +181,7 @@ async fn test_search_and_queue_workflow() {
 #[tokio::test]
 async fn test_catalog_and_library_primitives() {
     let server = TestServer::start().await;
-    let mut client = Client::connect(&server.sock_path).await.unwrap();
+    let client = MalusClient::connect(&server.sock_path).await.unwrap();
 
     // 1. Get catalog track
     let resp = client
@@ -252,7 +252,7 @@ async fn test_catalog_and_library_primitives() {
 #[tokio::test]
 async fn test_playback_controls_and_clock() {
     let server = TestServer::start().await;
-    let mut client = Client::connect(&server.sock_path).await.unwrap();
+    let client = MalusClient::connect(&server.sock_path).await.unwrap();
 
     // Play track
     let resp = client
@@ -355,7 +355,7 @@ async fn test_playback_controls_and_clock() {
 #[tokio::test]
 async fn test_custom_action_mock_repost() {
     let server = TestServer::start().await;
-    let mut client = Client::connect(&server.sock_path).await.unwrap();
+    let client = MalusClient::connect(&server.sock_path).await.unwrap();
 
     let resp = client
         .send(&ClientRequest::Action(ActionRequestV0 {
@@ -429,7 +429,7 @@ async fn test_provider_crash_isolation() {
 
     sleep(Duration::from_millis(50)).await;
 
-    let mut client = Client::connect(&sock_path).await.unwrap();
+    let client = MalusClient::connect(&sock_path).await.unwrap();
 
     // Force kill the provider child process
     proc.force_kill_for_test().await;
@@ -484,7 +484,7 @@ exit 0
 
     sleep(Duration::from_millis(50)).await;
 
-    let mut client = Client::connect(&sock_path).await.unwrap();
+    let client = MalusClient::connect(&sock_path).await.unwrap();
 
     let resp = client.send(&ClientRequest::Play).await;
     assert!(
@@ -504,7 +504,7 @@ exit 0
 async fn test_event_broadcasting() {
     let server = TestServer::start().await;
 
-    let mut event_client = Client::connect(&server.sock_path).await.unwrap();
+    let mut event_client = MalusClient::connect(&server.sock_path).await.unwrap();
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
 
     tokio::spawn(async move {
@@ -517,7 +517,7 @@ async fn test_event_broadcasting() {
 
     sleep(Duration::from_millis(50)).await;
 
-    let mut cmd_client = Client::connect(&server.sock_path).await.unwrap();
+    let cmd_client = MalusClient::connect(&server.sock_path).await.unwrap();
 
     // Trigger Play
     cmd_client.send(&ClientRequest::Play).await.unwrap();
@@ -602,7 +602,7 @@ async fn test_discovery_and_lazy_spawn() {
         sleep(Duration::from_millis(20)).await;
     }
 
-    let mut client = Client::connect(&sock_path).await.unwrap();
+    let client = MalusClient::connect(&sock_path).await.unwrap();
 
     // Query capabilities which triggers lazy spawn on demand
     let resp = client
@@ -635,7 +635,7 @@ async fn test_discovery_and_lazy_spawn() {
 #[tokio::test]
 async fn test_auth_status_rpc() {
     let server = TestServer::start().await;
-    let mut client = Client::connect(&server.sock_path).await.unwrap();
+    let client = MalusClient::connect(&server.sock_path).await.unwrap();
 
     let resp = client
         .send(&ClientRequest::GetAuthStatus {

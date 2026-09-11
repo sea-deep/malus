@@ -1,7 +1,7 @@
 //! Malus Command Line Interface.
 
 use clap::{Parser, Subcommand};
-use malus_cli::{Client, default_socket_path};
+use malus_cli::{MalusClient, default_socket_path};
 use malus_protocol::{
     client::{ClientRequest, ClientResponse},
     wire::{
@@ -112,6 +112,7 @@ enum LibraryCommands {
 #[derive(Subcommand)]
 enum Commands {
     /// Resume playback, or play a specified media ID (e.g. apple:track:1440857781)
+    #[command(alias = "resume")]
     Play {
         #[arg(help = "Optional media ID to play (e.g. apple:track:1440857781)")]
         media_id: Option<String>,
@@ -291,7 +292,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let socket_path = cli.socket.unwrap_or_else(default_socket_path);
 
-    let mut client = Client::connect(&socket_path).await.map_err(|e| {
+    let mut client = MalusClient::connect(&socket_path).await.map_err(|e| {
         eprintln!("Error: Cannot connect to malus daemon: {e}");
         eprintln!(
             "Ensure 'malus-daemon' is running and socket exists at {}",
@@ -1206,7 +1207,7 @@ fn display_library(resp: &ClientResponse, json: bool) -> Result<(), Box<dyn std:
 }
 
 async fn resolve_seek_target(
-    client: &mut Client,
+    client: &mut MalusClient,
     target: &str,
 ) -> Result<u64, Box<dyn std::error::Error>> {
     let t = target.trim();

@@ -11,7 +11,7 @@ use malus_protocol::{
 };
 use malus_provider_apple::{
     AppleError, AppleProvider, AppleWebSession, AuthState, parse_apple_album, parse_apple_artist,
-    parse_apple_playlist, parse_apple_track,
+    parse_apple_artwork, parse_apple_playlist, parse_apple_track,
 };
 use malus_provider_sdk::{
     Provider,
@@ -676,4 +676,23 @@ fn test_apple_json_normalization_fixtures() {
     assert_eq!(playlist.title, "Summer Vibes");
     assert_eq!(playlist.curator.as_deref(), Some("Apple Music Electronic"));
     assert_eq!(playlist.track_count, Some(42));
+}
+
+#[test]
+fn test_apple_artwork_template_normalization() {
+    let raw_art = serde_json::json!({
+        "url": "https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/e8/43/5f/e8435ffa-b6b9-b171-40ab-4ff3959ab661/886443919266.jpg/{w}x{h}bb.jpg",
+        "width": 3000,
+        "height": 3000
+    });
+
+    let art = parse_apple_artwork(&raw_art).expect("parsed artwork");
+    assert_eq!(
+        art.url,
+        "https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/e8/43/5f/e8435ffa-b6b9-b171-40ab-4ff3959ab661/886443919266.jpg/600x600bb.jpg"
+    );
+    assert!(!art.url.contains("{w}"));
+    assert!(!art.url.contains("{h}"));
+    assert_eq!(art.width, Some(3000));
+    assert_eq!(art.height, Some(3000));
 }

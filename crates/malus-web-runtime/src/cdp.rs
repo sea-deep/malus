@@ -347,6 +347,46 @@ impl BrowserCdpClient {
 
         Ok(res.get("success").and_then(|v| v.as_bool()).unwrap_or(true))
     }
+
+    /// Get the browser window containing a target (`Browser.getWindowForTarget`).
+    pub async fn get_window_for_target(&self, target_id: &str) -> Result<(u32, Value), WebError> {
+        let params = serde_json::json!({ "targetId": target_id });
+        let res = self
+            .send_command(
+                None,
+                "Browser.getWindowForTarget",
+                params,
+                Duration::from_secs(5),
+            )
+            .await?;
+
+        let window_id = res
+            .get("windowId")
+            .and_then(|v| v.as_u64())
+            .map(|w| w as u32)
+            .ok_or_else(|| {
+                WebError::Protocol("Browser.getWindowForTarget missing windowId".to_string())
+            })?;
+
+        let bounds = res.get("bounds").cloned().unwrap_or(Value::Null);
+        Ok((window_id, bounds))
+    }
+
+    /// Set browser window bounds/state (`Browser.setWindowBounds`).
+    pub async fn set_window_bounds(&self, window_id: u32, bounds: Value) -> Result<(), WebError> {
+        let params = serde_json::json!({
+            "windowId": window_id,
+            "bounds": bounds,
+        });
+        self.send_command(
+            None,
+            "Browser.setWindowBounds",
+            params,
+            Duration::from_secs(5),
+        )
+        .await?;
+        Ok(())
+    }
 }
 
 fn fail_all_pending(pending: &PendingMap, message: &str) {

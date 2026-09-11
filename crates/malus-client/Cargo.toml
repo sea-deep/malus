@@ -1,0 +1,17 @@
+[package]
+name = "malus-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+malus-protocol = { path = "../malus-protocol" }
+tokio = { version = "1", features = ["macros", "rt", "net", "io-util", "sync", "time"] }
+thiserror = "2"
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

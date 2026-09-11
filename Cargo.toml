@@ -6,9 +6,11 @@ members = [
     "crates/malus-provider-sdk",
     "crates/malus-daemon",
     "crates/malus-cli",
+    "crates/malus-client",
     "crates/malus-web-runtime",
     "providers/mock",
     "providers/apple",
+    "apps/malus-gui",
 ]
 
 [workspace.package]

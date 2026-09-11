@@ -8,7 +8,7 @@
 //! - Best-effort process group leadership, parent death signaling, and graceful shutdown escalation
 //! - Direct browser-level WebSocket CDP management (`Target.*` flattening)
 //! - Backend-neutral facade (`WebRuntime`, `WebPage`, `WebEvent`) designed to permit future
-//!   alternative backends (e.g. Gecko) without API changes
+//!   alternative backends without API changes
 
 pub mod cdp;
 pub mod discovery;

@@ -19,7 +19,7 @@ use tokio::{process::Child, time::sleep};
 
 use crate::{discovery::BrowserCandidate, error::WebError, profile::ProfileManager};
 
-/// Controls whether the browser window is visible or headless.
+/// Controls whether the browser window is visible, headless, or windowless.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LaunchMode {
     /// Normal headed browser window.
@@ -27,6 +27,8 @@ pub enum LaunchMode {
     Headed,
     /// Headless mode (suitable for automation, tests, and headless servers).
     Headless,
+    /// Headed browser without initial window (--no-startup-window).
+    Windowless,
 }
 
 /// Status of the managed browser process.
@@ -53,6 +55,7 @@ impl BrowserProcess {
         launch_mode: LaunchMode,
         initial_url: &str,
         extra_args: &[String],
+        disable_background_throttling: bool,
     ) -> Result<Self, WebError> {
         profile.prepare_profile_dir()?;
 
@@ -76,24 +79,35 @@ impl BrowserProcess {
         // Standard hygiene flags
         cmd.arg("--no-first-run");
         cmd.arg("--no-default-browser-check");
+        cmd.arg("--disable-session-crashed-bubble");
 
-        // Autoplay & background throttling flags
+        // Autoplay
         cmd.arg("--autoplay-policy=no-user-gesture-required");
-        cmd.arg("--disable-background-timer-throttling");
-        cmd.arg("--disable-backgrounding-occluded-windows");
-        cmd.arg("--disable-renderer-backgrounding");
-        cmd.arg(
-            "--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,Translate,OptimizationHints,MediaRouter,DialMediaRouteProvider,PaintHolding",
-        );
+
+        // Background throttling flags
+        if disable_background_throttling {
+            cmd.arg("--disable-background-timer-throttling");
+            cmd.arg("--disable-backgrounding-occluded-windows");
+            cmd.arg("--disable-renderer-backgrounding");
+            cmd.arg(
+                "--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,Translate,OptimizationHints,MediaRouter,DialMediaRouteProvider,PaintHolding",
+            );
+        } else {
+            cmd.arg(
+                "--disable-features=Translate,OptimizationHints,MediaRouter,DialMediaRouteProvider,PaintHolding",
+            );
+        }
 
         // Structured LaunchMode
         match launch_mode {
             LaunchMode::Headless => {
                 cmd.arg("--headless=new");
-                cmd.arg("--disable-gpu");
             }
             LaunchMode::Headed => {
                 // Keep headed without forcing headless or suppressing UI
+            }
+            LaunchMode::Windowless => {
+                cmd.arg("--no-startup-window");
             }
         }
 
@@ -117,8 +131,10 @@ impl BrowserProcess {
             }
         }
 
-        // Target URL
-        cmd.arg(initial_url);
+        // Target URL (only if not windowless and not blank)
+        if launch_mode != LaunchMode::Windowless && !initial_url.is_empty() {
+            cmd.arg(initial_url);
+        }
 
         // Detach I/O to avoid terminal corruption
         cmd.stdin(Stdio::null());
@@ -245,8 +261,8 @@ impl BrowserProcess {
                 return Ok(());
             }
 
-            // 2. Wait up to 1.5s for process to finish clean exit
-            let grace = tokio::time::timeout(Duration::from_millis(1500), child.wait()).await;
+            // 2. Wait up to 3.0s for process to finish clean exit
+            let grace = tokio::time::timeout(Duration::from_millis(3000), child.wait()).await;
             if let Ok(Ok(status)) = grace {
                 tracing::debug!(
                     "Browser process {} exited cleanly with status: {:?}",
@@ -262,7 +278,7 @@ impl BrowserProcess {
                 libc::kill(pid, libc::SIGTERM);
             }
 
-            let grace2 = tokio::time::timeout(Duration::from_millis(1500), child.wait()).await;
+            let grace2 = tokio::time::timeout(Duration::from_millis(2000), child.wait()).await;
             match grace2 {
                 Ok(Ok(status)) => {
                     tracing::debug!(
