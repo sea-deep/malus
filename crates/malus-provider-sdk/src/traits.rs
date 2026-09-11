@@ -2,17 +2,26 @@
 
 use crate::error::ProviderError;
 use async_trait::async_trait;
-use malus_protocol::{MediaIdWire, PlayerStatusWire, QueueWire, TrackWire};
+use malus_protocol::{
+    CatalogItemWire, LibraryKindWire, LibraryPageWire, MediaIdWire, PageWire, PlayerStatusWire,
+    QueueWire, SearchKindWire, SearchResultsWire, TrackWire,
+};
 
 pub mod capability {
     pub const AUTH: &str = "auth";
     pub const AUTH_BROWSER: &str = "auth.browser";
     pub const SEARCH: &str = "search";
+    pub const CATALOG_TRACK: &str = "catalog.track";
+    pub const CATALOG_ALBUM: &str = "catalog.album";
+    pub const CATALOG_ARTIST: &str = "catalog.artist";
+    pub const CATALOG_PLAYLIST: &str = "catalog.playlist";
+    pub const LIBRARY_TRACKS: &str = "library.tracks";
+    pub const LIBRARY_ALBUMS: &str = "library.albums";
+    pub const LIBRARY_PLAYLISTS: &str = "library.playlists";
     pub const PLAYBACK: &str = "playback";
     pub const PLAYBACK_SEEK: &str = "playback.seek";
     pub const QUEUE_READ: &str = "queue.read";
     pub const QUEUE_EDIT: &str = "queue.edit";
-    pub const LIBRARY_ALBUMS: &str = "library.albums";
     pub const LYRICS_SYNCED: &str = "lyrics.synced";
 }
 
@@ -67,11 +76,51 @@ pub trait Provider: Send + Sync {
         ))
     }
 
-    /// Search provider catalog for tracks.
-    async fn search(&self, query: &str, limit: usize) -> Result<Vec<TrackWire>, ProviderError> {
-        let _ = (query, limit);
+    /// Search provider catalog for media items across requested categories.
+    async fn search(
+        &self,
+        query: &str,
+        kinds: &[SearchKindWire],
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<SearchResultsWire, ProviderError> {
+        let _ = (query, kinds, limit, cursor);
         Err(ProviderError::NotSupported(
             "Search is not supported".to_string(),
+        ))
+    }
+
+    /// Fetch normalized details for a specific media identifier.
+    async fn get_catalog_item(&self, media_id: &str) -> Result<CatalogItemWire, ProviderError> {
+        let _ = media_id;
+        Err(ProviderError::NotSupported(
+            "Catalog item lookup is not supported".to_string(),
+        ))
+    }
+
+    /// Fetch paginated collection items (e.g. tracks for an album or playlist).
+    async fn get_collection_items(
+        &self,
+        media_id: &str,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<PageWire<TrackWire>, ProviderError> {
+        let _ = (media_id, limit, cursor);
+        Err(ProviderError::NotSupported(
+            "Collection items lookup is not supported".to_string(),
+        ))
+    }
+
+    /// Fetch paginated library resources.
+    async fn get_library(
+        &self,
+        kind: LibraryKindWire,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<LibraryPageWire, ProviderError> {
+        let _ = (kind, limit, cursor);
+        Err(ProviderError::NotSupported(
+            "Library inspection is not supported".to_string(),
         ))
     }
 

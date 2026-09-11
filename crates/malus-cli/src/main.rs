@@ -3,9 +3,11 @@
 use clap::{Parser, Subcommand};
 use malus_cli::{Client, default_socket_path};
 use malus_protocol::{
-    MediaIdWire, TrackWire,
     client::{ClientRequest, ClientResponse},
-    wire::ActionRequestV0,
+    wire::{
+        ActionRequestV0, CatalogItemWire, LibraryKindWire, LibraryPageWire, MediaIdWire,
+        SearchKindWire, SearchResultsWire, TrackWire,
+    },
 };
 use std::path::PathBuf;
 
@@ -41,6 +43,69 @@ enum ProviderCommands {
     Info {
         #[arg(help = "Provider ID (e.g. apple)")]
         provider: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum LibraryCommands {
+    /// Browse saved library tracks
+    #[command(alias = "track")]
+    Tracks {
+        /// Provider ID to query (defaults to active provider)
+        #[arg(short = 'p', long = "provider")]
+        provider: Option<String>,
+
+        /// Maximum number of tracks to fetch
+        #[arg(short = 'l', long = "limit")]
+        limit: Option<usize>,
+
+        /// Opaque pagination cursor
+        #[arg(short = 'c', long = "cursor")]
+        cursor: Option<String>,
+
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Browse saved library albums
+    #[command(alias = "album")]
+    Albums {
+        /// Provider ID to query (defaults to active provider)
+        #[arg(short = 'p', long = "provider")]
+        provider: Option<String>,
+
+        /// Maximum number of albums to fetch
+        #[arg(short = 'l', long = "limit")]
+        limit: Option<usize>,
+
+        /// Opaque pagination cursor
+        #[arg(short = 'c', long = "cursor")]
+        cursor: Option<String>,
+
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Browse saved library playlists
+    #[command(alias = "playlist")]
+    Playlists {
+        /// Provider ID to query (defaults to active provider)
+        #[arg(short = 'p', long = "provider")]
+        provider: Option<String>,
+
+        /// Maximum number of playlists to fetch
+        #[arg(short = 'l', long = "limit")]
+        limit: Option<usize>,
+
+        /// Opaque pagination cursor
+        #[arg(short = 'c', long = "cursor")]
+        cursor: Option<String>,
+
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -99,6 +164,88 @@ enum Commands {
     Search {
         #[arg(help = "Search query string")]
         query: String,
+
+        /// Filter by media type (track, album, artist, playlist)
+        #[arg(short = 't', long = "type")]
+        r#type: Option<String>,
+
+        /// Provider ID to query (defaults to active provider)
+        #[arg(short = 'p', long = "provider")]
+        provider: Option<String>,
+
+        /// Maximum number of results per category
+        #[arg(short = 'l', long = "limit")]
+        limit: Option<usize>,
+
+        /// Opaque pagination cursor
+        #[arg(short = 'c', long = "cursor")]
+        cursor: Option<String>,
+
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Inspect catalog track details
+    Track {
+        #[arg(help = "Track media ID (e.g. apple:track:1440857781)")]
+        media_id: String,
+
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Inspect catalog album details and tracklist
+    Album {
+        #[arg(help = "Album media ID (e.g. apple:album:1440857780)")]
+        media_id: String,
+
+        /// Maximum number of collection tracks to fetch
+        #[arg(short = 'l', long = "limit")]
+        limit: Option<usize>,
+
+        /// Opaque pagination cursor for tracklist
+        #[arg(short = 'c', long = "cursor")]
+        cursor: Option<String>,
+
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Inspect catalog artist details
+    Artist {
+        #[arg(help = "Artist media ID (e.g. apple:artist:5468295)")]
+        media_id: String,
+
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Inspect catalog playlist details and tracklist
+    Playlist {
+        #[arg(help = "Playlist media ID (e.g. apple:playlist:pl.xyz)")]
+        media_id: String,
+
+        /// Maximum number of collection tracks to fetch
+        #[arg(short = 'l', long = "limit")]
+        limit: Option<usize>,
+
+        /// Opaque pagination cursor for tracklist
+        #[arg(short = 'c', long = "cursor")]
+        cursor: Option<String>,
+
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Browse user's saved library
+    Library {
+        #[command(subcommand)]
+        action: LibraryCommands,
     },
 
     /// Enqueue a track
@@ -196,7 +343,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match resp {
                 ClientResponse::Status(s) => {
                     let track_info = match s.current_track {
-                        Some(t) => format!("{} - {}", t.title, t.artist),
+                        Some(t) => format!("{} - {}", t.title, t.artist_display()),
                         None => "(none)".to_string(),
                     };
                     println!("State:      {:?}", s.state);
@@ -236,7 +383,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 idx + 1,
                                 track.id,
                                 track.title,
-                                track.artist
+                                track.artist_display()
                             );
                         }
                     }
@@ -248,38 +395,172 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let resp = client.send(&ClientRequest::ClearQueue).await?;
             print_response(&resp);
         }
-        Commands::Search { query } => {
-            let resp = client.send(&ClientRequest::Search { query }).await?;
+        Commands::Search {
+            query,
+            r#type,
+            provider,
+            limit,
+            cursor,
+            json,
+        } => {
+            let kinds = match r#type.as_deref() {
+                Some("track" | "tracks" | "song" | "songs") => vec![SearchKindWire::Track],
+                Some("album" | "albums") => vec![SearchKindWire::Album],
+                Some("artist" | "artists") => vec![SearchKindWire::Artist],
+                Some("playlist" | "playlists") => vec![SearchKindWire::Playlist],
+                Some(unknown) => {
+                    eprintln!(
+                        "Unknown type '{unknown}'. Valid types: track, album, artist, playlist"
+                    );
+                    return Ok(());
+                }
+                None => vec![],
+            };
+
+            let resp = client
+                .send(&ClientRequest::Search {
+                    query,
+                    kinds,
+                    provider,
+                    limit,
+                    cursor,
+                })
+                .await?;
+
             match resp {
-                ClientResponse::SearchResults { tracks } => {
-                    if tracks.is_empty() {
-                        println!("No tracks found.");
-                    } else {
-                        for (idx, t) in tracks.iter().enumerate() {
-                            let album = t.album.as_deref().unwrap_or("-");
-                            println!(
-                                "{:2}. [{}] {} - {} ({})",
-                                idx + 1,
-                                t.id,
-                                t.title,
-                                t.artist,
-                                album
-                            );
-                        }
-                    }
+                ClientResponse::SearchResults(results) => {
+                    display_search_results(&results, json)?;
+                }
+                ClientResponse::Error { code, message } => {
+                    eprintln!("Error [{code}]: {message}");
                 }
                 other => print_response(&other),
             }
         }
+        Commands::Track { media_id, json } => {
+            let resp = client
+                .send(&ClientRequest::GetCatalogItem { media_id })
+                .await?;
+            match resp {
+                ClientResponse::CatalogItem(item) => {
+                    display_track(&item, json)?;
+                }
+                ClientResponse::Error { code, message } => {
+                    eprintln!("Error [{code}]: {message}");
+                }
+                other => print_response(&other),
+            }
+        }
+        Commands::Album {
+            media_id,
+            limit,
+            cursor,
+            json,
+        } => {
+            let item_resp = client
+                .send(&ClientRequest::GetCatalogItem {
+                    media_id: media_id.clone(),
+                })
+                .await?;
+            let tracks_resp = client
+                .send(&ClientRequest::GetCollectionItems {
+                    media_id,
+                    limit,
+                    cursor,
+                })
+                .await?;
+            display_album(&item_resp, &tracks_resp, json)?;
+        }
+        Commands::Artist { media_id, json } => {
+            let resp = client
+                .send(&ClientRequest::GetCatalogItem { media_id })
+                .await?;
+            match resp {
+                ClientResponse::CatalogItem(item) => {
+                    display_artist(&item, json)?;
+                }
+                ClientResponse::Error { code, message } => {
+                    eprintln!("Error [{code}]: {message}");
+                }
+                other => print_response(&other),
+            }
+        }
+        Commands::Playlist {
+            media_id,
+            limit,
+            cursor,
+            json,
+        } => {
+            let item_resp = client
+                .send(&ClientRequest::GetCatalogItem {
+                    media_id: media_id.clone(),
+                })
+                .await?;
+            let tracks_resp = client
+                .send(&ClientRequest::GetCollectionItems {
+                    media_id,
+                    limit,
+                    cursor,
+                })
+                .await?;
+            display_playlist(&item_resp, &tracks_resp, json)?;
+        }
+        Commands::Library { action } => match action {
+            LibraryCommands::Tracks {
+                provider,
+                limit,
+                cursor,
+                json,
+            } => {
+                let resp = client
+                    .send(&ClientRequest::GetLibrary {
+                        kind: LibraryKindWire::Tracks,
+                        provider,
+                        limit,
+                        cursor,
+                    })
+                    .await?;
+                display_library(&resp, json)?;
+            }
+            LibraryCommands::Albums {
+                provider,
+                limit,
+                cursor,
+                json,
+            } => {
+                let resp = client
+                    .send(&ClientRequest::GetLibrary {
+                        kind: LibraryKindWire::Albums,
+                        provider,
+                        limit,
+                        cursor,
+                    })
+                    .await?;
+                display_library(&resp, json)?;
+            }
+            LibraryCommands::Playlists {
+                provider,
+                limit,
+                cursor,
+                json,
+            } => {
+                let resp = client
+                    .send(&ClientRequest::GetLibrary {
+                        kind: LibraryKindWire::Playlists,
+                        provider,
+                        limit,
+                        cursor,
+                    })
+                    .await?;
+                display_library(&resp, json)?;
+            }
+        },
         Commands::Enqueue { id, title, artist } => {
-            let track = TrackWire {
+            let track = TrackWire::new(
                 id,
-                title: title.unwrap_or_else(|| "Unknown Track".into()),
-                artist: artist.unwrap_or_else(|| "Unknown Artist".into()),
-                album: None,
-                duration_ms: None,
-                uri: None,
-            };
+                title.unwrap_or_else(|| "Unknown Track".into()),
+                artist.unwrap_or_else(|| "Unknown Artist".into()),
+            );
             let resp = client.send(&ClientRequest::Enqueue { track }).await?;
             print_response(&resp);
         }
@@ -418,7 +699,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         match &event {
                             malus_protocol::client::ClientEvent::StatusChanged(s) => {
                                 let track_str = match &s.current_track {
-                                    Some(t) => format!("{} - {}", t.title, t.artist),
+                                    Some(t) => format!("{} - {}", t.title, t.artist_display()),
                                     None => "(none)".to_string(),
                                 };
                                 println!(
@@ -456,6 +737,469 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 other => print_response(&other),
             }
         }
+    }
+
+    Ok(())
+}
+
+fn format_duration_ms(ms: Option<u64>) -> String {
+    match ms {
+        Some(ms) => {
+            let total_secs = ms / 1000;
+            let mins = total_secs / 60;
+            let secs = total_secs % 60;
+            format!("{mins:02}:{secs:02}")
+        }
+        None => "--:--".to_string(),
+    }
+}
+
+fn display_search_results(
+    results: &SearchResultsWire,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(results)?);
+        return Ok(());
+    }
+
+    let mut found_any = false;
+
+    if let Some(ref tracks) = results.tracks
+        && !tracks.items.is_empty()
+    {
+        found_any = true;
+        println!("TRACKS ({}):", tracks.items.len());
+        for (idx, t) in tracks.items.iter().enumerate() {
+            let alb = t.album_title().unwrap_or("-");
+            let dur = format_duration_ms(t.duration_ms);
+            println!(
+                "  {:2}. [{}] {} - {} ({}) [{}]",
+                idx + 1,
+                t.id,
+                t.title,
+                t.artist_display(),
+                alb,
+                dur
+            );
+        }
+        if let Some(ref cur) = tracks.next_cursor {
+            println!("  Next cursor (tracks): {cur}");
+        }
+        println!();
+    }
+
+    if let Some(ref albums) = results.albums
+        && !albums.items.is_empty()
+    {
+        found_any = true;
+        println!("ALBUMS ({}):", albums.items.len());
+        for (idx, a) in albums.items.iter().enumerate() {
+            let artists = a
+                .artists
+                .iter()
+                .map(|art| art.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let count = a
+                .track_count
+                .map(|c| format!("{c} tracks"))
+                .unwrap_or_else(|| "-".to_string());
+            let year = a.release_date.as_deref().unwrap_or("-");
+            println!(
+                "  {:2}. [{}] {} - {} ({year}) [{count}]",
+                idx + 1,
+                a.id,
+                a.title,
+                artists
+            );
+        }
+        if let Some(ref cur) = albums.next_cursor {
+            println!("  Next cursor (albums): {cur}");
+        }
+        println!();
+    }
+
+    if let Some(ref artists) = results.artists
+        && !artists.items.is_empty()
+    {
+        found_any = true;
+        println!("ARTISTS ({}):", artists.items.len());
+        for (idx, a) in artists.items.iter().enumerate() {
+            println!("  {:2}. [{}] {}", idx + 1, a.id, a.name);
+        }
+        if let Some(ref cur) = artists.next_cursor {
+            println!("  Next cursor (artists): {cur}");
+        }
+        println!();
+    }
+
+    if let Some(ref playlists) = results.playlists
+        && !playlists.items.is_empty()
+    {
+        found_any = true;
+        println!("PLAYLISTS ({}):", playlists.items.len());
+        for (idx, p) in playlists.items.iter().enumerate() {
+            let curator = p.curator.as_deref().unwrap_or("-");
+            let count = p
+                .track_count
+                .map(|c| format!("{c} tracks"))
+                .unwrap_or_else(|| "-".to_string());
+            println!(
+                "  {:2}. [{}] {} [by {curator}] [{count}]",
+                idx + 1,
+                p.id,
+                p.title
+            );
+        }
+        if let Some(ref cur) = playlists.next_cursor {
+            println!("  Next cursor (playlists): {cur}");
+        }
+        println!();
+    }
+
+    if !found_any {
+        println!("No results found.");
+    }
+
+    Ok(())
+}
+
+fn display_track(item: &CatalogItemWire, json: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(item)?);
+        return Ok(());
+    }
+
+    match item {
+        CatalogItemWire::Track(t) => {
+            println!("Track:       {}", t.id);
+            println!("Title:       {}", t.title);
+            println!("Artist:      {}", t.artist_display());
+            if let Some(ref alb) = t.album {
+                if let Some(ref id) = alb.id {
+                    println!("Album:       {} ({id})", alb.title);
+                } else {
+                    println!("Album:       {}", alb.title);
+                }
+            }
+            println!("Duration:    {}", format_duration_ms(t.duration_ms));
+            if let Some(track_num) = t.track_number {
+                if let Some(disc) = t.disc_number {
+                    println!("Track #:     {track_num} (disc {disc})");
+                } else {
+                    println!("Track #:     {track_num}");
+                }
+            }
+            if let Some(exp) = t.explicit {
+                println!("Explicit:    {}", if exp { "yes" } else { "no" });
+            }
+            if let Some(ref art) = t.artwork {
+                println!("Artwork:     {}", art.url);
+            }
+        }
+        other => {
+            println!("Expected track item, received: {other:?}");
+        }
+    }
+    Ok(())
+}
+
+fn display_album(
+    item_resp: &ClientResponse,
+    tracks_resp: &ClientResponse,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if json {
+        let mut obj = serde_json::Map::new();
+        match item_resp {
+            ClientResponse::CatalogItem(item) => {
+                obj.insert("album".to_string(), serde_json::to_value(item)?);
+            }
+            ClientResponse::Error { code, message } => {
+                eprintln!("Error [{code}]: {message}");
+                return Ok(());
+            }
+            _ => {}
+        }
+        match tracks_resp {
+            ClientResponse::CollectionItems(items) => {
+                obj.insert("tracks".to_string(), serde_json::to_value(items)?);
+            }
+            ClientResponse::Error { code, message } => {
+                eprintln!("Error fetching tracks [{code}]: {message}");
+            }
+            _ => {}
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::Value::Object(obj))?
+        );
+        return Ok(());
+    }
+
+    match item_resp {
+        ClientResponse::CatalogItem(CatalogItemWire::Album(a)) => {
+            println!("Album:       {}", a.id);
+            println!("Title:       {}", a.title);
+            if !a.artists.is_empty() {
+                let artists = a
+                    .artists
+                    .iter()
+                    .map(|art| art.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                println!("Artists:     {artists}");
+            }
+            if let Some(ref rel) = a.release_date {
+                println!("Released:    {rel}");
+            }
+            if let Some(count) = a.track_count {
+                println!("Track Count: {count}");
+            }
+            if let Some(ref art) = a.artwork {
+                println!("Artwork:     {}", art.url);
+            }
+        }
+        ClientResponse::Error { code, message } => {
+            eprintln!("Error [{code}]: {message}");
+            return Ok(());
+        }
+        other => {
+            println!("Unexpected album response: {other:?}");
+            return Ok(());
+        }
+    }
+
+    match tracks_resp {
+        ClientResponse::CollectionItems(tracks) => {
+            println!();
+            println!("Tracks ({}):", tracks.items.len());
+            for (idx, t) in tracks.items.iter().enumerate() {
+                let num = t
+                    .track_number
+                    .map(|n| format!("{n:2}. "))
+                    .unwrap_or_else(|| format!("{:2}. ", idx + 1));
+                let dur = format_duration_ms(t.duration_ms);
+                println!(
+                    "  {num}[{}] {} - {} ({dur})",
+                    t.id,
+                    t.title,
+                    t.artist_display()
+                );
+            }
+            if let Some(ref cur) = tracks.next_cursor {
+                println!("\nNext cursor: {cur}");
+            }
+        }
+        ClientResponse::Error { code, message } => {
+            eprintln!("Error fetching album tracks [{code}]: {message}");
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+fn display_artist(item: &CatalogItemWire, json: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(item)?);
+        return Ok(());
+    }
+
+    match item {
+        CatalogItemWire::Artist(a) => {
+            println!("Artist:   {}", a.id);
+            println!("Name:     {}", a.name);
+            if let Some(ref art) = a.artwork {
+                println!("Artwork:  {}", art.url);
+            }
+        }
+        other => {
+            println!("Expected artist item, received: {other:?}");
+        }
+    }
+    Ok(())
+}
+
+fn display_playlist(
+    item_resp: &ClientResponse,
+    tracks_resp: &ClientResponse,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if json {
+        let mut obj = serde_json::Map::new();
+        match item_resp {
+            ClientResponse::CatalogItem(item) => {
+                obj.insert("playlist".to_string(), serde_json::to_value(item)?);
+            }
+            ClientResponse::Error { code, message } => {
+                eprintln!("Error [{code}]: {message}");
+                return Ok(());
+            }
+            _ => {}
+        }
+        match tracks_resp {
+            ClientResponse::CollectionItems(items) => {
+                obj.insert("tracks".to_string(), serde_json::to_value(items)?);
+            }
+            ClientResponse::Error { code, message } => {
+                eprintln!("Error fetching playlist tracks [{code}]: {message}");
+            }
+            _ => {}
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::Value::Object(obj))?
+        );
+        return Ok(());
+    }
+
+    match item_resp {
+        ClientResponse::CatalogItem(CatalogItemWire::Playlist(p)) => {
+            println!("Playlist:    {}", p.id);
+            println!("Title:       {}", p.title);
+            if let Some(ref curator) = p.curator {
+                println!("Curator:     {curator}");
+            }
+            if let Some(ref desc) = p.description {
+                println!("Description: {desc}");
+            }
+            if let Some(count) = p.track_count {
+                println!("Track Count: {count}");
+            }
+            if let Some(ref art) = p.artwork {
+                println!("Artwork:     {}", art.url);
+            }
+        }
+        ClientResponse::Error { code, message } => {
+            eprintln!("Error [{code}]: {message}");
+            return Ok(());
+        }
+        other => {
+            println!("Unexpected playlist response: {other:?}");
+            return Ok(());
+        }
+    }
+
+    match tracks_resp {
+        ClientResponse::CollectionItems(tracks) => {
+            println!();
+            println!("Tracks ({}):", tracks.items.len());
+            for (idx, t) in tracks.items.iter().enumerate() {
+                let num = format!("{:2}. ", idx + 1);
+                let dur = format_duration_ms(t.duration_ms);
+                println!(
+                    "  {num}[{}] {} - {} ({dur})",
+                    t.id,
+                    t.title,
+                    t.artist_display()
+                );
+            }
+            if let Some(ref cur) = tracks.next_cursor {
+                println!("\nNext cursor: {cur}");
+            }
+        }
+        ClientResponse::Error { code, message } => {
+            eprintln!("Error fetching playlist tracks [{code}]: {message}");
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+fn display_library(resp: &ClientResponse, json: bool) -> Result<(), Box<dyn std::error::Error>> {
+    match resp {
+        ClientResponse::LibraryPage(page) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(page)?);
+                return Ok(());
+            }
+
+            match page {
+                LibraryPageWire::Tracks(page) => {
+                    println!("Library Tracks ({} items):", page.items.len());
+                    if page.items.is_empty() {
+                        println!("  (No tracks found)");
+                    } else {
+                        for (idx, t) in page.items.iter().enumerate() {
+                            let alb = t.album_title().unwrap_or("-");
+                            let dur = format_duration_ms(t.duration_ms);
+                            println!(
+                                "  {:3}. [{}] {} - {} ({}) [{}]",
+                                idx + 1,
+                                t.id,
+                                t.title,
+                                t.artist_display(),
+                                alb,
+                                dur
+                            );
+                        }
+                    }
+                    if let Some(ref cur) = page.next_cursor {
+                        println!("\nNext cursor: {cur}");
+                    }
+                }
+                LibraryPageWire::Albums(page) => {
+                    println!("Library Albums ({} items):", page.items.len());
+                    if page.items.is_empty() {
+                        println!("  (No albums found)");
+                    } else {
+                        for (idx, a) in page.items.iter().enumerate() {
+                            let artists = a
+                                .artists
+                                .iter()
+                                .map(|art| art.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            let count = a
+                                .track_count
+                                .map(|c| format!("{c} tracks"))
+                                .unwrap_or_else(|| "-".to_string());
+                            let year = a.release_date.as_deref().unwrap_or("-");
+                            println!(
+                                "  {:3}. [{}] {} - {} ({year}) [{count}]",
+                                idx + 1,
+                                a.id,
+                                a.title,
+                                artists
+                            );
+                        }
+                    }
+                    if let Some(ref cur) = page.next_cursor {
+                        println!("\nNext cursor: {cur}");
+                    }
+                }
+                LibraryPageWire::Playlists(page) => {
+                    println!("Library Playlists ({} items):", page.items.len());
+                    if page.items.is_empty() {
+                        println!("  (No playlists found)");
+                    } else {
+                        for (idx, p) in page.items.iter().enumerate() {
+                            let curator = p.curator.as_deref().unwrap_or("-");
+                            let count = p
+                                .track_count
+                                .map(|c| format!("{c} tracks"))
+                                .unwrap_or_else(|| "-".to_string());
+                            println!(
+                                "  {:3}. [{}] {} [by {curator}] [{count}]",
+                                idx + 1,
+                                p.id,
+                                p.title
+                            );
+                        }
+                    }
+                    if let Some(ref cur) = page.next_cursor {
+                        println!("\nNext cursor: {cur}");
+                    }
+                }
+            }
+        }
+        ClientResponse::Error { code, message } => {
+            eprintln!("Error [{code}]: {message}");
+        }
+        other => print_response(other),
     }
 
     Ok(())
@@ -518,7 +1262,10 @@ fn print_response(resp: &ClientResponse) {
         ClientResponse::Error { code, message } => eprintln!("Error [{code}]: {message}"),
         ClientResponse::Status(s) => println!("{s:?}"),
         ClientResponse::Queue(q) => println!("{q:?}"),
-        ClientResponse::SearchResults { tracks } => println!("{tracks:?}"),
+        ClientResponse::SearchResults(results) => println!("{results:?}"),
+        ClientResponse::CatalogItem(item) => println!("{item:?}"),
+        ClientResponse::CollectionItems(items) => println!("{items:?}"),
+        ClientResponse::LibraryPage(page) => println!("{page:?}"),
         ClientResponse::Capabilities {
             provider,
             capabilities,

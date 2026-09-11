@@ -1,9 +1,9 @@
 //! Pure domain player model representing audio state and active queue.
 
 use crate::{
+    media::Track,
     playback::{PlaybackState, RepeatMode},
     queue::Queue,
-    track::Track,
 };
 
 /// High-level player model.

@@ -1,6 +1,6 @@
 //! Pure domain queue manipulation.
 
-use crate::track::Track;
+use crate::media::Track;
 
 /// An ordered playback queue with an active index.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

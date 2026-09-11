@@ -3,7 +3,10 @@
 //! Enforces physical serialization boundaries between `malus-core` domain models
 //! and over-the-wire IPC representations.
 
-use malus_core::{MediaId, PlaybackState, Player, Queue, RepeatMode, Track};
+use malus_core::{
+    Album, AlbumRef, Artist, ArtistRef, Artwork, MediaId, PlaybackState, Player, Playlist, Queue,
+    RepeatMode, Track,
+};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -99,16 +102,163 @@ impl fmt::Display for MediaIdWire {
     }
 }
 
+/// Wire representation of artwork metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtworkWire {
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+}
+
+impl From<&Artwork> for ArtworkWire {
+    fn from(a: &Artwork) -> Self {
+        Self {
+            url: a.url.clone(),
+            width: a.width,
+            height: a.height,
+        }
+    }
+}
+
+impl From<Artwork> for ArtworkWire {
+    fn from(a: Artwork) -> Self {
+        Self::from(&a)
+    }
+}
+
+impl From<ArtworkWire> for Artwork {
+    fn from(w: ArtworkWire) -> Self {
+        Self {
+            url: w.url,
+            width: w.width,
+            height: w.height,
+        }
+    }
+}
+
+/// Wire representation of a lightweight artist reference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtistRefWire {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub name: String,
+}
+
+impl ArtistRefWire {
+    pub fn new(id: Option<impl Into<String>>, name: impl Into<String>) -> Self {
+        Self {
+            id: id.map(Into::into),
+            name: name.into(),
+        }
+    }
+
+    pub fn named(name: impl Into<String>) -> Self {
+        Self {
+            id: None,
+            name: name.into(),
+        }
+    }
+}
+
+impl From<&ArtistRef> for ArtistRefWire {
+    fn from(r: &ArtistRef) -> Self {
+        Self {
+            id: r.id.as_ref().map(|id| id.to_string()),
+            name: r.name.clone(),
+        }
+    }
+}
+
+impl From<ArtistRef> for ArtistRefWire {
+    fn from(r: ArtistRef) -> Self {
+        Self::from(&r)
+    }
+}
+
+impl TryFrom<ArtistRefWire> for ArtistRef {
+    type Error = malus_core::MediaIdError;
+
+    fn try_from(w: ArtistRefWire) -> Result<Self, Self::Error> {
+        let id = match w.id {
+            Some(ref s) => Some(MediaId::parse(s)?),
+            None => None,
+        };
+        Ok(Self { id, name: w.name })
+    }
+}
+
+/// Wire representation of a lightweight album reference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AlbumRefWire {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub title: String,
+}
+
+impl AlbumRefWire {
+    pub fn new(id: Option<impl Into<String>>, title: impl Into<String>) -> Self {
+        Self {
+            id: id.map(Into::into),
+            title: title.into(),
+        }
+    }
+
+    pub fn titled(title: impl Into<String>) -> Self {
+        Self {
+            id: None,
+            title: title.into(),
+        }
+    }
+}
+
+impl From<&AlbumRef> for AlbumRefWire {
+    fn from(r: &AlbumRef) -> Self {
+        Self {
+            id: r.id.as_ref().map(|id| id.to_string()),
+            title: r.title.clone(),
+        }
+    }
+}
+
+impl From<AlbumRef> for AlbumRefWire {
+    fn from(r: AlbumRef) -> Self {
+        Self::from(&r)
+    }
+}
+
+impl TryFrom<AlbumRefWire> for AlbumRef {
+    type Error = malus_core::MediaIdError;
+
+    fn try_from(w: AlbumRefWire) -> Result<Self, Self::Error> {
+        let id = match w.id {
+            Some(ref s) => Some(MediaId::parse(s)?),
+            None => None,
+        };
+        Ok(Self { id, title: w.title })
+    }
+}
+
 /// Wire representation of a track.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrackWire {
     pub id: String,
     pub title: String,
-    pub artist: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artists: Vec<ArtistRefWire>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub album: Option<String>,
+    pub album: Option<AlbumRefWire>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track_number: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disc_number: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explicit: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artwork: Option<ArtworkWire>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uri: Option<String>,
 }
@@ -118,11 +268,31 @@ impl TrackWire {
         Self {
             id: id.into(),
             title: title.into(),
-            artist: artist.into(),
+            artists: vec![ArtistRefWire::named(artist)],
             album: None,
             duration_ms: None,
+            track_number: None,
+            disc_number: None,
+            explicit: None,
+            artwork: None,
             uri: None,
         }
+    }
+
+    pub fn artist_display(&self) -> String {
+        if self.artists.is_empty() {
+            String::new()
+        } else {
+            self.artists
+                .iter()
+                .map(|a| a.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    }
+
+    pub fn album_title(&self) -> Option<&str> {
+        self.album.as_ref().map(|a| a.title.as_str())
     }
 
     pub fn media_id(&self) -> Result<MediaId, malus_core::MediaIdError> {
@@ -135,9 +305,13 @@ impl From<&Track> for TrackWire {
         Self {
             id: track.id.to_string(),
             title: track.title.clone(),
-            artist: track.artist.clone(),
-            album: track.album.clone(),
+            artists: track.artists.iter().map(Into::into).collect(),
+            album: track.album.as_ref().map(Into::into),
             duration_ms: track.duration_ms,
+            track_number: track.track_number,
+            disc_number: track.disc_number,
+            explicit: track.explicit,
+            artwork: track.artwork.as_ref().map(Into::into),
             uri: track.uri.clone(),
         }
     }
@@ -154,12 +328,353 @@ impl TryFrom<TrackWire> for Track {
 
     fn try_from(wire: TrackWire) -> Result<Self, Self::Error> {
         let id = MediaId::parse(&wire.id)?;
-        let mut track = Track::new(id, wire.title, wire.artist);
-        track.album = wire.album;
-        track.duration_ms = wire.duration_ms;
-        track.uri = wire.uri;
-        Ok(track)
+        let mut artists = Vec::with_capacity(wire.artists.len());
+        for a in wire.artists {
+            artists.push(a.try_into()?);
+        }
+        let album = match wire.album {
+            Some(a) => Some(a.try_into()?),
+            None => None,
+        };
+        Ok(Self {
+            id,
+            title: wire.title,
+            artists,
+            album,
+            duration_ms: wire.duration_ms,
+            track_number: wire.track_number,
+            disc_number: wire.disc_number,
+            explicit: wire.explicit,
+            artwork: wire.artwork.map(Into::into),
+            uri: wire.uri,
+        })
     }
+}
+
+/// Wire representation of an album metadata resource.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AlbumWire {
+    pub id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artists: Vec<ArtistRefWire>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artwork: Option<ArtworkWire>,
+}
+
+impl AlbumWire {
+    pub fn new(id: impl Into<String>, title: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            artists: Vec::new(),
+            release_date: None,
+            track_count: None,
+            artwork: None,
+        }
+    }
+
+    pub fn artist_display(&self) -> String {
+        if self.artists.is_empty() {
+            String::new()
+        } else {
+            self.artists
+                .iter()
+                .map(|a| a.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    }
+
+    pub fn media_id(&self) -> Result<MediaId, malus_core::MediaIdError> {
+        MediaId::parse(&self.id)
+    }
+}
+
+impl From<&Album> for AlbumWire {
+    fn from(a: &Album) -> Self {
+        Self {
+            id: a.id.to_string(),
+            title: a.title.clone(),
+            artists: a.artists.iter().map(Into::into).collect(),
+            release_date: a.release_date.clone(),
+            track_count: a.track_count,
+            artwork: a.artwork.as_ref().map(Into::into),
+        }
+    }
+}
+
+impl From<Album> for AlbumWire {
+    fn from(a: Album) -> Self {
+        Self::from(&a)
+    }
+}
+
+impl TryFrom<AlbumWire> for Album {
+    type Error = malus_core::MediaIdError;
+
+    fn try_from(w: AlbumWire) -> Result<Self, Self::Error> {
+        let id = MediaId::parse(&w.id)?;
+        let mut artists = Vec::with_capacity(w.artists.len());
+        for a in w.artists {
+            artists.push(a.try_into()?);
+        }
+        Ok(Self {
+            id,
+            title: w.title,
+            artists,
+            release_date: w.release_date,
+            track_count: w.track_count,
+            artwork: w.artwork.map(Into::into),
+        })
+    }
+}
+
+/// Wire representation of an artist resource.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtistWire {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artwork: Option<ArtworkWire>,
+}
+
+impl ArtistWire {
+    pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            artwork: None,
+        }
+    }
+
+    pub fn media_id(&self) -> Result<MediaId, malus_core::MediaIdError> {
+        MediaId::parse(&self.id)
+    }
+}
+
+impl From<&Artist> for ArtistWire {
+    fn from(a: &Artist) -> Self {
+        Self {
+            id: a.id.to_string(),
+            name: a.name.clone(),
+            artwork: a.artwork.as_ref().map(Into::into),
+        }
+    }
+}
+
+impl From<Artist> for ArtistWire {
+    fn from(a: Artist) -> Self {
+        Self::from(&a)
+    }
+}
+
+impl TryFrom<ArtistWire> for Artist {
+    type Error = malus_core::MediaIdError;
+
+    fn try_from(w: ArtistWire) -> Result<Self, Self::Error> {
+        let id = MediaId::parse(&w.id)?;
+        Ok(Self {
+            id,
+            name: w.name,
+            artwork: w.artwork.map(Into::into),
+        })
+    }
+}
+
+/// Wire representation of a playlist metadata resource.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaylistWire {
+    pub id: String,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub curator: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artwork: Option<ArtworkWire>,
+}
+
+impl PlaylistWire {
+    pub fn new(id: impl Into<String>, title: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            curator: None,
+            description: None,
+            track_count: None,
+            artwork: None,
+        }
+    }
+
+    pub fn media_id(&self) -> Result<MediaId, malus_core::MediaIdError> {
+        MediaId::parse(&self.id)
+    }
+}
+
+impl From<&Playlist> for PlaylistWire {
+    fn from(p: &Playlist) -> Self {
+        Self {
+            id: p.id.to_string(),
+            title: p.title.clone(),
+            curator: p.curator.clone(),
+            description: p.description.clone(),
+            track_count: p.track_count,
+            artwork: p.artwork.as_ref().map(Into::into),
+        }
+    }
+}
+
+impl From<Playlist> for PlaylistWire {
+    fn from(p: Playlist) -> Self {
+        Self::from(&p)
+    }
+}
+
+impl TryFrom<PlaylistWire> for Playlist {
+    type Error = malus_core::MediaIdError;
+
+    fn try_from(w: PlaylistWire) -> Result<Self, Self::Error> {
+        let id = MediaId::parse(&w.id)?;
+        Ok(Self {
+            id,
+            title: w.title,
+            curator: w.curator,
+            description: w.description,
+            track_count: w.track_count,
+            artwork: w.artwork.map(Into::into),
+        })
+    }
+}
+
+/// A generic page of items with an opaque continuation cursor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PageWire<T> {
+    pub items: Vec<T>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<u64>,
+}
+
+impl<T> PageWire<T> {
+    pub fn new(items: Vec<T>, next_cursor: Option<String>) -> Self {
+        Self {
+            items,
+            next_cursor,
+            total: None,
+        }
+    }
+
+    pub fn empty() -> Self {
+        Self {
+            items: Vec::new(),
+            next_cursor: None,
+            total: None,
+        }
+    }
+}
+
+/// Canonical searchable media kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SearchKindWire {
+    Track,
+    Album,
+    Artist,
+    Playlist,
+}
+
+impl fmt::Display for SearchKindWire {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Track => write!(f, "track"),
+            Self::Album => write!(f, "album"),
+            Self::Artist => write!(f, "artist"),
+            Self::Playlist => write!(f, "playlist"),
+        }
+    }
+}
+
+/// Categorized search results with category-specific pagination cursors.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchResultsWire {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracks: Option<PageWire<TrackWire>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub albums: Option<PageWire<AlbumWire>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artists: Option<PageWire<ArtistWire>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playlists: Option<PageWire<PlaylistWire>>,
+}
+
+impl SearchResultsWire {
+    pub fn is_empty(&self) -> bool {
+        self.tracks
+            .as_ref()
+            .map(|p| p.items.is_empty())
+            .unwrap_or(true)
+            && self
+                .albums
+                .as_ref()
+                .map(|p| p.items.is_empty())
+                .unwrap_or(true)
+            && self
+                .artists
+                .as_ref()
+                .map(|p| p.items.is_empty())
+                .unwrap_or(true)
+            && self
+                .playlists
+                .as_ref()
+                .map(|p| p.items.is_empty())
+                .unwrap_or(true)
+    }
+}
+
+/// A normalized catalog item detail entity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "item")]
+pub enum CatalogItemWire {
+    Track(TrackWire),
+    Album(AlbumWire),
+    Artist(ArtistWire),
+    Playlist(PlaylistWire),
+}
+
+/// Supported read-only library resource categories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LibraryKindWire {
+    Tracks,
+    Albums,
+    Playlists,
+}
+
+impl fmt::Display for LibraryKindWire {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Tracks => write!(f, "tracks"),
+            Self::Albums => write!(f, "albums"),
+            Self::Playlists => write!(f, "playlists"),
+        }
+    }
+}
+
+/// A paginated read-only library result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "page")]
+pub enum LibraryPageWire {
+    Tracks(PageWire<TrackWire>),
+    Albums(PageWire<AlbumWire>),
+    Playlists(PageWire<PlaylistWire>),
 }
 
 /// Wire representation of playback state.
@@ -366,13 +881,82 @@ mod tests {
     #[test]
     fn test_track_wire_conversion() {
         let id = MediaId::new("mock", "track", "1").unwrap();
-        let track = Track::new(id, "Title", "Artist");
+        let track = Track::new(id, "Title", "Artist")
+            .with_album("Album One")
+            .with_duration_ms(180_000);
         let wire = TrackWire::from(&track);
         assert_eq!(wire.id, "mock:track:1");
         assert_eq!(wire.title, "Title");
+        assert_eq!(wire.artist_display(), "Artist");
+        assert_eq!(wire.album_title(), Some("Album One"));
 
         let back: Track = wire.try_into().unwrap();
         assert_eq!(back.id.as_str(), "mock:track:1");
+        assert_eq!(back.artist_display(), "Artist");
+    }
+
+    #[test]
+    fn test_album_wire_conversion() {
+        let id = MediaId::new("mock", "album", "1").unwrap();
+        let album = Album::new(id, "Discovery")
+            .with_artist(ArtistRef::named("Daft Punk"))
+            .with_release_date("2001-03-12")
+            .with_track_count(14);
+        let wire = AlbumWire::from(&album);
+        assert_eq!(wire.id, "mock:album:1");
+        assert_eq!(wire.title, "Discovery");
+        assert_eq!(wire.artist_display(), "Daft Punk");
+        assert_eq!(wire.track_count, Some(14));
+
+        let back: Album = wire.try_into().unwrap();
+        assert_eq!(back.id.as_str(), "mock:album:1");
+    }
+
+    #[test]
+    fn test_search_results_wire_serialization() {
+        let results = SearchResultsWire {
+            tracks: Some(PageWire::new(
+                vec![TrackWire::new("mock:track:1", "Song", "Artist")],
+                Some("cursor-123".to_string()),
+            )),
+            albums: Some(PageWire::new(
+                vec![AlbumWire::new("mock:album:1", "Album Title")],
+                None,
+            )),
+            artists: None,
+            playlists: None,
+        };
+
+        let json = serde_json::to_string(&results).unwrap();
+        let back: SearchResultsWire = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.tracks.as_ref().unwrap().items.len(), 1);
+        assert_eq!(
+            back.tracks.as_ref().unwrap().next_cursor.as_deref(),
+            Some("cursor-123")
+        );
+        assert_eq!(back.albums.as_ref().unwrap().items.len(), 1);
+        assert!(back.artists.is_none());
+    }
+
+    #[test]
+    fn test_catalog_item_wire_serialization() {
+        let item = CatalogItemWire::Track(TrackWire::new("mock:track:1", "Song", "Artist"));
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(json.contains("\"kind\":\"Track\""));
+        let back: CatalogItemWire = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, item);
+    }
+
+    #[test]
+    fn test_library_page_wire_serialization() {
+        let page = LibraryPageWire::Albums(PageWire::new(
+            vec![AlbumWire::new("mock:album:1", "Album")],
+            Some("next-token".to_string()),
+        ));
+        let json = serde_json::to_string(&page).unwrap();
+        assert!(json.contains("\"kind\":\"Albums\""));
+        let back: LibraryPageWire = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, page);
     }
 
     #[test]

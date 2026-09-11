@@ -29,6 +29,12 @@ pub enum AppleError {
     #[error("Apple Music session is not authorized (run 'malus provider login apple')")]
     NotAuthorized,
 
+    #[error("Apple Music storefront unavailable: {0}")]
+    StorefrontUnavailable(String),
+
+    #[error("Apple Music resource not found: {0}")]
+    NotFound(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }

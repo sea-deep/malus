@@ -122,4 +122,124 @@ mod tests {
         let prov_decoded: provider::ProviderRequest = decode_message(&prov_frame).unwrap();
         assert_eq!(prov_req, prov_decoded);
     }
+
+    #[test]
+    fn test_m1d_rpc_roundtrips() {
+        // 1. Client Search request & response
+        let search_req = client::ClientRequest::Search {
+            query: "daft punk".to_string(),
+            kinds: vec![SearchKindWire::Album, SearchKindWire::Track],
+            provider: Some("apple".to_string()),
+            limit: Some(15),
+            cursor: Some("token-1".to_string()),
+        };
+        let encoded = encode_message(&search_req).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientRequest = decode_message(&frame).unwrap();
+        assert_eq!(search_req, decoded);
+
+        let search_res = client::ClientResponse::SearchResults(SearchResultsWire {
+            tracks: Some(PageWire::new(
+                vec![TrackWire::new(
+                    "apple:track:1",
+                    "One More Time",
+                    "Daft Punk",
+                )],
+                Some("cursor-2".to_string()),
+            )),
+            albums: Some(PageWire::new(
+                vec![AlbumWire::new("apple:album:1", "Discovery")],
+                None,
+            )),
+            artists: None,
+            playlists: None,
+        });
+        let encoded = encode_message(&search_res).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientResponse = decode_message(&frame).unwrap();
+        assert_eq!(search_res, decoded);
+
+        // 2. Catalog item request & response
+        let cat_req = client::ClientRequest::GetCatalogItem {
+            media_id: "apple:album:697194953".to_string(),
+        };
+        let encoded = encode_message(&cat_req).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientRequest = decode_message(&frame).unwrap();
+        assert_eq!(cat_req, decoded);
+
+        let cat_res = client::ClientResponse::CatalogItem(CatalogItemWire::Album(AlbumWire::new(
+            "apple:album:697194953",
+            "Discovery",
+        )));
+        let encoded = encode_message(&cat_res).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientResponse = decode_message(&frame).unwrap();
+        assert_eq!(cat_res, decoded);
+
+        // 3. Collection items request & response
+        let coll_req = client::ClientRequest::GetCollectionItems {
+            media_id: "apple:album:697194953".to_string(),
+            limit: Some(25),
+            cursor: None,
+        };
+        let encoded = encode_message(&coll_req).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientRequest = decode_message(&frame).unwrap();
+        assert_eq!(coll_req, decoded);
+
+        let coll_res = client::ClientResponse::CollectionItems(PageWire::new(
+            vec![TrackWire::new("apple:track:1", "Track 1", "Artist 1")],
+            Some("next-cursor".to_string()),
+        ));
+        let encoded = encode_message(&coll_res).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientResponse = decode_message(&frame).unwrap();
+        assert_eq!(coll_res, decoded);
+
+        // 4. Library request & response
+        let lib_req = client::ClientRequest::GetLibrary {
+            kind: LibraryKindWire::Albums,
+            provider: Some("apple".to_string()),
+            limit: Some(50),
+            cursor: Some("lib-cursor-1".to_string()),
+        };
+        let encoded = encode_message(&lib_req).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientRequest = decode_message(&frame).unwrap();
+        assert_eq!(lib_req, decoded);
+
+        let lib_res = client::ClientResponse::LibraryPage(LibraryPageWire::Albums(PageWire::new(
+            vec![AlbumWire::new("apple:album:l.1", "Saved Album")],
+            None,
+        )));
+        let encoded = encode_message(&lib_res).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientResponse = decode_message(&frame).unwrap();
+        assert_eq!(lib_res, decoded);
+    }
 }

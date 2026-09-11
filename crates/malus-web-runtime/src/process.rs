@@ -77,6 +77,15 @@ impl BrowserProcess {
         cmd.arg("--no-first-run");
         cmd.arg("--no-default-browser-check");
 
+        // Autoplay & background throttling flags
+        cmd.arg("--autoplay-policy=no-user-gesture-required");
+        cmd.arg("--disable-background-timer-throttling");
+        cmd.arg("--disable-backgrounding-occluded-windows");
+        cmd.arg("--disable-renderer-backgrounding");
+        cmd.arg(
+            "--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,Translate,OptimizationHints,MediaRouter,DialMediaRouteProvider,PaintHolding",
+        );
+
         // Structured LaunchMode
         match launch_mode {
             LaunchMode::Headless => {

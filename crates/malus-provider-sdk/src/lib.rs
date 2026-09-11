@@ -29,7 +29,9 @@ pub mod traits;
 
 pub use error::ProviderError;
 pub use malus_protocol::{
-    MediaIdWire, PlaybackStateWire, PlayerStatusWire, QueueWire, RepeatModeWire, TrackWire,
+    AlbumRefWire, AlbumWire, ArtistRefWire, ArtistWire, CatalogItemWire, LibraryKindWire,
+    LibraryPageWire, MediaIdWire, PageWire, PlaybackStateWire, PlayerStatusWire, PlaylistWire,
+    QueueWire, RepeatModeWire, SearchKindWire, SearchResultsWire, TrackWire,
 };
 pub use server::{serve, serve_io};
 pub use traits::{Provider, capability};
@@ -63,13 +65,19 @@ mod tests {
         async fn search(
             &self,
             _query: &str,
+            _kinds: &[malus_protocol::SearchKindWire],
             _limit: usize,
-        ) -> Result<Vec<TrackWire>, ProviderError> {
-            Ok(vec![TrackWire::new(
-                "dummy:track:1",
-                "Dummy Track",
-                "Artist",
-            )])
+            _cursor: Option<&str>,
+        ) -> Result<malus_protocol::SearchResultsWire, ProviderError> {
+            Ok(malus_protocol::SearchResultsWire {
+                tracks: Some(malus_protocol::PageWire::new(
+                    vec![TrackWire::new("dummy:track:1", "Dummy Track", "Artist")],
+                    None,
+                )),
+                albums: None,
+                artists: None,
+                playlists: None,
+            })
         }
         async fn play(&self, _media_id: &str) -> Result<(), ProviderError> {
             Ok(())

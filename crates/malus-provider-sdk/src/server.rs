@@ -104,9 +104,47 @@ async fn handle_request(provider: &dyn Provider, req: ProviderRequest) -> Provid
 
         ProviderRequest::GetCapabilities => ProviderResponse::Capabilities(provider.capabilities()),
 
-        ProviderRequest::Search { query, limit } => match provider.search(&query, limit).await {
-            Ok(tracks) => ProviderResponse::SearchResults { tracks },
+        ProviderRequest::Search {
+            query,
+            kinds,
+            limit,
+            cursor,
+        } => match provider
+            .search(&query, &kinds, limit, cursor.as_deref())
+            .await
+        {
+            Ok(results) => ProviderResponse::SearchResults(results),
             Err(e) => ProviderResponse::err("SEARCH_FAILED", e.to_string()),
+        },
+
+        ProviderRequest::GetCatalogItem { media_id } => {
+            match provider.get_catalog_item(&media_id).await {
+                Ok(item) => ProviderResponse::CatalogItem(item),
+                Err(e) => ProviderResponse::err("CATALOG_FAILED", e.to_string()),
+            }
+        }
+
+        ProviderRequest::GetCollectionItems {
+            media_id,
+            limit,
+            cursor,
+        } => {
+            match provider
+                .get_collection_items(&media_id, limit, cursor.as_deref())
+                .await
+            {
+                Ok(page) => ProviderResponse::CollectionItems(page),
+                Err(e) => ProviderResponse::err("COLLECTION_FAILED", e.to_string()),
+            }
+        }
+
+        ProviderRequest::GetLibrary {
+            kind,
+            limit,
+            cursor,
+        } => match provider.get_library(kind, limit, cursor.as_deref()).await {
+            Ok(page) => ProviderResponse::LibraryPage(page),
+            Err(e) => ProviderResponse::err("LIBRARY_FAILED", e.to_string()),
         },
 
         ProviderRequest::Play => match provider.resume().await {

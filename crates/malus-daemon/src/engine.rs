@@ -18,7 +18,7 @@ use malus_protocol::{
 };
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{RwLock, broadcast};
-use tracing::{info, warn};
+use tracing::info;
 
 #[derive(Debug, Clone)]
 pub struct MirroredPlayerState {
@@ -360,15 +360,94 @@ impl Engine {
                 }
             }
 
-            ClientRequest::Search { query } => {
-                let active = self.get_active_provider().await;
-                if let Some(p) = active {
-                    match p.search(&query).await {
-                        Ok(tracks) => ClientResponse::SearchResults { tracks },
-                        Err(e) => {
-                            warn!("Search on provider '{}' failed: {e}", p.id());
-                            ClientResponse::SearchResults { tracks: Vec::new() }
-                        }
+            ClientRequest::Search {
+                query,
+                kinds,
+                provider,
+                limit,
+                cursor,
+            } => {
+                let target_proc = if let Some(p_id) = provider {
+                    self.get_or_spawn_provider(&p_id).await.ok()
+                } else {
+                    self.get_active_provider().await
+                };
+
+                if let Some(p) = target_proc {
+                    let limit = limit.unwrap_or(20);
+                    match p.search(&query, kinds, limit, cursor).await {
+                        Ok(results) => ClientResponse::SearchResults(results),
+                        Err(e) => ClientResponse::err("SEARCH_FAILED", e.to_string()),
+                    }
+                } else {
+                    ClientResponse::err("NO_ACTIVE_PROVIDER", "No active audio provider")
+                }
+            }
+
+            ClientRequest::GetCatalogItem { media_id } => {
+                let target_provider = match malus_core::MediaId::parse(&media_id) {
+                    Ok(mid) => Some(mid.provider().to_string()),
+                    Err(_) => None,
+                };
+                let proc = if let Some(target) = target_provider {
+                    self.get_or_spawn_provider(&target).await.ok()
+                } else {
+                    self.get_active_provider().await
+                };
+
+                if let Some(p) = proc {
+                    match p.get_catalog_item(&media_id).await {
+                        Ok(item) => ClientResponse::CatalogItem(item),
+                        Err(e) => ClientResponse::err("CATALOG_FAILED", e.to_string()),
+                    }
+                } else {
+                    ClientResponse::err("NO_ACTIVE_PROVIDER", "No active audio provider")
+                }
+            }
+
+            ClientRequest::GetCollectionItems {
+                media_id,
+                limit,
+                cursor,
+            } => {
+                let target_provider = match malus_core::MediaId::parse(&media_id) {
+                    Ok(mid) => Some(mid.provider().to_string()),
+                    Err(_) => None,
+                };
+                let proc = if let Some(target) = target_provider {
+                    self.get_or_spawn_provider(&target).await.ok()
+                } else {
+                    self.get_active_provider().await
+                };
+
+                if let Some(p) = proc {
+                    let limit = limit.unwrap_or(50);
+                    match p.get_collection_items(&media_id, limit, cursor).await {
+                        Ok(items) => ClientResponse::CollectionItems(items),
+                        Err(e) => ClientResponse::err("COLLECTION_FAILED", e.to_string()),
+                    }
+                } else {
+                    ClientResponse::err("NO_ACTIVE_PROVIDER", "No active audio provider")
+                }
+            }
+
+            ClientRequest::GetLibrary {
+                kind,
+                provider,
+                limit,
+                cursor,
+            } => {
+                let target_proc = if let Some(p_id) = provider {
+                    self.get_or_spawn_provider(&p_id).await.ok()
+                } else {
+                    self.get_active_provider().await
+                };
+
+                if let Some(p) = target_proc {
+                    let limit = limit.unwrap_or(50);
+                    match p.get_library(kind, limit, cursor).await {
+                        Ok(page) => ClientResponse::LibraryPage(page),
+                        Err(e) => ClientResponse::err("LIBRARY_FAILED", e.to_string()),
                     }
                 } else {
                     ClientResponse::err("NO_ACTIVE_PROVIDER", "No active audio provider")

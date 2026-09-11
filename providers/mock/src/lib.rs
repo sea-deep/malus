@@ -5,20 +5,27 @@
 //! - Monotonic playback clock (`std::time::Instant`) advancing during playback
 //! - Pausing freezes position; seeking updates clock base
 //! - Authoritative internal playback queue
-//! - Declares capabilities (`search`, `playback`, `playback.seek`, `queue.read`, `queue.edit`, `mock.repost`)
+//! - Declares capabilities (`search`, `catalog.track`, `catalog.album`, `catalog.artist`,
+//!   `catalog.playlist`, `library.tracks`, `library.albums`, `library.playlists`,
+//!   `playback`, `playback.seek`, `queue.read`, `queue.edit`, `mock.repost`)
 //! - Exposes custom action `mock.repost` via generic RPC
 //! - Excludes `lyrics` capability
 
 use async_trait::async_trait;
 use malus_provider_sdk::{
-    MediaIdWire, PlaybackStateWire, PlayerStatusWire, QueueWire, RepeatModeWire, TrackWire,
-    capability, error::ProviderError, traits::Provider,
+    AlbumRefWire, AlbumWire, ArtistRefWire, ArtistWire, CatalogItemWire, LibraryKindWire,
+    LibraryPageWire, MediaIdWire, PageWire, PlaybackStateWire, PlayerStatusWire, PlaylistWire,
+    QueueWire, RepeatModeWire, SearchKindWire, SearchResultsWire, TrackWire, capability,
+    error::ProviderError, traits::Provider,
 };
 use std::{sync::Arc, time::Instant};
 use tokio::sync::Mutex;
 
 struct MockState {
     tracks: Vec<TrackWire>,
+    albums: Vec<AlbumWire>,
+    artists: Vec<ArtistWire>,
+    playlists: Vec<PlaylistWire>,
     queue: Vec<TrackWire>,
     current_index: Option<usize>,
     playback_state: PlaybackStateWire,
@@ -33,33 +40,89 @@ impl MockState {
             TrackWire {
                 id: "mock:track:1".into(),
                 title: "Mock Track 1".into(),
-                artist: "Mock Artist".into(),
-                album: Some("Mock Album A".into()),
+                artists: vec![ArtistRefWire::named("Mock Artist")],
+                album: Some(AlbumRefWire::new(Some("mock:album:1"), "Mock Album A")),
                 duration_ms: Some(180_000),
+                track_number: Some(1),
+                disc_number: Some(1),
+                explicit: Some(false),
+                artwork: None,
                 uri: Some("mock://tracks/1".into()),
             },
             TrackWire {
                 id: "mock:track:2".into(),
                 title: "Mock Track 2".into(),
-                artist: "Mock Artist".into(),
-                album: Some("Mock Album A".into()),
+                artists: vec![ArtistRefWire::named("Mock Artist")],
+                album: Some(AlbumRefWire::new(Some("mock:album:1"), "Mock Album A")),
                 duration_ms: Some(210_000),
+                track_number: Some(2),
+                disc_number: Some(1),
+                explicit: Some(false),
+                artwork: None,
                 uri: Some("mock://tracks/2".into()),
             },
             TrackWire {
                 id: "mock:track:3".into(),
                 title: "Acoustic Sunset".into(),
-                artist: "Solaris".into(),
-                album: Some("Mock Album B".into()),
+                artists: vec![ArtistRefWire::named("Solaris")],
+                album: Some(AlbumRefWire::new(Some("mock:album:2"), "Mock Album B")),
                 duration_ms: Some(245_000),
+                track_number: Some(1),
+                disc_number: Some(1),
+                explicit: Some(false),
+                artwork: None,
                 uri: Some("mock://tracks/3".into()),
             },
         ];
+
+        let albums = vec![
+            AlbumWire {
+                id: "mock:album:1".into(),
+                title: "Mock Album A".into(),
+                artists: vec![ArtistRefWire::named("Mock Artist")],
+                release_date: Some("2021-05-10".into()),
+                track_count: Some(2),
+                artwork: None,
+            },
+            AlbumWire {
+                id: "mock:album:2".into(),
+                title: "Mock Album B".into(),
+                artists: vec![ArtistRefWire::named("Solaris")],
+                release_date: Some("2023-11-20".into()),
+                track_count: Some(1),
+                artwork: None,
+            },
+        ];
+
+        let artists = vec![
+            ArtistWire {
+                id: "mock:artist:1".into(),
+                name: "Mock Artist".into(),
+                artwork: None,
+            },
+            ArtistWire {
+                id: "mock:artist:2".into(),
+                name: "Solaris".into(),
+                artwork: None,
+            },
+        ];
+
+        let playlists = vec![PlaylistWire {
+            id: "mock:playlist:1".into(),
+            title: "Mock Chill Hits".into(),
+            curator: Some("Mock Curator".into()),
+            description: Some("Relaxing mock tracks".into()),
+            track_count: Some(3),
+            artwork: None,
+        }];
 
         Self {
             queue: tracks.clone(),
             current_index: Some(0),
             tracks,
+            albums,
+            artists,
+            playlists,
             playback_state: PlaybackStateWire::Stopped,
             position_base_ms: 0,
             last_started_at: None,
@@ -117,6 +180,13 @@ impl Provider for MockProvider {
     fn capabilities(&self) -> Vec<String> {
         vec![
             capability::SEARCH.into(),
+            capability::CATALOG_TRACK.into(),
+            capability::CATALOG_ALBUM.into(),
+            capability::CATALOG_ARTIST.into(),
+            capability::CATALOG_PLAYLIST.into(),
+            capability::LIBRARY_TRACKS.into(),
+            capability::LIBRARY_ALBUMS.into(),
+            capability::LIBRARY_PLAYLISTS.into(),
             capability::PLAYBACK.into(),
             capability::PLAYBACK_SEEK.into(),
             capability::QUEUE_READ.into(),
@@ -125,21 +195,154 @@ impl Provider for MockProvider {
         ]
     }
 
-    async fn search(&self, query: &str, limit: usize) -> Result<Vec<TrackWire>, ProviderError> {
+    async fn search(
+        &self,
+        query: &str,
+        kinds: &[SearchKindWire],
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<SearchResultsWire, ProviderError> {
+        let _ = cursor;
         let state = self.state.lock().await;
         let q = query.to_lowercase();
-        let matches = state
-            .tracks
-            .iter()
-            .filter(|t| {
-                t.title.to_lowercase().contains(&q)
-                    || t.artist.to_lowercase().contains(&q)
-                    || t.id.to_lowercase().contains(&q)
-            })
-            .take(limit)
-            .cloned()
-            .collect();
-        Ok(matches)
+
+        let filter_tracks = kinds.is_empty() || kinds.contains(&SearchKindWire::Track);
+        let filter_albums = kinds.is_empty() || kinds.contains(&SearchKindWire::Album);
+        let filter_artists = kinds.is_empty() || kinds.contains(&SearchKindWire::Artist);
+        let filter_playlists = kinds.is_empty() || kinds.contains(&SearchKindWire::Playlist);
+
+        let tracks = if filter_tracks {
+            let matched: Vec<_> = state
+                .tracks
+                .iter()
+                .filter(|t| {
+                    t.title.to_lowercase().contains(&q)
+                        || t.artist_display().to_lowercase().contains(&q)
+                        || t.id.to_lowercase().contains(&q)
+                })
+                .take(limit)
+                .cloned()
+                .collect();
+            Some(PageWire::new(matched, None))
+        } else {
+            None
+        };
+
+        let albums = if filter_albums {
+            let matched: Vec<_> = state
+                .albums
+                .iter()
+                .filter(|a| {
+                    a.title.to_lowercase().contains(&q)
+                        || a.artist_display().to_lowercase().contains(&q)
+                        || a.id.to_lowercase().contains(&q)
+                })
+                .take(limit)
+                .cloned()
+                .collect();
+            Some(PageWire::new(matched, None))
+        } else {
+            None
+        };
+
+        let artists = if filter_artists {
+            let matched: Vec<_> = state
+                .artists
+                .iter()
+                .filter(|a| a.name.to_lowercase().contains(&q) || a.id.to_lowercase().contains(&q))
+                .take(limit)
+                .cloned()
+                .collect();
+            Some(PageWire::new(matched, None))
+        } else {
+            None
+        };
+
+        let playlists = if filter_playlists {
+            let matched: Vec<_> = state
+                .playlists
+                .iter()
+                .filter(|p| p.title.to_lowercase().contains(&q) || p.id.to_lowercase().contains(&q))
+                .take(limit)
+                .cloned()
+                .collect();
+            Some(PageWire::new(matched, None))
+        } else {
+            None
+        };
+
+        Ok(SearchResultsWire {
+            tracks,
+            albums,
+            artists,
+            playlists,
+        })
+    }
+
+    async fn get_catalog_item(&self, media_id: &str) -> Result<CatalogItemWire, ProviderError> {
+        let state = self.state.lock().await;
+        if let Some(track) = state.tracks.iter().find(|t| t.id == media_id) {
+            return Ok(CatalogItemWire::Track(track.clone()));
+        }
+        if let Some(album) = state.albums.iter().find(|a| a.id == media_id) {
+            return Ok(CatalogItemWire::Album(album.clone()));
+        }
+        if let Some(artist) = state.artists.iter().find(|a| a.id == media_id) {
+            return Ok(CatalogItemWire::Artist(artist.clone()));
+        }
+        if let Some(playlist) = state.playlists.iter().find(|p| p.id == media_id) {
+            return Ok(CatalogItemWire::Playlist(playlist.clone()));
+        }
+        Err(ProviderError::NotFound(media_id.to_string()))
+    }
+
+    async fn get_collection_items(
+        &self,
+        media_id: &str,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<PageWire<TrackWire>, ProviderError> {
+        let _ = cursor;
+        let state = self.state.lock().await;
+        if media_id.starts_with("mock:album:") {
+            let album_tracks: Vec<_> = state
+                .tracks
+                .iter()
+                .filter(|t| t.album.as_ref().and_then(|a| a.id.as_deref()) == Some(media_id))
+                .take(limit)
+                .cloned()
+                .collect();
+            Ok(PageWire::new(album_tracks, None))
+        } else if media_id.starts_with("mock:playlist:") {
+            let playlist_tracks: Vec<_> = state.tracks.iter().take(limit).cloned().collect();
+            Ok(PageWire::new(playlist_tracks, None))
+        } else {
+            Err(ProviderError::NotFound(media_id.to_string()))
+        }
+    }
+
+    async fn get_library(
+        &self,
+        kind: LibraryKindWire,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<LibraryPageWire, ProviderError> {
+        let _ = cursor;
+        let state = self.state.lock().await;
+        match kind {
+            LibraryKindWire::Tracks => {
+                let items: Vec<_> = state.tracks.iter().take(limit).cloned().collect();
+                Ok(LibraryPageWire::Tracks(PageWire::new(items, None)))
+            }
+            LibraryKindWire::Albums => {
+                let items: Vec<_> = state.albums.iter().take(limit).cloned().collect();
+                Ok(LibraryPageWire::Albums(PageWire::new(items, None)))
+            }
+            LibraryKindWire::Playlists => {
+                let items: Vec<_> = state.playlists.iter().take(limit).cloned().collect();
+                Ok(LibraryPageWire::Playlists(PageWire::new(items, None)))
+            }
+        }
     }
 
     async fn play(&self, media_id: &str) -> Result<(), ProviderError> {
@@ -173,61 +376,57 @@ impl Provider for MockProvider {
 
     async fn resume(&self) -> Result<(), ProviderError> {
         let mut state = self.state.lock().await;
-        if state.current_index.is_none() && !state.queue.is_empty() {
-            state.current_index = Some(0);
+        if state.playback_state == PlaybackStateWire::Playing {
+            return Ok(());
         }
-        if state.current_index.is_some() {
-            state.last_started_at = Some(Instant::now());
-            state.playback_state = PlaybackStateWire::Playing;
-            Ok(())
-        } else {
-            Err(ProviderError::Playback("Queue is empty".into()))
-        }
+        state.last_started_at = Some(Instant::now());
+        state.playback_state = PlaybackStateWire::Playing;
+        Ok(())
     }
 
     async fn stop(&self) -> Result<(), ProviderError> {
         let mut state = self.state.lock().await;
+        state.playback_state = PlaybackStateWire::Stopped;
         state.position_base_ms = 0;
         state.last_started_at = None;
-        state.playback_state = PlaybackStateWire::Stopped;
         Ok(())
     }
 
     async fn next(&self) -> Result<(), ProviderError> {
         let mut state = self.state.lock().await;
         if state.queue.is_empty() {
-            return Err(ProviderError::Playback("Queue is empty".into()));
+            return Ok(());
         }
-
         let next_idx = match state.current_index {
-            Some(i) if i + 1 < state.queue.len() => Some(i + 1),
-            _ => None,
+            Some(i) => (i + 1).min(state.queue.len() - 1),
+            None => 0,
         };
-
-        state.current_index = next_idx;
+        state.current_index = Some(next_idx);
         state.position_base_ms = 0;
-        if state.playback_state == PlaybackStateWire::Playing {
-            state.last_started_at = Some(Instant::now());
-        }
+        state.last_started_at = if state.playback_state == PlaybackStateWire::Playing {
+            Some(Instant::now())
+        } else {
+            None
+        };
         Ok(())
     }
 
     async fn previous(&self) -> Result<(), ProviderError> {
         let mut state = self.state.lock().await;
         if state.queue.is_empty() {
-            return Err(ProviderError::Playback("Queue is empty".into()));
+            return Ok(());
         }
-
         let prev_idx = match state.current_index {
-            Some(i) if i > 0 => i - 1,
-            _ => 0,
+            Some(i) => i.saturating_sub(1),
+            None => 0,
         };
-
         state.current_index = Some(prev_idx);
         state.position_base_ms = 0;
-        if state.playback_state == PlaybackStateWire::Playing {
-            state.last_started_at = Some(Instant::now());
-        }
+        state.last_started_at = if state.playback_state == PlaybackStateWire::Playing {
+            Some(Instant::now())
+        } else {
+            None
+        };
         Ok(())
     }
 
@@ -242,7 +441,6 @@ impl Provider for MockProvider {
         } else {
             position_ms
         };
-
         state.position_base_ms = clamped;
         if state.playback_state == PlaybackStateWire::Playing {
             state.last_started_at = Some(Instant::now());
@@ -259,16 +457,16 @@ impl Provider for MockProvider {
     async fn get_status(&self) -> Result<PlayerStatusWire, ProviderError> {
         let state = self.state.lock().await;
         let current_track = state.current_track().cloned();
+        let position_ms = state.current_position_ms();
         let duration_ms = current_track
             .as_ref()
             .and_then(|t| t.duration_ms)
             .unwrap_or(0);
-        let pos_ms = state.current_position_ms();
 
         Ok(PlayerStatusWire {
             state: state.playback_state,
             current_track,
-            position_ms: pos_ms,
+            position_ms,
             duration_ms,
             volume: state.volume,
             muted: false,
@@ -287,9 +485,8 @@ impl Provider for MockProvider {
 
     async fn enqueue(&self, track: TrackWire) -> Result<(), ProviderError> {
         let mut state = self.state.lock().await;
-        let was_empty = state.queue.is_empty();
         state.queue.push(track);
-        if was_empty {
+        if state.current_index.is_none() {
             state.current_index = Some(0);
         }
         Ok(())
@@ -368,6 +565,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_mock_provider_search_and_catalog() {
+        let p = MockProvider::new();
+        let res = p.search("acoustic", &[], 10, None).await.unwrap();
+        assert_eq!(res.tracks.as_ref().unwrap().items.len(), 1);
+        assert_eq!(res.tracks.as_ref().unwrap().items[0].id, "mock:track:3");
+
+        let item = p.get_catalog_item("mock:album:1").await.unwrap();
+        match item {
+            CatalogItemWire::Album(a) => assert_eq!(a.title, "Mock Album A"),
+            _ => panic!("Expected album"),
+        }
+
+        let tracks = p
+            .get_collection_items("mock:album:1", 10, None)
+            .await
+            .unwrap();
+        assert_eq!(tracks.items.len(), 2);
+
+        let lib_albums = p
+            .get_library(LibraryKindWire::Albums, 10, None)
+            .await
+            .unwrap();
+        match lib_albums {
+            LibraryPageWire::Albums(page) => assert_eq!(page.items.len(), 2),
+            _ => panic!("Expected albums"),
+        }
+    }
+
+    #[tokio::test]
     async fn test_mock_custom_repost_action() {
         let p = MockProvider::new();
         let target = MediaIdWire::parse("mock:track:3").unwrap();
@@ -393,6 +619,9 @@ mod tests {
         let p = MockProvider::new();
         let caps = p.capabilities();
         assert!(caps.contains(&"search".to_string()));
+        assert!(caps.contains(&"catalog.track".to_string()));
+        assert!(caps.contains(&"catalog.album".to_string()));
+        assert!(caps.contains(&"library.tracks".to_string()));
         assert!(caps.contains(&"playback".to_string()));
         assert!(caps.contains(&"mock.repost".to_string()));
         assert!(!caps.contains(&"lyrics.synced".to_string()));

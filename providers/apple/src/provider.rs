@@ -6,10 +6,20 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use malus_protocol::{PlayerStatusWire, provider::ProviderEvent, wire::AuthStatusWire};
+use malus_protocol::{
+    PlayerStatusWire,
+    provider::ProviderEvent,
+    wire::{
+        AuthStatusWire, CatalogItemWire, LibraryKindWire, LibraryPageWire, PageWire,
+        SearchKindWire, SearchResultsWire, TrackWire,
+    },
+};
 use malus_provider_sdk::{
     Provider,
-    capability::{AUTH, AUTH_BROWSER, PLAYBACK, PLAYBACK_SEEK},
+    capability::{
+        AUTH, AUTH_BROWSER, CATALOG_ALBUM, CATALOG_ARTIST, CATALOG_PLAYLIST, CATALOG_TRACK,
+        LIBRARY_ALBUMS, LIBRARY_PLAYLISTS, LIBRARY_TRACKS, PLAYBACK, PLAYBACK_SEEK, SEARCH,
+    },
     error::ProviderError,
 };
 use tokio::sync::{Mutex, mpsc};
@@ -57,6 +67,14 @@ impl Provider for AppleProvider {
             AUTH_BROWSER.to_string(),
             PLAYBACK.to_string(),
             PLAYBACK_SEEK.to_string(),
+            SEARCH.to_string(),
+            CATALOG_TRACK.to_string(),
+            CATALOG_ALBUM.to_string(),
+            CATALOG_ARTIST.to_string(),
+            CATALOG_PLAYLIST.to_string(),
+            LIBRARY_TRACKS.to_string(),
+            LIBRARY_ALBUMS.to_string(),
+            LIBRARY_PLAYLISTS.to_string(),
         ]
     }
 
@@ -186,5 +204,49 @@ impl Provider for AppleProvider {
             .get_status()
             .await
             .map_err(|e| ProviderError::Other(format!("Get status failed: {e}")))
+    }
+
+    async fn search(
+        &self,
+        query: &str,
+        kinds: &[SearchKindWire],
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<SearchResultsWire, ProviderError> {
+        self.session
+            .search(query, kinds, limit, cursor)
+            .await
+            .map_err(|e| ProviderError::Other(e.to_string()))
+    }
+
+    async fn get_catalog_item(&self, media_id: &str) -> Result<CatalogItemWire, ProviderError> {
+        self.session
+            .get_catalog_item(media_id)
+            .await
+            .map_err(|e| ProviderError::Other(e.to_string()))
+    }
+
+    async fn get_collection_items(
+        &self,
+        media_id: &str,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<PageWire<TrackWire>, ProviderError> {
+        self.session
+            .get_collection_items(media_id, limit, cursor)
+            .await
+            .map_err(|e| ProviderError::Other(e.to_string()))
+    }
+
+    async fn get_library(
+        &self,
+        kind: LibraryKindWire,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<LibraryPageWire, ProviderError> {
+        self.session
+            .get_library(kind, limit, cursor)
+            .await
+            .map_err(|e| ProviderError::Other(e.to_string()))
     }
 }

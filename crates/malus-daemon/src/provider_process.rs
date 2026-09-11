@@ -15,7 +15,11 @@ use malus_protocol::{
         PROVIDER_PROTOCOL, ProviderEvent, ProviderRequest, ProviderRequestEnvelope,
         ProviderResponse, ProviderWireMessage,
     },
-    wire::{ActionRequestV0, AuthStatusWire, MediaIdWire, PlayerStatusWire, QueueWire, TrackWire},
+    wire::{
+        ActionRequestV0, AuthStatusWire, CatalogItemWire, LibraryKindWire, LibraryPageWire,
+        MediaIdWire, PageWire, PlayerStatusWire, QueueWire, SearchKindWire, SearchResultsWire,
+        TrackWire,
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -587,15 +591,79 @@ impl ProviderProcess {
         pending.clear();
     }
 
-    pub async fn search(&self, query: &str) -> Result<Vec<TrackWire>, ProviderProcessError> {
+    pub async fn search(
+        &self,
+        query: &str,
+        kinds: Vec<SearchKindWire>,
+        limit: usize,
+        cursor: Option<String>,
+    ) -> Result<SearchResultsWire, ProviderProcessError> {
         let resp = self
             .send_request(ProviderRequest::Search {
                 query: query.to_string(),
-                limit: 20,
+                kinds,
+                limit,
+                cursor,
             })
             .await?;
-        if let ProviderResponse::SearchResults { tracks } = resp {
-            Ok(tracks)
+        if let ProviderResponse::SearchResults(results) = resp {
+            Ok(results)
+        } else {
+            Err(ProviderProcessError::UnexpectedResponse(Box::new(resp)))
+        }
+    }
+
+    pub async fn get_catalog_item(
+        &self,
+        media_id: &str,
+    ) -> Result<CatalogItemWire, ProviderProcessError> {
+        let resp = self
+            .send_request(ProviderRequest::GetCatalogItem {
+                media_id: media_id.to_string(),
+            })
+            .await?;
+        if let ProviderResponse::CatalogItem(item) = resp {
+            Ok(item)
+        } else {
+            Err(ProviderProcessError::UnexpectedResponse(Box::new(resp)))
+        }
+    }
+
+    pub async fn get_collection_items(
+        &self,
+        media_id: &str,
+        limit: usize,
+        cursor: Option<String>,
+    ) -> Result<PageWire<TrackWire>, ProviderProcessError> {
+        let resp = self
+            .send_request(ProviderRequest::GetCollectionItems {
+                media_id: media_id.to_string(),
+                limit,
+                cursor,
+            })
+            .await?;
+        if let ProviderResponse::CollectionItems(page) = resp {
+            Ok(page)
+        } else {
+            Err(ProviderProcessError::UnexpectedResponse(Box::new(resp)))
+        }
+    }
+
+    pub async fn get_library(
+        &self,
+        kind: LibraryKindWire,
+        limit: usize,
+        cursor: Option<String>,
+    ) -> Result<LibraryPageWire, ProviderProcessError> {
+        let resp = self
+            .send_request(ProviderRequest::GetLibrary {
+                kind,
+                limit,
+                cursor,
+            })
+            .await?;
+        if let ProviderResponse::LibraryPage(page) = resp {
+            Ok(page)
         } else {
             Err(ProviderProcessError::UnexpectedResponse(Box::new(resp)))
         }

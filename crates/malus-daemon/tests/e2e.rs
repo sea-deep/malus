@@ -142,22 +142,27 @@ async fn test_search_and_queue_workflow() {
     let resp = client
         .send(&ClientRequest::Search {
             query: "Mock Track".into(),
+            kinds: Vec::new(),
+            provider: None,
+            limit: None,
+            cursor: None,
         })
         .await
         .unwrap();
 
-    let tracks = match resp {
-        ClientResponse::SearchResults { tracks } => tracks,
+    let results = match resp {
+        ClientResponse::SearchResults(res) => res,
         other => panic!("Expected search results, got {other:?}"),
     };
-    assert_eq!(tracks.len(), 2);
-    assert_eq!(tracks[0].id, "mock:track:1");
-    assert_eq!(tracks[1].id, "mock:track:2");
+    let tracks_page = results.tracks.expect("expected tracks in search results");
+    assert_eq!(tracks_page.items.len(), 2);
+    assert_eq!(tracks_page.items[0].id, "mock:track:1");
+    assert_eq!(tracks_page.items[1].id, "mock:track:2");
 
     // 2. Enqueue track
     let resp = client
         .send(&ClientRequest::Enqueue {
-            track: tracks[0].clone(),
+            track: tracks_page.items[0].clone(),
         })
         .await
         .unwrap();
@@ -170,6 +175,77 @@ async fn test_search_and_queue_workflow() {
         assert_eq!(q.items[0].id, "mock:track:1");
     } else {
         panic!("Expected queue snapshot");
+    }
+}
+
+#[tokio::test]
+async fn test_catalog_and_library_primitives() {
+    let server = TestServer::start().await;
+    let mut client = Client::connect(&server.sock_path).await.unwrap();
+
+    // 1. Get catalog track
+    let resp = client
+        .send(&ClientRequest::GetCatalogItem {
+            media_id: "mock:track:1".into(),
+        })
+        .await
+        .unwrap();
+    match resp {
+        ClientResponse::CatalogItem(malus_protocol::wire::CatalogItemWire::Track(t)) => {
+            assert_eq!(t.id, "mock:track:1");
+            assert_eq!(t.title, "Mock Track 1");
+        }
+        other => panic!("Expected CatalogItem::Track, got {other:?}"),
+    }
+
+    // 2. Get catalog album
+    let resp = client
+        .send(&ClientRequest::GetCatalogItem {
+            media_id: "mock:album:1".into(),
+        })
+        .await
+        .unwrap();
+    match resp {
+        ClientResponse::CatalogItem(malus_protocol::wire::CatalogItemWire::Album(a)) => {
+            assert_eq!(a.id, "mock:album:1");
+            assert_eq!(a.title, "Mock Album A");
+        }
+        other => panic!("Expected CatalogItem::Album, got {other:?}"),
+    }
+
+    // 3. Get collection items
+    let resp = client
+        .send(&ClientRequest::GetCollectionItems {
+            media_id: "mock:album:1".into(),
+            limit: Some(10),
+            cursor: None,
+        })
+        .await
+        .unwrap();
+    match resp {
+        ClientResponse::CollectionItems(page) => {
+            assert_eq!(page.items.len(), 2);
+            assert_eq!(page.items[0].id, "mock:track:1");
+        }
+        other => panic!("Expected CollectionItems, got {other:?}"),
+    }
+
+    // 4. Get library tracks
+    let resp = client
+        .send(&ClientRequest::GetLibrary {
+            kind: malus_protocol::wire::LibraryKindWire::Tracks,
+            provider: Some("mock".into()),
+            limit: Some(10),
+            cursor: None,
+        })
+        .await
+        .unwrap();
+    match resp {
+        ClientResponse::LibraryPage(malus_protocol::wire::LibraryPageWire::Tracks(page)) => {
+            assert_eq!(page.items.len(), 3);
+            assert_eq!(page.items[0].id, "mock:track:1");
+        }
+        other => panic!("Expected LibraryPage::Tracks, got {other:?}"),
     }
 }
 
