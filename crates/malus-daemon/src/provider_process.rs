@@ -119,6 +119,8 @@ pub enum ProviderProcessError {
     NotReady(ProviderSupervisorState),
     #[error("Handshake timed out after {0:?}")]
     HandshakeTimeout(Duration),
+    #[error("Request timed out after {0:?}")]
+    RequestTimeout(Duration),
 }
 
 struct ChildHandle {
@@ -439,7 +441,7 @@ impl ProviderProcess {
             return Err(ProviderProcessError::ProcessExited(None));
         }
 
-        let resp = match timeout(Duration::from_secs(30), rx).await {
+        let resp = match timeout(Duration::from_secs(60), rx).await {
             Ok(Ok(resp)) => resp,
             Ok(Err(_)) => {
                 self.pending_requests.lock().await.remove(&id);
@@ -455,8 +457,8 @@ impl ProviderProcess {
             Err(_) => {
                 // Timeout: remove waiter so it does not leak
                 self.pending_requests.lock().await.remove(&id);
-                return Err(ProviderProcessError::HandshakeTimeout(Duration::from_secs(
-                    30,
+                return Err(ProviderProcessError::RequestTimeout(Duration::from_secs(
+                    60,
                 )));
             }
         };

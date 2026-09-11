@@ -157,10 +157,12 @@ impl WebPage {
     }
 
     /// Call a JavaScript function on the `window` object with structured arguments.
-    pub async fn call_function(
+    /// Call a JavaScript function on the `window` object with structured arguments and a custom timeout.
+    pub async fn call_function_with_timeout(
         &self,
         function_declaration: &str,
         arguments: &[Value],
+        timeout: Duration,
     ) -> Result<Value, WebError> {
         // Evaluate window to get an objectId for the call context
         let window_res = self
@@ -172,7 +174,7 @@ impl WebPage {
                     "expression": "window",
                     "returnByValue": false,
                 }),
-                Duration::from_secs(5),
+                Duration::from_secs(15),
             )
             .await?;
 
@@ -203,7 +205,7 @@ impl WebPage {
                 Some(&self.session_id),
                 "Runtime.callFunctionOn",
                 params,
-                Duration::from_secs(15),
+                timeout,
             )
             .await;
 
@@ -228,6 +230,16 @@ impl WebPage {
             .and_then(|r| r.get("value"))
             .cloned()
             .unwrap_or(Value::Null))
+    }
+
+    /// Call a JavaScript function on the `window` object with structured arguments.
+    pub async fn call_function(
+        &self,
+        function_declaration: &str,
+        arguments: &[Value],
+    ) -> Result<Value, WebError> {
+        self.call_function_with_timeout(function_declaration, arguments, Duration::from_secs(30))
+            .await
     }
 
     /// Repeatedly evaluate a JavaScript expression until it produces a truthy value or times out.
