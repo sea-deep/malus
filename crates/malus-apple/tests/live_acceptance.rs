@@ -5,12 +5,11 @@
 
 use std::{sync::Arc, time::Duration};
 
-use malus_protocol::wire::{CatalogItemWire, LibraryKindWire, LibraryPageWire, SearchKindWire};
-use malus_provider_apple::{
+use malus_apple::{
     AppleCredentials, AppleProvider, AppleWebSession, OfficialAppleMusicApi,
     ProductionAppleWebSession, ProfileTokenProvider,
 };
-use malus_provider_sdk::Provider;
+use malus_protocol::wire::{CatalogItemWire, LibraryKindWire, LibraryPageWire, SearchKindWire};
 use malus_web_runtime::ProfileManager;
 
 #[tokio::test]

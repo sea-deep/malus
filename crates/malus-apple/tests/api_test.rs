@@ -8,11 +8,11 @@ use std::{
     time::Duration,
 };
 
-use malus_protocol::wire::{CatalogItemWire, LibraryKindWire, LibraryPageWire, SearchKindWire};
-use malus_provider_apple::{
+use malus_apple::{
     AppleApiError, AppleCredentials, OfficialAppleMusicApi, StaticTokenProvider, parse_apple_album,
     parse_apple_artist, parse_apple_artwork, parse_apple_playlist, parse_apple_track,
 };
+use malus_protocol::wire::{CatalogItemWire, LibraryKindWire, LibraryPageWire, SearchKindWire};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,

@@ -1,20 +1,12 @@
 //! Malus background daemon library.
 //!
-//! Provides the engine, process-isolated provider communication, and IPC server
-//! for coordinating audio playback, queue management, and audio provider catalog lookups.
-//!
-//! Strictly does NOT depend on `malus-provider-sdk`.
+//! Provides the engine and IPC server for coordinating native Apple Music
+//! playback, queue management, and catalog lookups.
 
-pub mod discovery;
 pub mod engine;
-pub mod provider_process;
 pub mod server;
 
-pub use discovery::{DiscoveredProvider, discover_providers};
 pub use engine::Engine;
-pub use provider_process::{
-    ProviderProcess, ProviderProcessError, ProviderSupervisorState, SupervisorPolicy,
-};
 pub use server::{Server, ServerError, default_socket_path};
 
 #[cfg(test)]
@@ -35,7 +27,7 @@ mod tests {
         let pong = engine.handle_request(ClientRequest::Ping).await;
         assert_eq!(pong, ClientResponse::Pong);
 
-        // Status when no provider active
+        // Status
         let status = engine.handle_request(ClientRequest::GetStatus).await;
         if let ClientResponse::Status(s) = status {
             assert_eq!(s.state, malus_protocol::PlaybackStateWire::Stopped);

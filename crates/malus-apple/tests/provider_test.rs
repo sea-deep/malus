@@ -1,23 +1,27 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use malus_protocol::{
-    PlaybackStateWire, PlayerStatusWire, RepeatModeWire,
-    provider::ProviderEvent,
-    wire::{AuthStateWire, CatalogItemWire, LibraryKindWire, LibraryPageWire, TrackWire},
-};
-use malus_provider_apple::{
+use malus_apple::{
     AppleCredentials, AppleError, AppleProvider, AppleWebSession, AuthState, OfficialAppleMusicApi,
     StaticTokenProvider, parse_apple_album, parse_apple_artist, parse_apple_artwork,
     parse_apple_playlist, parse_apple_track,
 };
-use malus_provider_sdk::{
-    Provider,
-    capability::{
-        AUTH, AUTH_BROWSER, CATALOG_ALBUM, CATALOG_ARTIST, CATALOG_PLAYLIST, CATALOG_TRACK,
-        LIBRARY_ALBUMS, LIBRARY_PLAYLISTS, LIBRARY_TRACKS, PLAYBACK, PLAYBACK_SEEK, SEARCH,
-    },
+use malus_protocol::{
+    PlaybackStateWire, PlayerStatusWire, RepeatModeWire,
+    wire::{AuthStateWire, CatalogItemWire, LibraryKindWire, LibraryPageWire, TrackWire},
 };
+const AUTH: &str = "auth";
+const AUTH_BROWSER: &str = "auth.browser";
+const PLAYBACK: &str = "playback";
+const PLAYBACK_SEEK: &str = "playback.seek";
+const SEARCH: &str = "search";
+const CATALOG_TRACK: &str = "catalog.track";
+const CATALOG_ALBUM: &str = "catalog.album";
+const CATALOG_ARTIST: &str = "catalog.artist";
+const CATALOG_PLAYLIST: &str = "catalog.playlist";
+const LIBRARY_TRACKS: &str = "library.tracks";
+const LIBRARY_ALBUMS: &str = "library.albums";
+const LIBRARY_PLAYLISTS: &str = "library.playlists";
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -73,7 +77,7 @@ struct MockAppleWebSession {
     is_paused: Mutex<bool>,
     is_stopped: Mutex<bool>,
     last_seek_ms: Mutex<Option<u64>>,
-    event_sink: Mutex<Option<mpsc::UnboundedSender<ProviderEvent>>>,
+    event_sink: Mutex<Option<mpsc::UnboundedSender<PlayerStatusWire>>>,
 }
 
 impl MockAppleWebSession {
@@ -124,8 +128,8 @@ impl AppleWebSession for MockAppleWebSession {
         }
     }
 
-    async fn refresh_tokens(&self) -> Result<malus_provider_apple::AppleCredentials, AppleError> {
-        Ok(malus_provider_apple::AppleCredentials::new(
+    async fn refresh_tokens(&self) -> Result<malus_apple::AppleCredentials, AppleError> {
+        Ok(malus_apple::AppleCredentials::new(
             "mock-dev",
             "mock-user",
             "us",
@@ -152,7 +156,7 @@ impl AppleWebSession for MockAppleWebSession {
 
         let guard = self.event_sink.lock().await;
         if let Some(ref sink) = *guard {
-            let _ = sink.send(ProviderEvent::StatusChanged(PlayerStatusWire {
+            let _ = sink.send(PlayerStatusWire {
                 state: PlaybackStateWire::Playing,
                 current_track: Some(TrackWire::new(
                     format!("apple:track:{catalog_id}"),
@@ -165,7 +169,7 @@ impl AppleWebSession for MockAppleWebSession {
                 muted: false,
                 shuffle: false,
                 repeat: RepeatModeWire::Off,
-            }));
+            });
         }
         Ok(())
     }
@@ -224,7 +228,7 @@ impl AppleWebSession for MockAppleWebSession {
         })
     }
 
-    fn set_event_sink(&self, sink: mpsc::UnboundedSender<ProviderEvent>) {
+    fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlayerStatusWire>) {
         if let Ok(mut guard) = self.event_sink.try_lock() {
             *guard = Some(sink);
         }

@@ -1,19 +1,15 @@
 [package]
-name = "malus-provider-apple"
+name = "malus-apple"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
-[[bin]]
-name = "malus-provider-apple"
-path = "src/main.rs"
-
 [dependencies]
-malus-protocol = { path = "../../crates/malus-protocol" }
-malus-provider-sdk = { path = "../../crates/malus-provider-sdk" }
-malus-web-runtime = { path = "../../crates/malus-web-runtime" }
+malus-protocol = { path = "../malus-protocol" }
+malus-web-runtime = { path = "../malus-web-runtime" }
+base64 = "0.22"
 directories = "6.0"
 tokio = { version = "1.43", features = [
     "macros",

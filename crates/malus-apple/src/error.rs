@@ -35,6 +35,9 @@ pub enum AppleError {
     #[error("Apple Music resource not found: {0}")]
     NotFound(String),
 
+    #[error("API error: {0}")]
+    Api(#[from] crate::api::AppleApiError),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }

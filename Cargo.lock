@@ -1185,6 +1185,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "malus-apple"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "directories",
+ "malus-protocol",
+ "malus-web-runtime",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "malus-cli"
 version = "0.1.0"
 dependencies = [
@@ -1217,7 +1235,9 @@ name = "malus-daemon"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "malus-apple",
  "malus-cli",
+ "malus-client",
  "malus-core",
  "malus-protocol",
  "serde",
@@ -1262,47 +1282,6 @@ name = "malus-protocol"
 version = "0.1.0"
 dependencies = [
  "malus-core",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "malus-provider-apple"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "directories",
- "malus-protocol",
- "malus-provider-sdk",
- "malus-web-runtime",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "malus-provider-mock"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "malus-provider-sdk",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "malus-provider-sdk"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "malus-protocol",
  "serde",
  "serde_json",
  "thiserror",

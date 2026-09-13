@@ -4,16 +4,16 @@ Treat executable code and live behavior as evidence. The previous architecture d
 
 ## Architecture
 
-- `src/main.rs`: terminal lifetime, asynchronous engine startup, reconnect scheduling, artwork requests, CLI operations.
-- `src/cli.rs`: side-effect-free option parsing. Parse all arguments before launching a browser or deleting a session.
-- `src/controller.rs`: input priority, global shortcuts, mouse routing, and ratcn rendering. This controller is also used by interaction tests.
-- `src/app.rs`: reducer, navigation, modal/focus state, library/catalog/resource caches, and engine event handling.
-- `src/ui/`: shared list and slider components, screen routing, overlays, header/player bar, and half-block artwork.
-- `src/engine/mod.rs`: browser owner, serial playback commands, concurrent catalog/library queries, event relay, MPRIS lifetime, heartbeat, and shutdown.
-- `src/engine/musickit.rs` and `bridge.js`: structured MusicKit calls, paginated API reads, metadata parsing, and change-deduplicated snapshots. The bridge reinstalls across page navigation.
-- `src/engine/cdp.rs`: request/response correlation, deadlines, cancellation cleanup, events, and disconnection handling.
-- `src/engine/process.rs`, `profile.rs`, `discovery.rs`: Chromium discovery, isolated session directory, locks, and process cleanup.
-- `src/engine/mpris.rs`: D-Bus controls, typed track object paths, metadata and property-change signals.
+Malus is an Apple-First native Linux audio client. The multi-provider framework was retired and archived at git tag `provider-framework-final` (see `archive/provider-framework/`).
+
+- `crates/malus-apple`: In-process Apple Music service (`AppleService`), official HTTP API client (`api.music.apple.com`), response normalization, token management, and WPE MusicKit session for DRM/playback.
+- `crates/malus-daemon`: Background daemon (`malusd`), client Unix domain socket server, in-process engine coordinator, and MPRIS host.
+- `crates/malus-client`: Asynchronous IPC client library connecting to `malus-daemon` over Unix domain sockets.
+- `crates/malus-protocol`: Framing (Length-Prefixed JSON), client/daemon wire protocol, and typed Apple page / navigation models.
+- `crates/malus-web-runtime`: WPE WebKit process manager, headless/CDP runtime, isolated profile manager, and Widevine CDM supervisor.
+- `crates/malus-core`: Domain models (MediaId, Track, Album, Artist, PlaybackState).
+- `crates/malus-cli`: CLI interface executable (`malus`).
+- `apps/malus-gui` / `apps/malus-gui-next`: Native GTK4 / Libadwaita / Relm4 frontends.
 
 ## Invariants
 

@@ -4,10 +4,11 @@ use malus_protocol::{
     client::{ClientEvent, ClientRequest, ClientResponse},
     codec::{decode_message, read_frame, write_message},
     wire::{
-        AuthStatusWire, CatalogItemWire, LibraryKindWire, LibraryPageWire, PageWire,
-        PlayerStatusWire, ProviderInfoWire, ProviderSurfaceManifestWire, QueueWire, RepeatModeWire,
-        SearchKindWire, SearchResultsWire, SurfaceActionResultWire, SurfaceContinuationWire,
-        SurfaceCursorWire, SurfaceWire, TrackWire,
+        AppleNavigationWire, ApplePageWire, AuthStatusWire, CatalogItemWire, LibraryKindWire,
+        LibraryPageWire, PageContinuationWire, PageCursorWire, PageWire, PlayerStatusWire,
+        ProviderInfoWire, ProviderSurfaceManifestWire, QueueWire, RepeatModeWire, SearchKindWire,
+        SearchResultsWire, SurfaceActionResultWire, SurfaceContinuationWire, SurfaceCursorWire,
+        SurfaceWire, TrackWire,
     },
 };
 use std::path::{Path, PathBuf};
@@ -440,55 +441,68 @@ impl MalusClient {
         }
     }
 
-    pub async fn get_provider_surface_manifest(
-        &self,
-        provider: &str,
-    ) -> Result<ProviderSurfaceManifestWire, ClientError> {
-        match self
-            .send(&ClientRequest::GetProviderSurfaceManifest {
-                provider: provider.to_string(),
-            })
-            .await?
-        {
-            ClientResponse::ProviderSurfaceManifest(manifest) => Ok(manifest),
+    pub async fn get_navigation(&self) -> Result<AppleNavigationWire, ClientError> {
+        match self.send(&ClientRequest::GetNavigation).await? {
+            ClientResponse::Navigation(nav) | ClientResponse::ProviderSurfaceManifest(nav) => {
+                Ok(nav)
+            }
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
         }
     }
 
-    pub async fn get_surface(
-        &self,
-        provider: &str,
-        surface_id: &str,
-    ) -> Result<SurfaceWire, ClientError> {
+    pub async fn get_page(&self, route: &str) -> Result<ApplePageWire, ClientError> {
         match self
-            .send(&ClientRequest::GetSurface {
-                provider: provider.to_string(),
-                surface_id: surface_id.to_string(),
+            .send(&ClientRequest::GetPage {
+                route: route.to_string(),
             })
             .await?
         {
-            ClientResponse::Surface(surface) => Ok(surface),
+            ClientResponse::Page(page) | ClientResponse::Surface(page) => Ok(page),
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
         }
     }
 
-    pub async fn continue_surface(
+    pub async fn continue_page(
         &self,
-        provider: &str,
-        surface_id: &str,
-        cursor: SurfaceCursorWire,
-    ) -> Result<SurfaceContinuationWire, ClientError> {
+        route: &str,
+        cursor: PageCursorWire,
+    ) -> Result<PageContinuationWire, ClientError> {
         match self
-            .send(&ClientRequest::ContinueSurface {
-                provider: provider.to_string(),
-                surface_id: surface_id.to_string(),
+            .send(&ClientRequest::ContinuePage {
+                route: route.to_string(),
                 cursor,
             })
             .await?
         {
-            ClientResponse::SurfaceContinued(cont) => Ok(cont),
+            ClientResponse::PageContinued(cont) | ClientResponse::SurfaceContinued(cont) => {
+                Ok(cont)
+            }
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
         }
+    }
+
+    pub async fn get_provider_surface_manifest(
+        &self,
+        _provider: &str,
+    ) -> Result<ProviderSurfaceManifestWire, ClientError> {
+        self.get_navigation().await
+    }
+
+    pub async fn get_surface(
+        &self,
+        _provider: &str,
+        surface_id: &str,
+    ) -> Result<SurfaceWire, ClientError> {
+        self.get_page(surface_id).await
+    }
+
+    pub async fn continue_surface(
+        &self,
+        _provider: &str,
+        surface_id: &str,
+        cursor: SurfaceCursorWire,
+    ) -> Result<SurfaceContinuationWire, ClientError> {
+        self.continue_page(surface_id, cursor).await
     }
 
     pub async fn invoke_surface_action(

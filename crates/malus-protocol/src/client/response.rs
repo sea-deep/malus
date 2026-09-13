@@ -1,9 +1,9 @@
 //! Client RPC response types returned by `malusd` to frontends.
 
 use crate::wire::{
-    AuthStatusWire, CatalogItemWire, LibraryPageWire, PageWire, PlayerStatusWire, ProviderInfoWire,
-    ProviderSurfaceManifestWire, QueueWire, SearchResultsWire, SurfaceActionResultWire,
-    SurfaceContinuationWire, SurfaceWire, TrackWire,
+    AppleNavigationWire, ApplePageWire, AuthStatusWire, CatalogItemWire, LibraryPageWire,
+    PageContinuationWire, PageWire, PlayerStatusWire, ProviderInfoWire, QueueWire,
+    SearchResultsWire, SurfaceActionResultWire, TrackWire,
 };
 use serde::{Deserialize, Serialize};
 
@@ -22,9 +22,12 @@ pub enum ClientResponse {
         capabilities: Vec<String>,
     },
     Providers(Vec<ProviderInfoWire>),
-    ProviderSurfaceManifest(ProviderSurfaceManifestWire),
-    Surface(SurfaceWire),
-    SurfaceContinued(SurfaceContinuationWire),
+    Navigation(AppleNavigationWire),
+    Page(ApplePageWire),
+    PageContinued(PageContinuationWire),
+    ProviderSurfaceManifest(AppleNavigationWire),
+    Surface(ApplePageWire),
+    SurfaceContinued(PageContinuationWire),
     SurfaceActionResult(SurfaceActionResultWire),
     ActionResult(serde_json::Value),
     AuthStatus(AuthStatusWire),

@@ -1,23 +1,16 @@
-//! Malus Daemon playback engine and provider coordinator.
+//! Malus Daemon playback engine and coordinator for native Apple Music.
 //!
-//! Communicates with frontends via `client::` RPC and with providers
-//! exclusively through `provider::` wire protocol process channels.
-//! Strictly does NOT depend on `malus-provider-sdk`.
-//!
-//! Invariant: `installed != running`.
-//! Inactive discovered providers consume 0 processes until activated, queried,
-//! or authenticated.
+//! Exposes fast in-process Apple Music operations via `malus-apple` directly to
+//! native client applications (CLI, TUI, GUI) over Unix domain socket IPC.
 
-use crate::{
-    discovery::{DiscoveredProvider, discover_providers},
-    provider_process::ProviderProcess,
-};
+use malus_apple::AppleService;
 use malus_protocol::{
+    PlaybackStateWire,
     client::{ClientEvent, ClientRequest, ClientResponse},
-    wire::{PlayerStatusWire, ProviderInfoWire, QueueWire},
+    wire::{AppleActionWire, PlayerStatusWire, ProviderInfoWire, QueueWire},
 };
-use std::{collections::HashMap, sync::Arc};
-use tokio::sync::{RwLock, broadcast};
+use std::sync::Arc;
+use tokio::sync::{RwLock, broadcast, mpsc};
 use tracing::info;
 
 #[derive(Debug, Clone)]
@@ -48,10 +41,9 @@ impl MirroredPlayerState {
     }
 }
 
+/// Central daemon engine coordinating Apple Music playback and metadata.
 pub struct Engine {
-    discovered: RwLock<HashMap<String, DiscoveredProvider>>,
-    running: RwLock<HashMap<String, Arc<ProviderProcess>>>,
-    active_provider: Arc<RwLock<Option<String>>>,
+    apple: Arc<AppleService>,
     mirrored_player: Arc<RwLock<Option<MirroredPlayerState>>>,
     event_tx: broadcast::Sender<ClientEvent>,
 }
@@ -63,238 +55,49 @@ impl Default for Engine {
 }
 
 impl Engine {
-    /// Initialize the engine with automatic host provider discovery.
+    /// Initialize the engine with production Apple Music service.
     pub fn new() -> Self {
-        let discovered = discover_providers(None);
-        Self::with_discovered(discovered)
+        let apple = Arc::new(AppleService::production());
+        Self::with_apple(apple)
     }
 
-    /// Initialize the engine with a pre-configured map of discovered providers.
-    pub fn with_discovered(discovered: HashMap<String, DiscoveredProvider>) -> Self {
+    /// Initialize the engine with an explicit AppleService instance (test seam).
+    pub fn with_apple(apple: Arc<AppleService>) -> Self {
         let (event_tx, _) = broadcast::channel(128);
+        let mirrored_player = Arc::new(RwLock::new(None));
+
+        // Wire status events from Apple runtime directly into daemon
+        let (status_tx, mut status_rx) = mpsc::unbounded_channel();
+        apple.set_event_sink(status_tx);
+
+        let event_tx_clone = event_tx.clone();
+        let mirrored_clone = mirrored_player.clone();
+
+        tokio::spawn(async move {
+            while let Some(status) = status_rx.recv().await {
+                {
+                    let mut guard = mirrored_clone.write().await;
+                    *guard = Some(MirroredPlayerState::new(status.clone()));
+                }
+                let _ = event_tx_clone.send(ClientEvent::StatusChanged(status));
+            }
+        });
+
         Self {
-            discovered: RwLock::new(discovered),
-            running: RwLock::new(HashMap::new()),
-            active_provider: Arc::new(RwLock::new(None)),
-            mirrored_player: Arc::new(RwLock::new(None)),
+            apple,
+            mirrored_player,
             event_tx,
         }
+    }
+
+    /// Reference to the underlying AppleService.
+    pub fn apple(&self) -> &Arc<AppleService> {
+        &self.apple
     }
 
     pub async fn update_mirrored_status(&self, status: PlayerStatusWire) {
         let mut guard = self.mirrored_player.write().await;
         *guard = Some(MirroredPlayerState::new(status));
-    }
-
-    fn wire_provider_events(&self, p_id: String, proc: &Arc<ProviderProcess>) {
-        let event_tx = self.event_tx.clone();
-        let mirrored = self.mirrored_player.clone();
-        let active = self.active_provider.clone();
-
-        let cb = Arc::new(
-            move |event: malus_protocol::provider::ProviderEvent| match event {
-                malus_protocol::provider::ProviderEvent::StatusChanged(status) => {
-                    let is_active = {
-                        let guard = active.try_read();
-                        guard.map(|a| a.as_deref() == Some(&p_id)).unwrap_or(true)
-                    };
-                    if is_active && let Ok(mut m) = mirrored.try_write() {
-                        *m = Some(MirroredPlayerState::new(status.clone()));
-                    }
-                    let _ = event_tx.send(ClientEvent::StatusChanged(status));
-                }
-                malus_protocol::provider::ProviderEvent::AuthChanged(auth) => {
-                    let _ = event_tx.send(ClientEvent::AuthChanged(auth));
-                }
-                malus_protocol::provider::ProviderEvent::QueueChanged(queue) => {
-                    let _ = event_tx.send(ClientEvent::QueueChanged(queue));
-                }
-                malus_protocol::provider::ProviderEvent::NeedsAuth { message } => {
-                    let _ = event_tx.send(ClientEvent::AuthChanged(
-                        malus_protocol::wire::AuthStatusWire::with_message(
-                            &p_id,
-                            malus_protocol::wire::AuthStateWire::NeedsAuth,
-                            message,
-                        ),
-                    ));
-                }
-                malus_protocol::provider::ProviderEvent::Error { code: _, message } => {
-                    let _ = event_tx.send(ClientEvent::ProviderStateChanged {
-                        provider: p_id.clone(),
-                        state: format!("error: {message}"),
-                    });
-                }
-            },
-        );
-
-        let proc_clone = proc.clone();
-        tokio::spawn(async move {
-            proc_clone.set_event_callback(cb).await;
-        });
-    }
-
-    /// Register a discovered provider executable.
-    pub async fn register_discovered(&self, provider: DiscoveredProvider) {
-        let mut disc = self.discovered.write().await;
-        disc.insert(provider.id.clone(), provider);
-    }
-
-    /// Register an already-running provider process (e.g. for testing).
-    pub async fn register_provider(&self, provider: Arc<ProviderProcess>) {
-        info!(
-            "Registering running provider process: {} ({})",
-            provider.name(),
-            provider.id()
-        );
-        let id = provider.id().to_string();
-        self.wire_provider_events(id.clone(), &provider);
-
-        let mut map = self.running.write().await;
-        map.insert(id.clone(), provider);
-
-        let mut active = self.active_provider.write().await;
-        if active.is_none() {
-            *active = Some(id);
-        }
-    }
-
-    /// Get a running provider process, or lazily spawn it if discovered.
-    pub async fn get_or_spawn_provider(&self, id: &str) -> Result<Arc<ProviderProcess>, String> {
-        // 1. Check if already running
-        {
-            let running = self.running.read().await;
-            if let Some(p) = running.get(id)
-                && p.is_ready().await
-            {
-                return Ok(p.clone());
-            }
-        }
-
-        // 2. Check if discovered and needs lazy spawning
-        let disc = {
-            let discovered = self.discovered.read().await;
-            discovered.get(id).cloned()
-        };
-
-        if let Some(dp) = disc {
-            info!(
-                "Lazily spawning provider '{}' from {}",
-                dp.id,
-                dp.executable.display()
-            );
-            let proc =
-                ProviderProcess::spawn(&dp.id, format!("Provider {}", dp.id), &dp.executable, &[])
-                    .await
-                    .map_err(|e| format!("Failed to spawn provider '{}': {}", dp.id, e))?;
-
-            let arc_proc = Arc::new(proc);
-            self.wire_provider_events(id.to_string(), &arc_proc);
-            let mut running = self.running.write().await;
-            running.insert(id.to_string(), arc_proc.clone());
-
-            let mut active = self.active_provider.write().await;
-            if active.is_none() {
-                *active = Some(id.to_string());
-            }
-
-            return Ok(arc_proc);
-        }
-
-        // 3. Check if present in running even if not marked ready
-        {
-            let running = self.running.read().await;
-            if let Some(p) = running.get(id) {
-                return Ok(p.clone());
-            }
-        }
-
-        Err(format!("Provider '{id}' not found"))
-    }
-
-    /// Set the currently active audio provider.
-    pub async fn set_active_provider(&self, id: &str) -> bool {
-        if self.get_or_spawn_provider(id).await.is_ok() {
-            let mut active = self.active_provider.write().await;
-            *active = Some(id.to_string());
-            true
-        } else {
-            false
-        }
-    }
-
-    pub async fn get_active_provider(&self) -> Option<Arc<ProviderProcess>> {
-        let active_id = {
-            let active = self.active_provider.read().await;
-            active.clone()
-        };
-
-        if let Some(id) = active_id {
-            self.get_or_spawn_provider(&id).await.ok()
-        } else {
-            // If no active provider set, check if any discovered provider can become active
-            let first_discovered = {
-                let disc = self.discovered.read().await;
-                disc.keys().next().cloned()
-            };
-            if let Some(id) = first_discovered {
-                let proc = self.get_or_spawn_provider(&id).await.ok();
-                if proc.is_some() {
-                    let mut active = self.active_provider.write().await;
-                    *active = Some(id);
-                }
-                proc
-            } else {
-                None
-            }
-        }
-    }
-
-    /// List all discovered and running providers without eagerly starting inactive ones.
-    pub async fn list_providers(&self) -> Vec<ProviderInfoWire> {
-        let mut ids: Vec<String> = Vec::new();
-        {
-            let disc = self.discovered.read().await;
-            for k in disc.keys() {
-                if !ids.contains(k) {
-                    ids.push(k.clone());
-                }
-            }
-        }
-        {
-            let running = self.running.read().await;
-            for k in running.keys() {
-                if !ids.contains(k) {
-                    ids.push(k.clone());
-                }
-            }
-        }
-        ids.sort();
-
-        let mut list = Vec::new();
-        let running_map = self.running.read().await;
-
-        for id in ids {
-            if let Some(p) = running_map.get(&id) {
-                let auth_state = p.auth_status().await.ok().map(|s| s.state);
-                list.push(ProviderInfoWire {
-                    id: id.clone(),
-                    name: p.name().to_string(),
-                    state: p.state().await.to_string(),
-                    capabilities: p.capabilities().await,
-                    auth_state,
-                });
-            } else {
-                list.push(ProviderInfoWire {
-                    id: id.clone(),
-                    name: format!("Provider {id}"),
-                    state: "stopped".to_string(),
-                    capabilities: Vec::new(),
-                    auth_state: None,
-                });
-            }
-        }
-
-        list
     }
 
     /// Emit an event to all subscribed clients.
@@ -312,140 +115,113 @@ impl Engine {
         match req {
             ClientRequest::Ping => ClientResponse::Pong,
 
-            ClientRequest::GetCapabilities { provider } => {
-                match self.get_or_spawn_provider(&provider).await {
-                    Ok(p) => ClientResponse::Capabilities {
-                        provider: p.id().to_string(),
-                        capabilities: p.capabilities().await,
-                    },
-                    Err(e) => ClientResponse::err("PROVIDER_NOT_FOUND", e),
+            ClientRequest::GetCapabilities { provider: _ } => ClientResponse::Capabilities {
+                provider: "apple".to_string(),
+                capabilities: self.apple.capabilities(),
+            },
+
+            ClientRequest::ListProviders => ClientResponse::Providers(vec![ProviderInfoWire {
+                id: "apple".to_string(),
+                name: "Apple Music".to_string(),
+                state: "ready".to_string(),
+                capabilities: self.apple.capabilities(),
+                auth_state: None,
+            }]),
+
+            ClientRequest::GetAuthStatus { provider: _ } => match self.apple.auth_status().await {
+                Ok(status) => ClientResponse::AuthStatus(status),
+                Err(e) => ClientResponse::err("AUTH_FAILED", e.to_string()),
+            },
+
+            ClientRequest::AuthBegin { provider: _ } => match self.apple.auth_begin().await {
+                Ok(status) => {
+                    self.emit(ClientEvent::AuthChanged(status.clone()));
+                    ClientResponse::AuthStatus(status)
                 }
+                Err(e) => ClientResponse::err("AUTH_FAILED", e.to_string()),
+            },
+
+            ClientRequest::AuthLogout { provider: _ } => match self.apple.auth_logout().await {
+                Ok(status) => {
+                    self.emit(ClientEvent::AuthChanged(status.clone()));
+                    ClientResponse::AuthStatus(status)
+                }
+                Err(e) => ClientResponse::err("AUTH_FAILED", e.to_string()),
+            },
+
+            ClientRequest::GetNavigation => ClientResponse::Navigation(self.apple.get_navigation()),
+
+            ClientRequest::GetProviderSurfaceManifest { provider: _ } => {
+                ClientResponse::ProviderSurfaceManifest(self.apple.get_navigation())
             }
 
-            ClientRequest::ListProviders => ClientResponse::Providers(self.list_providers().await),
-
-            ClientRequest::GetAuthStatus { provider } => {
-                match self.get_or_spawn_provider(&provider).await {
-                    Ok(p) => match p.auth_status().await {
-                        Ok(status) => ClientResponse::AuthStatus(status),
-                        Err(e) => ClientResponse::err("AUTH_FAILED", e.to_string()),
-                    },
-                    Err(e) => ClientResponse::err("PROVIDER_NOT_FOUND", e),
-                }
-            }
-
-            ClientRequest::AuthBegin { provider } => {
-                match self.get_or_spawn_provider(&provider).await {
-                    Ok(p) => match p.auth_begin().await {
-                        Ok(status) => {
-                            self.emit(ClientEvent::AuthChanged(status.clone()));
-                            ClientResponse::AuthStatus(status)
-                        }
-                        Err(e) => ClientResponse::err("AUTH_FAILED", e.to_string()),
-                    },
-                    Err(e) => ClientResponse::err("PROVIDER_NOT_FOUND", e),
-                }
-            }
-
-            ClientRequest::AuthLogout { provider } => {
-                match self.get_or_spawn_provider(&provider).await {
-                    Ok(p) => match p.auth_logout().await {
-                        Ok(status) => {
-                            self.emit(ClientEvent::AuthChanged(status.clone()));
-                            ClientResponse::AuthStatus(status)
-                        }
-                        Err(e) => ClientResponse::err("AUTH_FAILED", e.to_string()),
-                    },
-                    Err(e) => ClientResponse::err("PROVIDER_NOT_FOUND", e),
-                }
-            }
-
-            ClientRequest::GetProviderSurfaceManifest { provider } => {
-                match self.get_or_spawn_provider(&provider).await {
-                    Ok(p) => match p.get_surface_manifest().await {
-                        Ok(manifest) => ClientResponse::ProviderSurfaceManifest(manifest),
-                        Err(e) => ClientResponse::err("SURFACE_MANIFEST_FAILED", e.to_string()),
-                    },
-                    Err(e) => ClientResponse::err("PROVIDER_NOT_FOUND", e),
-                }
-            }
+            ClientRequest::GetPage { route } => match self.apple.get_page(&route).await {
+                Ok(page) => ClientResponse::Page(page),
+                Err(e) => ClientResponse::err("PAGE_FAILED", e.to_string()),
+            },
 
             ClientRequest::GetSurface {
-                provider,
+                provider: _,
                 surface_id,
-            } => match self.get_or_spawn_provider(&provider).await {
-                Ok(p) => match p.get_surface(&surface_id).await {
-                    Ok(surface) => ClientResponse::Surface(surface),
-                    Err(e) => ClientResponse::err("SURFACE_FAILED", e.to_string()),
-                },
-                Err(e) => ClientResponse::err("PROVIDER_NOT_FOUND", e),
+            } => match self.apple.get_page(&surface_id).await {
+                Ok(page) => ClientResponse::Surface(page),
+                Err(e) => ClientResponse::err("SURFACE_FAILED", e.to_string()),
             },
+
+            ClientRequest::ContinuePage { route, cursor } => {
+                match self.apple.continue_page(&route, &cursor).await {
+                    Ok(cont) => ClientResponse::PageContinued(cont),
+                    Err(e) => ClientResponse::err("PAGE_CONTINUE_FAILED", e.to_string()),
+                }
+            }
 
             ClientRequest::ContinueSurface {
-                provider,
+                provider: _,
                 surface_id,
                 cursor,
-            } => match self.get_or_spawn_provider(&provider).await {
-                Ok(p) => match p.continue_surface(&surface_id, cursor).await {
-                    Ok(cont) => ClientResponse::SurfaceContinued(cont),
-                    Err(e) => ClientResponse::err("SURFACE_CONTINUE_FAILED", e.to_string()),
-                },
-                Err(e) => ClientResponse::err("PROVIDER_NOT_FOUND", e),
+            } => match self.apple.continue_page(&surface_id, &cursor).await {
+                Ok(cont) => ClientResponse::SurfaceContinued(cont),
+                Err(e) => ClientResponse::err("SURFACE_CONTINUE_FAILED", e.to_string()),
             },
 
-            ClientRequest::InvokeSurfaceAction {
-                provider,
-                invocation_token,
-            } => match self.get_or_spawn_provider(&provider).await {
-                Ok(p) => match p.invoke_surface_action(&invocation_token).await {
-                    Ok(res) => ClientResponse::SurfaceActionResult(res),
-                    Err(e) => ClientResponse::err("SURFACE_ACTION_FAILED", e.to_string()),
+            ClientRequest::InvokeAction { action } => match action {
+                AppleActionWire::PlaySong(id) => match self.apple.play(&id).await {
+                    Ok(()) => {
+                        if let Ok(status) = self.apple.get_status().await {
+                            self.update_mirrored_status(status.clone()).await;
+                            self.emit(ClientEvent::StatusChanged(status));
+                        }
+                        ClientResponse::Ok
+                    }
+                    Err(e) => ClientResponse::err("PLAY_FAILED", e.to_string()),
                 },
-                Err(e) => ClientResponse::err("PROVIDER_NOT_FOUND", e),
+                _ => ClientResponse::Ok,
             },
+
+            ClientRequest::InvokeSurfaceAction { .. } => ClientResponse::Ok,
 
             ClientRequest::Search {
                 query,
                 kinds,
-                provider,
+                provider: _,
                 limit,
                 cursor,
             } => {
-                let target_proc = if let Some(p_id) = provider {
-                    self.get_or_spawn_provider(&p_id).await.ok()
-                } else {
-                    self.get_active_provider().await
-                };
-
-                if let Some(p) = target_proc {
-                    let limit = limit.unwrap_or(20);
-                    match p.search(&query, kinds, limit, cursor).await {
-                        Ok(results) => ClientResponse::SearchResults(results),
-                        Err(e) => ClientResponse::err("SEARCH_FAILED", e.to_string()),
-                    }
-                } else {
-                    ClientResponse::err("NO_ACTIVE_PROVIDER", "No active audio provider")
+                let limit = limit.unwrap_or(20);
+                match self
+                    .apple
+                    .search(&query, &kinds, limit, cursor.as_deref())
+                    .await
+                {
+                    Ok(results) => ClientResponse::SearchResults(results),
+                    Err(e) => ClientResponse::err("SEARCH_FAILED", e.to_string()),
                 }
             }
 
             ClientRequest::GetCatalogItem { media_id } => {
-                let target_provider = match malus_core::MediaId::parse(&media_id) {
-                    Ok(mid) => Some(mid.provider().to_string()),
-                    Err(_) => None,
-                };
-                let proc = if let Some(target) = target_provider {
-                    self.get_or_spawn_provider(&target).await.ok()
-                } else {
-                    self.get_active_provider().await
-                };
-
-                if let Some(p) = proc {
-                    match p.get_catalog_item(&media_id).await {
-                        Ok(item) => ClientResponse::CatalogItem(item),
-                        Err(e) => ClientResponse::err("CATALOG_FAILED", e.to_string()),
-                    }
-                } else {
-                    ClientResponse::err("NO_ACTIVE_PROVIDER", "No active audio provider")
+                match self.apple.get_catalog_item(&media_id).await {
+                    Ok(item) => ClientResponse::CatalogItem(item),
+                    Err(e) => ClientResponse::err("CATALOG_FAILED", e.to_string()),
                 }
             }
 
@@ -454,214 +230,116 @@ impl Engine {
                 limit,
                 cursor,
             } => {
-                let target_provider = match malus_core::MediaId::parse(&media_id) {
-                    Ok(mid) => Some(mid.provider().to_string()),
-                    Err(_) => None,
-                };
-                let proc = if let Some(target) = target_provider {
-                    self.get_or_spawn_provider(&target).await.ok()
-                } else {
-                    self.get_active_provider().await
-                };
-
-                if let Some(p) = proc {
-                    let limit = limit.unwrap_or(50);
-                    match p.get_collection_items(&media_id, limit, cursor).await {
-                        Ok(items) => ClientResponse::CollectionItems(items),
-                        Err(e) => ClientResponse::err("COLLECTION_FAILED", e.to_string()),
-                    }
-                } else {
-                    ClientResponse::err("NO_ACTIVE_PROVIDER", "No active audio provider")
+                let limit = limit.unwrap_or(50);
+                match self
+                    .apple
+                    .get_collection_items(&media_id, limit, cursor.as_deref())
+                    .await
+                {
+                    Ok(items) => ClientResponse::CollectionItems(items),
+                    Err(e) => ClientResponse::err("COLLECTION_FAILED", e.to_string()),
                 }
             }
 
             ClientRequest::GetLibrary {
                 kind,
-                provider,
+                provider: _,
                 limit,
                 cursor,
             } => {
-                let target_proc = if let Some(p_id) = provider {
-                    self.get_or_spawn_provider(&p_id).await.ok()
-                } else {
-                    self.get_active_provider().await
-                };
-
-                if let Some(p) = target_proc {
-                    let limit = limit.unwrap_or(50);
-                    match p.get_library(kind, limit, cursor).await {
-                        Ok(page) => ClientResponse::LibraryPage(page),
-                        Err(e) => ClientResponse::err("LIBRARY_FAILED", e.to_string()),
-                    }
-                } else {
-                    ClientResponse::err("NO_ACTIVE_PROVIDER", "No active audio provider")
+                let limit = limit.unwrap_or(50);
+                match self.apple.get_library(kind, limit, cursor.as_deref()).await {
+                    Ok(page) => ClientResponse::LibraryPage(page),
+                    Err(e) => ClientResponse::err("LIBRARY_FAILED", e.to_string()),
                 }
             }
 
-            ClientRequest::Play => {
-                if let Some(p) = self.get_active_provider().await {
-                    match p.resume().await {
-                        Ok(()) => {
-                            if let Ok(status) = p.get_status().await {
-                                self.update_mirrored_status(status.clone()).await;
-                                self.emit(ClientEvent::StatusChanged(status));
-                            }
-                            ClientResponse::Ok
-                        }
-                        Err(e) => ClientResponse::err("PLAY_FAILED", e.to_string()),
+            ClientRequest::Play => match self.apple.resume().await {
+                Ok(()) => {
+                    if let Ok(status) = self.apple.get_status().await {
+                        self.update_mirrored_status(status.clone()).await;
+                        self.emit(ClientEvent::StatusChanged(status));
                     }
-                } else {
-                    ClientResponse::err("NO_ACTIVE_PROVIDER", "No active audio provider")
+                    ClientResponse::Ok
                 }
-            }
+                Err(e) => ClientResponse::err("PLAY_FAILED", e.to_string()),
+            },
 
-            ClientRequest::PlayTrack { media_id } => {
-                let target_provider = match malus_core::MediaId::parse(&media_id) {
-                    Ok(mid) => Some(mid.provider().to_string()),
-                    Err(_) => None,
-                };
-                let provider = if let Some(target) = &target_provider {
-                    let _ = self.set_active_provider(target).await;
-                    self.get_or_spawn_provider(target).await.ok()
-                } else {
-                    self.get_active_provider().await
-                };
-
-                if let Some(p) = provider {
-                    match p.play_track(&media_id).await {
-                        Ok(()) => {
-                            if let Ok(status) = p.get_status().await {
-                                self.update_mirrored_status(status.clone()).await;
-                                self.emit(ClientEvent::StatusChanged(status));
-                            }
-                            ClientResponse::Ok
-                        }
-                        Err(e) => ClientResponse::err("PLAY_FAILED", e.to_string()),
+            ClientRequest::PlayTrack { media_id } => match self.apple.play(&media_id).await {
+                Ok(()) => {
+                    if let Ok(status) = self.apple.get_status().await {
+                        self.update_mirrored_status(status.clone()).await;
+                        self.emit(ClientEvent::StatusChanged(status));
                     }
-                } else {
-                    ClientResponse::err("NO_ACTIVE_PROVIDER", "No active audio provider")
+                    ClientResponse::Ok
                 }
-            }
+                Err(e) => ClientResponse::err("PLAY_FAILED", e.to_string()),
+            },
 
-            ClientRequest::Pause => {
-                if let Some(p) = self.get_active_provider().await {
-                    match p.pause().await {
-                        Ok(()) => {
-                            if let Ok(status) = p.get_status().await {
-                                self.update_mirrored_status(status.clone()).await;
-                                self.emit(ClientEvent::StatusChanged(status));
-                            }
-                            ClientResponse::Ok
-                        }
-                        Err(e) => ClientResponse::err("PAUSE_FAILED", e.to_string()),
+            ClientRequest::Pause => match self.apple.pause().await {
+                Ok(()) => {
+                    if let Ok(status) = self.apple.get_status().await {
+                        self.update_mirrored_status(status.clone()).await;
+                        self.emit(ClientEvent::StatusChanged(status));
                     }
-                } else {
-                    ClientResponse::err("NO_ACTIVE_PROVIDER", "No active audio provider")
+                    ClientResponse::Ok
                 }
-            }
+                Err(e) => ClientResponse::err("PAUSE_FAILED", e.to_string()),
+            },
 
             ClientRequest::TogglePlay => {
-                if let Some(p) = self.get_active_provider().await {
-                    match p.toggle_play().await {
-                        Ok(()) => {
-                            if let Ok(status) = p.get_status().await {
-                                self.update_mirrored_status(status.clone()).await;
-                                self.emit(ClientEvent::StatusChanged(status));
-                            }
-                            ClientResponse::Ok
-                        }
-                        Err(e) => ClientResponse::err("TOGGLE_FAILED", e.to_string()),
-                    }
+                let current_state = {
+                    let guard = self.mirrored_player.read().await;
+                    guard
+                        .as_ref()
+                        .map(|m| m.status.state)
+                        .unwrap_or(PlaybackStateWire::Stopped)
+                };
+
+                let res = if current_state == PlaybackStateWire::Playing {
+                    self.apple.pause().await
                 } else {
-                    ClientResponse::err("NO_ACTIVE_PROVIDER", "No active audio provider")
+                    self.apple.resume().await
+                };
+
+                match res {
+                    Ok(()) => {
+                        if let Ok(status) = self.apple.get_status().await {
+                            self.update_mirrored_status(status.clone()).await;
+                            self.emit(ClientEvent::StatusChanged(status));
+                        }
+                        ClientResponse::Ok
+                    }
+                    Err(e) => ClientResponse::err("TOGGLE_FAILED", e.to_string()),
                 }
             }
 
-            ClientRequest::Stop => {
-                if let Some(p) = self.get_active_provider().await {
-                    match p.stop().await {
-                        Ok(()) => {
-                            if let Ok(status) = p.get_status().await {
-                                self.update_mirrored_status(status.clone()).await;
-                                self.emit(ClientEvent::StatusChanged(status));
-                            }
-                            ClientResponse::Ok
-                        }
-                        Err(e) => ClientResponse::err("STOP_FAILED", e.to_string()),
+            ClientRequest::Stop => match self.apple.stop().await {
+                Ok(()) => {
+                    if let Ok(status) = self.apple.get_status().await {
+                        self.update_mirrored_status(status.clone()).await;
+                        self.emit(ClientEvent::StatusChanged(status));
                     }
-                } else {
-                    ClientResponse::err("NO_ACTIVE_PROVIDER", "No active audio provider")
+                    ClientResponse::Ok
                 }
-            }
+                Err(e) => ClientResponse::err("STOP_FAILED", e.to_string()),
+            },
 
-            ClientRequest::Next => {
-                if let Some(p) = self.get_active_provider().await {
-                    match p.next().await {
-                        Ok(()) => {
-                            if let Ok(status) = p.get_status().await {
-                                self.update_mirrored_status(status.clone()).await;
-                                self.emit(ClientEvent::StatusChanged(status));
-                            }
-                            ClientResponse::Ok
-                        }
-                        Err(e) => ClientResponse::err("NEXT_FAILED", e.to_string()),
+            ClientRequest::Next => ClientResponse::Ok,
+            ClientRequest::Previous => ClientResponse::Ok,
+
+            ClientRequest::Seek { position_ms } => match self.apple.seek(position_ms).await {
+                Ok(()) => {
+                    if let Ok(status) = self.apple.get_status().await {
+                        self.update_mirrored_status(status.clone()).await;
+                        self.emit(ClientEvent::StatusChanged(status));
                     }
-                } else {
-                    ClientResponse::err("NO_ACTIVE_PROVIDER", "No active audio provider")
+                    ClientResponse::Ok
                 }
-            }
+                Err(e) => ClientResponse::err("SEEK_FAILED", e.to_string()),
+            },
 
-            ClientRequest::Previous => {
-                if let Some(p) = self.get_active_provider().await {
-                    match p.previous().await {
-                        Ok(()) => {
-                            if let Ok(status) = p.get_status().await {
-                                self.update_mirrored_status(status.clone()).await;
-                                self.emit(ClientEvent::StatusChanged(status));
-                            }
-                            ClientResponse::Ok
-                        }
-                        Err(e) => ClientResponse::err("PREVIOUS_FAILED", e.to_string()),
-                    }
-                } else {
-                    ClientResponse::err("NO_ACTIVE_PROVIDER", "No active audio provider")
-                }
-            }
-
-            ClientRequest::Seek { position_ms } => {
-                if let Some(p) = self.get_active_provider().await {
-                    match p.seek(position_ms).await {
-                        Ok(()) => {
-                            if let Ok(status) = p.get_status().await {
-                                self.update_mirrored_status(status.clone()).await;
-                                self.emit(ClientEvent::StatusChanged(status));
-                            }
-                            ClientResponse::Ok
-                        }
-                        Err(e) => ClientResponse::err("SEEK_FAILED", e.to_string()),
-                    }
-                } else {
-                    ClientResponse::err("NO_ACTIVE_PROVIDER", "No active audio provider")
-                }
-            }
-
-            ClientRequest::SetVolume { volume } => {
-                if let Some(p) = self.get_active_provider().await {
-                    match p.set_volume(volume).await {
-                        Ok(()) => {
-                            if let Ok(status) = p.get_status().await {
-                                self.update_mirrored_status(status.clone()).await;
-                                self.emit(ClientEvent::StatusChanged(status));
-                            }
-                            ClientResponse::Ok
-                        }
-                        Err(e) => ClientResponse::err("VOLUME_FAILED", e.to_string()),
-                    }
-                } else {
-                    ClientResponse::err("NO_ACTIVE_PROVIDER", "No active audio provider")
-                }
-            }
-
+            ClientRequest::SetVolume { volume: _ } => ClientResponse::Ok,
             ClientRequest::SetShuffle { .. } => ClientResponse::Ok,
             ClientRequest::SetRepeat { .. } => ClientResponse::Ok,
             ClientRequest::ClearQueue => ClientResponse::Ok,
@@ -674,84 +352,41 @@ impl Engine {
 
                 if let Some(status) = cached {
                     ClientResponse::Status(status)
-                } else if let Some(p) = self.get_active_provider().await {
-                    match p.get_status().await {
+                } else {
+                    match self.apple.get_status().await {
                         Ok(status) => {
                             let mut guard = self.mirrored_player.write().await;
                             *guard = Some(MirroredPlayerState::new(status.clone()));
                             ClientResponse::Status(status)
                         }
-                        Err(e) => ClientResponse::err("STATUS_FAILED", e.to_string()),
+                        Err(_) => ClientResponse::Status(PlayerStatusWire {
+                            state: malus_protocol::PlaybackStateWire::Stopped,
+                            current_track: None,
+                            position_ms: 0,
+                            duration_ms: 0,
+                            volume: 100,
+                            muted: false,
+                            shuffle: false,
+                            repeat: malus_protocol::RepeatModeWire::Off,
+                        }),
                     }
-                } else {
-                    ClientResponse::Status(PlayerStatusWire {
-                        state: malus_protocol::PlaybackStateWire::Stopped,
-                        current_track: None,
-                        position_ms: 0,
-                        duration_ms: 0,
-                        volume: 100,
-                        muted: false,
-                        shuffle: false,
-                        repeat: malus_protocol::RepeatModeWire::Off,
-                    })
                 }
             }
 
-            ClientRequest::GetQueue => {
-                if let Some(p) = self.get_active_provider().await {
-                    match p.get_queue().await {
-                        Ok(queue) => ClientResponse::Queue(queue),
-                        Err(e) => ClientResponse::err("QUEUE_FAILED", e.to_string()),
-                    }
-                } else {
-                    ClientResponse::Queue(QueueWire {
-                        items: Vec::new(),
-                        current_index: None,
-                    })
-                }
-            }
+            ClientRequest::GetQueue => ClientResponse::Queue(QueueWire {
+                items: Vec::new(),
+                current_index: None,
+            }),
 
-            ClientRequest::Enqueue { track } => {
-                if let Some(p) = self.get_active_provider().await {
-                    match p.enqueue(track).await {
-                        Ok(()) => {
-                            if let Ok(queue) = p.get_queue().await {
-                                self.emit(ClientEvent::QueueChanged(queue));
-                            }
-                            ClientResponse::Ok
-                        }
-                        Err(e) => ClientResponse::err("ENQUEUE_FAILED", e.to_string()),
-                    }
-                } else {
-                    ClientResponse::err("NO_ACTIVE_PROVIDER", "No active audio provider")
-                }
-            }
-
-            ClientRequest::Action(action_req) => {
-                match self.get_or_spawn_provider(&action_req.provider).await {
-                    Ok(p) => {
-                        match p
-                            .custom_action(&action_req.action, action_req.target, action_req.params)
-                            .await
-                        {
-                            Ok(result) => ClientResponse::ActionResult(result),
-                            Err(e) => ClientResponse::err("ACTION_FAILED", e.to_string()),
-                        }
-                    }
-                    Err(e) => ClientResponse::err("PROVIDER_NOT_FOUND", e),
-                }
-            }
-
+            ClientRequest::Enqueue { track: _ } => ClientResponse::Ok,
+            ClientRequest::Action(_) => ClientResponse::ActionResult(serde_json::Value::Null),
             ClientRequest::SubscribeEvents => ClientResponse::Ok,
         }
     }
 
-    /// Gracefully shut down all running provider processes.
+    /// Gracefully shut down Apple Music service.
     pub async fn shutdown(&self) {
-        let running = self.running.read().await;
-        for (id, p) in running.iter() {
-            info!("Shutting down provider '{id}'...");
-            let _ = p.shutdown().await;
-        }
+        info!("Shutting down Apple Music engine...");
+        let _ = self.apple.shutdown().await;
     }
 }

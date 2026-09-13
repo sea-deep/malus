@@ -294,26 +294,28 @@ The following table details the exact current status of edit and delete operatio
 
 The playback queue is owned strictly by MusicKit in WPE. The daemon does not maintain an independent, competing queue engine.
 
+> **Architecture Note:** As part of the Apple-First transition (archiving the multi-provider framework at git tag `provider-framework-final`), `AppleService` is hosted directly in-process inside `malus-daemon`.
+
 ```mermaid
 sequenceDiagram
     participant GUI as Frontend (malus-gui-next)
     participant Daemon as malus-daemon
-    participant Provider as providers/apple
+    participant Apple as malus-apple (In-Process)
     participant WPE as MusicKit JS (WPE Runtime)
 
     Note over WPE: MusicKit owns active playback & queue
-    WPE->>Provider: malusDispatch snapshot (Queue, NowPlaying, Status)
-    Provider->>Daemon: ProviderEvent::QueueChanged(QueueWire)
-    Daemon->>GUI: ClientEvent::QueueChanged(QueueWire)
+    WPE->>Apple: malusDispatch snapshot (Queue, NowPlaying, Status)
+    Apple->>Daemon: StatusChanged(PlayerStatusWire)
+    Daemon->>GUI: ClientEvent::StatusChanged(PlayerStatusWire)
     
     Note over GUI: User reorders queue item (e.g. move index 3 to 1)
     GUI->>Daemon: ClientRequest::QueueAction(QueueActionWire::Move { from: 3, to: 1 })
-    Daemon->>Provider: ProviderRequest::QueueAction(QueueActionWire::Move { from: 3, to: 1 })
-    Provider->>WPE: mk.queue.splice(start, count, items)
+    Daemon->>Apple: apple.queue_action(QueueActionWire::Move { from: 3, to: 1 })
+    Apple->>WPE: mk.queue.splice(start, count, items)
     Note over WPE: Queue mutated atomically
-    WPE->>Provider: malusDispatch updated snapshot
-    Provider->>Daemon: ProviderEvent::QueueChanged(QueueWire)
-    Daemon->>GUI: ClientEvent::QueueChanged(QueueWire)
+    WPE->>Apple: malusDispatch updated snapshot
+    Apple->>Daemon: StatusChanged(PlayerStatusWire)
+    Daemon->>GUI: ClientEvent::StatusChanged(PlayerStatusWire)
 ```
 
 ### Queue Operations:

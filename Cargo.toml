@@ -3,13 +3,11 @@ resolver = "2"
 members = [
     "crates/malus-core",
     "crates/malus-protocol",
-    "crates/malus-provider-sdk",
-    "crates/malus-daemon",
-    "crates/malus-cli",
     "crates/malus-client",
+    "crates/malus-daemon",
+    "crates/malus-apple",
     "crates/malus-web-runtime",
-    "providers/mock",
-    "providers/apple",
+    "crates/malus-cli",
     "apps/malus-gui",
     "apps/malus-gui-next",
 ]

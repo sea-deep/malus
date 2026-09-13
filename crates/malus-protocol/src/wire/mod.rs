@@ -1,7 +1,5 @@
-//! Normalized wire data transfer objects and boundaries.
-
 pub mod media;
-pub mod surface;
+pub mod page;
 
 pub use media::*;
-pub use surface::*;
+pub use page::*;

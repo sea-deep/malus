@@ -8,7 +8,6 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use malus_protocol::{
     PlaybackStateWire, PlayerStatusWire, RepeatModeWire,
-    provider::ProviderEvent,
     wire::{AlbumRefWire, TrackWire},
 };
 use malus_web_runtime::{LaunchMode, ProfileManager, RuntimeOptions, WebPage, WebRuntime};
@@ -60,7 +59,7 @@ pub trait AppleWebSession: Send + Sync {
     async fn get_status(&self) -> Result<PlayerStatusWire, AppleError>;
 
     /// Register a sink for streaming unsolicited player events.
-    fn set_event_sink(&self, sink: mpsc::UnboundedSender<ProviderEvent>);
+    fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlayerStatusWire>);
 }
 
 struct ActiveSession {
@@ -71,7 +70,7 @@ struct ActiveSession {
 pub struct ProductionAppleWebSession {
     profile_lock: Arc<Mutex<()>>,
     active_session: Arc<Mutex<Option<ActiveSession>>>,
-    event_sink: Arc<Mutex<Option<mpsc::UnboundedSender<ProviderEvent>>>>,
+    event_sink: Arc<Mutex<Option<mpsc::UnboundedSender<PlayerStatusWire>>>>,
 }
 
 impl Default for ProductionAppleWebSession {
@@ -616,7 +615,7 @@ impl ProductionAppleWebSession {
                 {
                     let guard = sink_holder.lock().await;
                     if let Some(ref sink) = *guard {
-                        let _ = sink.send(ProviderEvent::StatusChanged(status));
+                        let _ = sink.send(status);
                     }
                 }
             }
@@ -1292,7 +1291,7 @@ impl AppleWebSession for ProductionAppleWebSession {
         })
     }
 
-    fn set_event_sink(&self, sink: mpsc::UnboundedSender<ProviderEvent>) {
+    fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlayerStatusWire>) {
         let sink_lock = self.event_sink.clone();
         tokio::spawn(async move {
             *sink_lock.lock().await = Some(sink);

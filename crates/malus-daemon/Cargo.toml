@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 malus-core = { path = "../malus-core" }
 malus-protocol = { path = "../malus-protocol" }
+malus-apple = { path = "../malus-apple" }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -18,5 +19,6 @@ serde_json = "1"
 libc = "0.2"
 
 [dev-dependencies]
+malus-client = { path = "../malus-client" }
 malus-cli = { path = "../malus-cli" }
 tempfile = "3.17"

@@ -1354,6 +1354,9 @@ fn print_response(resp: &ClientResponse) {
         ClientResponse::Surface(surface) => println!("{surface:?}"),
         ClientResponse::SurfaceContinued(cont) => println!("{cont:?}"),
         ClientResponse::SurfaceActionResult(res) => println!("{res:?}"),
+        ClientResponse::Navigation(nav) => println!("{nav:?}"),
+        ClientResponse::Page(page) => println!("{page:?}"),
+        ClientResponse::PageContinued(cont) => println!("{cont:?}"),
     }
 }
 

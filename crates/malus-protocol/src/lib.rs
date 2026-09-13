@@ -1,10 +1,8 @@
-//! `malus-protocol`: Framing, wire representations, and two distinct RPC trust boundaries:
+//! `malus-protocol`: Framing, wire representations, and client RPC definitions:
 //! - `client`: Frontend (CLI/TUI/GUI) <-> `malusd` IPC over Unix domain sockets
-//! - `provider`: `malusd` <-> Provider child processes over standard I/O
 
 pub mod client;
 pub mod framing;
-pub mod provider;
 pub mod wire;
 
 // Re-export common framing and wire types for convenient access
@@ -15,7 +13,6 @@ pub use wire::*;
 mod tests {
     use super::*;
     use client::{ClientRequest, ClientResponse};
-    use provider::{ProviderRequest, ProviderResponse};
 
     #[test]
     fn test_client_request_roundtrip() {
@@ -53,38 +50,8 @@ mod tests {
     }
 
     #[test]
-    fn test_provider_request_roundtrip() {
-        let req = ProviderRequest::Action(ActionRequestV0 {
-            provider: "mock".into(),
-            action: "mock.repost".into(),
-            target: Some(MediaIdWire::parse("mock:track:3").unwrap()),
-            params: serde_json::json!({ "note": "cool song" }),
-        });
-        let encoded = encode_message(&req).unwrap();
-        let mut buf = encoded;
-        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
-            .unwrap()
-            .unwrap();
-        let decoded: ProviderRequest = decode_message(&frame).unwrap();
-        assert_eq!(req, decoded);
-    }
-
-    #[test]
-    fn test_provider_response_roundtrip() {
-        let res = ProviderResponse::Capabilities(vec!["playback".into(), "mock.repost".into()]);
-        let encoded = encode_message(&res).unwrap();
-        let mut buf = encoded;
-        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
-            .unwrap()
-            .unwrap();
-        let decoded: ProviderResponse = decode_message(&frame).unwrap();
-        assert_eq!(res, decoded);
-    }
-
-    #[test]
     fn test_protocol_versions() {
         assert_eq!(client::CLIENT_PROTOCOL, (0, 1));
-        assert_eq!(provider::PROVIDER_PROTOCOL, (0, 1));
     }
 
     #[test]
@@ -112,15 +79,6 @@ mod tests {
             .unwrap();
         let decoded_res: client::ClientResponse = decode_message(&frame_res).unwrap();
         assert_eq!(auth_res, decoded_res);
-
-        let prov_req = provider::ProviderRequest::AuthBegin;
-        let prov_encoded = encode_message(&prov_req).unwrap();
-        let mut prov_buf = prov_encoded;
-        let prov_frame = decode_frame(&mut prov_buf, DEFAULT_MAX_PAYLOAD_BYTES)
-            .unwrap()
-            .unwrap();
-        let prov_decoded: provider::ProviderRequest = decode_message(&prov_frame).unwrap();
-        assert_eq!(prov_req, prov_decoded);
     }
 
     #[test]
@@ -257,15 +215,14 @@ mod tests {
         let decoded: client::ClientRequest = decode_message(&frame).unwrap();
         assert_eq!(manifest_req, decoded);
 
-        let manifest = ProviderSurfaceManifestWire {
-            provider_id: "mock".to_string(),
-            default_surface_id: "home".to_string(),
-            groups: vec![SurfaceNavGroupWire::new(
+        let manifest = AppleNavigationWire::new(
+            "home",
+            vec![NavGroupWire::new(
                 "main",
                 Some("Main".to_string()),
-                vec![SurfaceNavEntryWire::with_icon("home", "Home", "house")],
+                vec![NavEntryWire::with_icon("home", "Home", "house")],
             )],
-        };
+        );
         let manifest_res = client::ClientResponse::ProviderSurfaceManifest(manifest.clone());
         let encoded = encode_message(&manifest_res).unwrap();
         let mut buf = encoded;
@@ -288,7 +245,7 @@ mod tests {
         let decoded: client::ClientRequest = decode_message(&frame).unwrap();
         assert_eq!(surface_req, decoded);
 
-        let surface = SurfaceWire::new("home", "Home");
+        let surface = ApplePageWire::new("home", "Home");
         let surface_res = client::ClientResponse::Surface(surface.clone());
         let encoded = encode_message(&surface_res).unwrap();
         let mut buf = encoded;
@@ -302,7 +259,7 @@ mod tests {
         let cont_req = client::ClientRequest::ContinueSurface {
             provider: "mock".to_string(),
             surface_id: "home".to_string(),
-            cursor: SurfaceCursorWire::section("sec-1", "cursor-xyz"),
+            cursor: PageCursorWire::section("sec-1", "cursor-xyz"),
         };
         let encoded = encode_message(&cont_req).unwrap();
         let mut buf = encoded;
@@ -312,9 +269,9 @@ mod tests {
         let decoded: client::ClientRequest = decode_message(&frame).unwrap();
         assert_eq!(cont_req, decoded);
 
-        let cont_res = client::ClientResponse::SurfaceContinued(SurfaceContinuationWire::Section {
+        let cont_res = client::ClientResponse::SurfaceContinued(PageContinuationWire::Section {
             section_id: "sec-1".to_string(),
-            items: vec![SurfaceItemWire::new("item-next", "Next Item")],
+            items: vec![PageItemWire::new("item-next", "Next Item")],
             continuation: None,
         });
         let encoded = encode_message(&cont_res).unwrap();
@@ -348,24 +305,5 @@ mod tests {
             .unwrap();
         let decoded: client::ClientResponse = decode_message(&frame).unwrap();
         assert_eq!(act_res, decoded);
-
-        // 5. Provider requests & responses
-        let prov_req = provider::ProviderRequest::GetSurfaceManifest;
-        let encoded = encode_message(&prov_req).unwrap();
-        let mut buf = encoded;
-        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
-            .unwrap()
-            .unwrap();
-        let decoded: provider::ProviderRequest = decode_message(&frame).unwrap();
-        assert_eq!(prov_req, decoded);
-
-        let prov_res = provider::ProviderResponse::SurfaceManifest(manifest);
-        let encoded = encode_message(&prov_res).unwrap();
-        let mut buf = encoded;
-        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
-            .unwrap()
-            .unwrap();
-        let decoded: provider::ProviderResponse = decode_message(&frame).unwrap();
-        assert_eq!(prov_res, decoded);
     }
 }
