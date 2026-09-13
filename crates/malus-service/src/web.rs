@@ -6,7 +6,7 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use malus_model::{MediaRef, PlaybackState, PlayerStatus, RepeatMode, Track};
+use malus_model::{MediaRef, PlaybackState, PlayerStatus, Queue, RepeatMode, Track};
 use malus_wpe::{LaunchMode, ProfileManager, RuntimeOptions, WebPage, WebRuntime};
 use serde_json::Value;
 use tokio::sync::{Mutex, mpsc};
@@ -37,8 +37,11 @@ pub trait AppleWebSession: Send + Sync {
     /// Shut down any active web session.
     async fn shutdown(&self) -> Result<(), AppleError>;
 
-    /// Play a track by its Apple Music catalog ID.
-    async fn play_track(&self, catalog_id: &str) -> Result<(), AppleError>;
+    /// Set MusicKit queue to a media item and begin playback.
+    ///
+    /// `kind` is the MusicKit media kind: `"song"`, `"album"`, `"playlist"`, `"station"`.
+    /// `id` is the Apple Music catalog or library ID.
+    async fn set_queue(&self, kind: &str, id: &str) -> Result<(), AppleError>;
 
     /// Pause current playback.
     async fn pause(&self) -> Result<(), AppleError>;
@@ -54,6 +57,9 @@ pub trait AppleWebSession: Send + Sync {
 
     /// Query current playback status directly from MusicKit.
     async fn get_status(&self) -> Result<PlayerStatus, AppleError>;
+
+    /// Read the authoritative queue snapshot from MusicKit.
+    async fn get_queue(&self) -> Result<Queue, AppleError>;
 
     /// Register a sink for streaming unsolicited player events.
     fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlayerStatus>);
@@ -1071,7 +1077,7 @@ impl AppleWebSession for ProductionAppleWebSession {
         Ok(())
     }
 
-    async fn play_track(&self, catalog_id: &str) -> Result<(), AppleError> {
+    async fn set_queue(&self, kind: &str, id: &str) -> Result<(), AppleError> {
         let page = self.ensure_playback_session().await?;
         {
             let guard = self.active_session.lock().await;
@@ -1083,45 +1089,52 @@ impl AppleWebSession for ProductionAppleWebSession {
             }
         }
         let func = r#"
-            async function(trackId) {
+            async function(kind, itemId) {
                 const mk = window.MusicKit && window.MusicKit.getInstance();
                 if (!mk) throw new Error("MusicKit instance not available");
                 if (mk.assertUserStorefront) {
                     mk.assertUserStorefront = () => {};
                 }
 
-                let idsToTry = [trackId];
-                if (trackId.startsWith("i.") || trackId.startsWith("l.")) {
+                // For library song IDs (i.xxx / l.xxx), resolve catalog ID first
+                let resolvedId = itemId;
+                if (kind === "song" && (itemId.startsWith("i.") || itemId.startsWith("l."))) {
                     try {
-                        const res = await mk.api.music(`/v1/me/library/songs/${trackId}`);
+                        const res = await mk.api.music(`/v1/me/library/songs/${itemId}`);
                         const item = res?.data?.data?.[0];
                         const catId = item?.attributes?.playParams?.catalogId;
-                        if (catId && !idsToTry.includes(catId)) {
-                            idsToTry.unshift(catId);
-                        }
+                        if (catId) resolvedId = catId;
                     } catch (_) {}
                 }
 
-                let lastErr = null;
-                let queued = false;
-                for (const id of idsToTry) {
-                    const descriptors = [
-                        { song: id },
-                        { songs: [id] }
-                    ];
-                    for (const desc of descriptors) {
-                        try {
-                            await mk.setQueue(desc);
-                            queued = true;
-                            break;
-                        } catch (e) {
-                            lastErr = e;
-                        }
-                    }
-                    if (queued) break;
+                // Build MusicKit setQueue descriptor based on kind
+                let descriptor;
+                switch (kind) {
+                    case "song":
+                        descriptor = { song: resolvedId };
+                        break;
+                    case "album":
+                        descriptor = { album: resolvedId };
+                        break;
+                    case "playlist":
+                        descriptor = { playlist: resolvedId };
+                        break;
+                    case "station":
+                        descriptor = { station: resolvedId };
+                        break;
+                    default:
+                        throw new Error("Unsupported media kind: " + kind);
                 }
-                if (!queued) {
-                    throw lastErr || new Error("Failed to set queue for " + trackId);
+
+                try {
+                    await mk.setQueue(descriptor);
+                } catch (e) {
+                    // Fallback: try plural form for songs
+                    if (kind === "song") {
+                        await mk.setQueue({ songs: [resolvedId] });
+                    } else {
+                        throw e;
+                    }
                 }
                 await mk.play();
                 if (window.__malusPlaybackNotify) {
@@ -1129,9 +1142,15 @@ impl AppleWebSession for ProductionAppleWebSession {
                 }
             }
         "#;
-        page.call_function(func, &[Value::String(catalog_id.to_string())])
-            .await
-            .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
+        page.call_function(
+            func,
+            &[
+                Value::String(kind.to_string()),
+                Value::String(id.to_string()),
+            ],
+        )
+        .await
+        .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
         Ok(())
     }
 
@@ -1283,6 +1302,100 @@ impl AppleWebSession for ProductionAppleWebSession {
         parse_player_status(&val).ok_or_else(|| {
             AppleError::Internal("Failed to parse player status from MusicKit".to_string())
         })
+    }
+
+    async fn get_queue(&self) -> Result<Queue, AppleError> {
+        let session_guard = self.active_session.lock().await;
+        let page = match *session_guard {
+            Some(ref s) => {
+                if let Ok(health) = s.runtime.check_health().await
+                    && health.alive
+                {
+                    s.runtime.page_handle()
+                } else {
+                    return Ok(Queue::new());
+                }
+            }
+            None => {
+                return Ok(Queue::new());
+            }
+        };
+
+        let expr = r#"
+            (() => {
+                const mk = window.MusicKit && window.MusicKit.getInstance();
+                if (!mk) return null;
+                const q = mk.queue;
+                if (!q || !q.items || q.items.length === 0) {
+                    return { items: [], currentIndex: -1 };
+                }
+                const items = q.items.map(item => {
+                    const a = item.attributes || item;
+                    return {
+                        id: String(item.id || a?.playParams?.id || ""),
+                        title: String(a?.name || item.title || ""),
+                        artist: String(a?.artistName || item.artistName || ""),
+                        album: String(a?.albumName || item.albumName || ""),
+                        durationMs: a?.durationInMillis || Math.round((item.playbackDuration || 0) * 1000),
+                        trackNumber: a?.trackNumber || 0,
+                        discNumber: a?.discNumber || 0
+                    };
+                });
+                // MusicKit v3: queue.position is the current index
+                const pos = typeof q.position === "number" ? q.position : -1;
+                return { items, currentIndex: pos };
+            })()
+        "#;
+        let val = page.evaluate(expr).await.map_err(AppleError::Web)?;
+
+        if val.is_null() {
+            return Ok(Queue::new());
+        }
+
+        let items_val = &val["items"];
+        let current_index = val["currentIndex"]
+            .as_i64()
+            .and_then(|i| if i >= 0 { Some(i as usize) } else { None });
+
+        let mut tracks = Vec::new();
+        if let Some(arr) = items_val.as_array() {
+            for item in arr {
+                let raw_id = item["id"].as_str().unwrap_or_default();
+                if raw_id.is_empty() {
+                    continue;
+                }
+                let id_clean = raw_id.strip_prefix("song:").unwrap_or(raw_id);
+                let mref = MediaRef::Song(id_clean.to_string());
+                let mut track = Track::new(
+                    mref,
+                    item["title"].as_str().unwrap_or_default(),
+                    item["artist"].as_str().unwrap_or_default(),
+                );
+                if let Some(alb) = item["album"].as_str()
+                    && !alb.is_empty()
+                {
+                    track = track.with_album(alb);
+                }
+                if let Some(dur) = item["durationMs"].as_u64()
+                    && dur > 0
+                {
+                    track = track.with_duration_ms(dur);
+                }
+                if let Some(tn) = item["trackNumber"].as_u64()
+                    && tn > 0
+                {
+                    track = track.with_track_number(tn as u32);
+                }
+                if let Some(dn) = item["discNumber"].as_u64()
+                    && dn > 0
+                {
+                    track = track.with_disc_number(dn as u32);
+                }
+                tracks.push(track);
+            }
+        }
+
+        Ok(Queue::with_items(tracks, current_index))
     }
 
     fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlayerStatus>) {

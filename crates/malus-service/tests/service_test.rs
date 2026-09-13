@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use malus_ipc::wire::{AuthStateWire, CatalogItemWire, LibraryKindWire, LibraryPageWire};
-use malus_model::{MediaRef, PageRoute, PlaybackState, PlayerStatus, RepeatMode, Track};
+use malus_model::{MediaRef, PageRoute, PlaybackState, PlayerStatus, Queue, RepeatMode, Track};
 use malus_service::{
     AppleCredentials, AppleError, AppleService, AppleWebSession, AuthState, OfficialAppleMusicApi,
     StaticTokenProvider, parse_apple_album, parse_apple_artist, parse_apple_artwork,
@@ -127,20 +127,22 @@ impl AppleWebSession for MockAppleWebSession {
         Ok(())
     }
 
-    async fn play_track(&self, catalog_id: &str) -> Result<(), AppleError> {
-        *self.last_played_track.lock().await = Some(catalog_id.to_string());
+    async fn set_queue(&self, kind: &str, id: &str) -> Result<(), AppleError> {
+        *self.last_played_track.lock().await = Some(id.to_string());
         *self.is_stopped.lock().await = false;
         *self.is_paused.lock().await = false;
 
         let guard = self.event_sink.lock().await;
         if let Some(ref sink) = *guard {
+            let mref = match kind {
+                "album" => MediaRef::Album(id.to_string()),
+                "playlist" => MediaRef::Playlist(id.to_string()),
+                "station" => MediaRef::Station(id.to_string()),
+                _ => MediaRef::Song(id.to_string()),
+            };
             let _ = sink.send(PlayerStatus {
                 state: PlaybackState::Playing,
-                current_track: Some(Track::new(
-                    MediaRef::Song(catalog_id.to_string()),
-                    "Mock Apple Song",
-                    "Mock Artist",
-                )),
+                current_track: Some(Track::new(mref, "Mock Apple Song", "Mock Artist")),
                 position_ms: 0,
                 duration_ms: 180_000,
                 volume: 100,
@@ -199,6 +201,17 @@ impl AppleWebSession for MockAppleWebSession {
             shuffle: false,
             repeat: RepeatMode::Off,
         })
+    }
+
+    async fn get_queue(&self) -> Result<Queue, AppleError> {
+        let track_id = self.last_played_track.lock().await.clone();
+        match track_id {
+            Some(id) => {
+                let track = Track::new(MediaRef::Song(id), "Mock Apple Song", "Mock Artist");
+                Ok(Queue::with_items(vec![track], Some(0)))
+            }
+            None => Ok(Queue::new()),
+        }
     }
 
     fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlayerStatus>) {
@@ -327,16 +340,15 @@ async fn test_playback_play_valid_media_id() {
 }
 
 #[tokio::test]
-async fn test_playback_play_invalid_kind() {
+async fn test_playback_play_album_kind() {
     let mock = Arc::new(MockAppleWebSession::new());
     let service = AppleService::with_session(mock);
 
-    // Wrong kind
-    let err = service
+    // Albums are now accepted via set_queue
+    service
         .play(&MediaRef::Album("12345".to_string()))
         .await
-        .expect_err("wrong kind");
-    assert!(err.to_string().contains("Expected item kind 'song'"));
+        .expect("album play should succeed");
 }
 
 #[tokio::test]

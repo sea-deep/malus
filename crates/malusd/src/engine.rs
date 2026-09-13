@@ -233,6 +233,9 @@ impl Engine {
                         self.update_mirrored_status(status.clone()).await;
                         self.emit(ClientEvent::StatusChanged(status));
                     }
+                    if let Ok(queue) = self.apple.get_queue().await {
+                        self.emit(ClientEvent::QueueChanged(queue));
+                    }
                     ClientResponse::Ok
                 }
                 Err(e) => ClientResponse::err("PLAY_FAILED", e.to_string()),
@@ -334,10 +337,16 @@ impl Engine {
                 }
             }
 
-            ClientRequest::GetQueue => ClientResponse::Queue(Queue {
-                items: Vec::new(),
-                current_index: None,
-            }),
+            ClientRequest::GetQueue => match self.apple.get_queue().await {
+                Ok(queue) => {
+                    self.emit(ClientEvent::QueueChanged(queue.clone()));
+                    ClientResponse::Queue(queue)
+                }
+                Err(e) => {
+                    info!("GetQueue failed: {e}");
+                    ClientResponse::Queue(Queue::new())
+                }
+            },
 
             ClientRequest::SubscribeEvents => ClientResponse::Ok,
         }

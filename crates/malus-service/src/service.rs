@@ -11,7 +11,7 @@ use malus_ipc::wire::{
     PageContinuationWire, PageCursorWire, PageWire, PagedListWire, SearchKindWire,
     SearchResultsWire,
 };
-use malus_model::{MediaRef, PageRoute, PlayerStatus, Track};
+use malus_model::{MediaRef, PageRoute, PlayerStatus, Queue, Track};
 use tokio::sync::{Mutex, mpsc};
 use tracing::info;
 
@@ -151,16 +151,17 @@ impl AppleService {
         Ok(())
     }
 
-    /// Play a track by MediaRef (e.g. `song:617154362`).
+    /// Play a media item by MediaRef (e.g. `song:617154362`, `album:1440833098`).
     pub async fn play(&self, reference: &MediaRef) -> Result<(), AppleError> {
         info!("Apple Music play: {reference}");
-        if reference.kind() != "song" {
-            return Err(AppleError::Internal(format!(
-                "Expected item kind 'song', got '{}'",
-                reference.kind()
-            )));
-        }
-        self.session.play_track(reference.id()).await
+        self.session
+            .set_queue(reference.kind(), reference.id())
+            .await
+    }
+
+    /// Read the authoritative queue snapshot from MusicKit.
+    pub async fn get_queue(&self) -> Result<Queue, AppleError> {
+        self.session.get_queue().await
     }
 
     /// Resume playback.
