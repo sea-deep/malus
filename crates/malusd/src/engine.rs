@@ -45,6 +45,7 @@ impl MirroredPlayerState {
 pub struct Engine {
     apple: Arc<AppleService>,
     mirrored_player: Arc<RwLock<Option<MirroredPlayerState>>>,
+    mirrored_queue: Arc<RwLock<Queue>>,
     event_tx: broadcast::Sender<ClientEvent>,
 }
 
@@ -65,6 +66,7 @@ impl Engine {
     pub fn with_apple(apple: Arc<AppleService>) -> Self {
         let (event_tx, _) = broadcast::channel(128);
         let mirrored_player = Arc::new(RwLock::new(None));
+        let mirrored_queue = Arc::new(RwLock::new(Queue::new()));
 
         // Wire status events from Apple runtime directly into daemon
         let (status_tx, mut status_rx) = mpsc::unbounded_channel();
@@ -72,20 +74,37 @@ impl Engine {
 
         let event_tx_clone = event_tx.clone();
         let mirrored_clone = mirrored_player.clone();
+        let mirrored_queue_clone = mirrored_queue.clone();
+        let apple_clone = apple.clone();
 
         tokio::spawn(async move {
+            let mut last_track_id: Option<malus_model::MediaRef> = None;
             while let Some(status) = status_rx.recv().await {
+                let track_changed =
+                    status.current_track.as_ref().map(|t| &t.id) != last_track_id.as_ref();
+                if track_changed {
+                    last_track_id = status.current_track.as_ref().map(|t| t.id.clone());
+                }
+
                 {
                     let mut guard = mirrored_clone.write().await;
                     *guard = Some(MirroredPlayerState::new(status.clone()));
                 }
                 let _ = event_tx_clone.send(ClientEvent::StatusChanged(status));
+
+                // Natural track transitions: refresh queue so current_index is in sync
+                if track_changed && let Ok(queue) = apple_clone.get_queue().await {
+                    let mut q_guard = mirrored_queue_clone.write().await;
+                    *q_guard = queue.clone();
+                    let _ = event_tx_clone.send(ClientEvent::QueueChanged(queue));
+                }
             }
         });
 
         Self {
             apple,
             mirrored_player,
+            mirrored_queue,
             event_tx,
         }
     }
@@ -98,6 +117,11 @@ impl Engine {
     pub async fn update_mirrored_status(&self, status: PlayerStatus) {
         let mut guard = self.mirrored_player.write().await;
         *guard = Some(MirroredPlayerState::new(status));
+    }
+
+    pub async fn update_mirrored_queue(&self, queue: Queue) {
+        let mut guard = self.mirrored_queue.write().await;
+        *guard = queue;
     }
 
     /// Emit an event to all subscribed clients.
@@ -157,11 +181,42 @@ impl Engine {
                             self.update_mirrored_status(status.clone()).await;
                             self.emit(ClientEvent::StatusChanged(status));
                         }
+                        if let Ok(queue) = self.apple.get_queue().await {
+                            self.update_mirrored_queue(queue.clone()).await;
+                            self.emit(ClientEvent::QueueChanged(queue));
+                        }
                         ClientResponse::ActionResult(ActionResultWire::success())
                     }
                     Err(e) => ClientResponse::ActionResult(ActionResultWire::failed(e.to_string())),
                 },
-                _ => ClientResponse::ActionResult(ActionResultWire::success()),
+                PageActionWire::PlayNext(reference) => {
+                    match self.apple.play_next(&reference).await {
+                        Ok(()) => {
+                            if let Ok(queue) = self.apple.get_queue().await {
+                                self.update_mirrored_queue(queue.clone()).await;
+                                self.emit(ClientEvent::QueueChanged(queue));
+                            }
+                            ClientResponse::ActionResult(ActionResultWire::success())
+                        }
+                        Err(e) => {
+                            ClientResponse::ActionResult(ActionResultWire::failed(e.to_string()))
+                        }
+                    }
+                }
+                PageActionWire::PlayLater(reference) => {
+                    match self.apple.play_later(&reference).await {
+                        Ok(()) => {
+                            if let Ok(queue) = self.apple.get_queue().await {
+                                self.update_mirrored_queue(queue.clone()).await;
+                                self.emit(ClientEvent::QueueChanged(queue));
+                            }
+                            ClientResponse::ActionResult(ActionResultWire::success())
+                        }
+                        Err(e) => {
+                            ClientResponse::ActionResult(ActionResultWire::failed(e.to_string()))
+                        }
+                    }
+                }
             },
 
             ClientRequest::Search {
@@ -234,6 +289,7 @@ impl Engine {
                         self.emit(ClientEvent::StatusChanged(status));
                     }
                     if let Ok(queue) = self.apple.get_queue().await {
+                        self.update_mirrored_queue(queue.clone()).await;
                         self.emit(ClientEvent::QueueChanged(queue));
                     }
                     ClientResponse::Ok
@@ -290,8 +346,35 @@ impl Engine {
                 Err(e) => ClientResponse::err("STOP_FAILED", e.to_string()),
             },
 
-            ClientRequest::Next => ClientResponse::Ok,
-            ClientRequest::Previous => ClientResponse::Ok,
+            ClientRequest::Next => match self.apple.skip_to_next().await {
+                Ok(()) => {
+                    if let Ok(status) = self.apple.get_status().await {
+                        self.update_mirrored_status(status.clone()).await;
+                        self.emit(ClientEvent::StatusChanged(status));
+                    }
+                    if let Ok(queue) = self.apple.get_queue().await {
+                        self.update_mirrored_queue(queue.clone()).await;
+                        self.emit(ClientEvent::QueueChanged(queue));
+                    }
+                    ClientResponse::Ok
+                }
+                Err(e) => ClientResponse::err("NEXT_FAILED", e.to_string()),
+            },
+
+            ClientRequest::Previous => match self.apple.skip_to_previous().await {
+                Ok(()) => {
+                    if let Ok(status) = self.apple.get_status().await {
+                        self.update_mirrored_status(status.clone()).await;
+                        self.emit(ClientEvent::StatusChanged(status));
+                    }
+                    if let Ok(queue) = self.apple.get_queue().await {
+                        self.update_mirrored_queue(queue.clone()).await;
+                        self.emit(ClientEvent::QueueChanged(queue));
+                    }
+                    ClientResponse::Ok
+                }
+                Err(e) => ClientResponse::err("PREVIOUS_FAILED", e.to_string()),
+            },
 
             ClientRequest::Seek { position_ms } => match self.apple.seek(position_ms).await {
                 Ok(()) => {
@@ -337,15 +420,95 @@ impl Engine {
                 }
             }
 
-            ClientRequest::GetQueue => match self.apple.get_queue().await {
-                Ok(queue) => {
-                    self.emit(ClientEvent::QueueChanged(queue.clone()));
-                    ClientResponse::Queue(queue)
+            ClientRequest::GetQueue => {
+                let cached = self.mirrored_queue.read().await.clone();
+                if !cached.items.is_empty() {
+                    ClientResponse::Queue(cached)
+                } else {
+                    match self.apple.get_queue().await {
+                        Ok(queue) => {
+                            self.update_mirrored_queue(queue.clone()).await;
+                            self.emit(ClientEvent::QueueChanged(queue.clone()));
+                            ClientResponse::Queue(queue)
+                        }
+                        Err(e) => {
+                            info!("GetQueue failed: {e}");
+                            ClientResponse::Queue(Queue::new())
+                        }
+                    }
                 }
-                Err(e) => {
-                    info!("GetQueue failed: {e}");
-                    ClientResponse::Queue(Queue::new())
+            }
+
+            ClientRequest::PlayNext { reference } => match self.apple.play_next(&reference).await {
+                Ok(()) => {
+                    if let Ok(queue) = self.apple.get_queue().await {
+                        self.update_mirrored_queue(queue.clone()).await;
+                        self.emit(ClientEvent::QueueChanged(queue));
+                    }
+                    ClientResponse::Ok
                 }
+                Err(e) => ClientResponse::err("PLAY_NEXT_FAILED", e.to_string()),
+            },
+
+            ClientRequest::PlayLater { reference } => {
+                match self.apple.play_later(&reference).await {
+                    Ok(()) => {
+                        if let Ok(queue) = self.apple.get_queue().await {
+                            self.update_mirrored_queue(queue.clone()).await;
+                            self.emit(ClientEvent::QueueChanged(queue));
+                        }
+                        ClientResponse::Ok
+                    }
+                    Err(e) => ClientResponse::err("PLAY_LATER_FAILED", e.to_string()),
+                }
+            }
+
+            ClientRequest::QueueJump { index } => match self.apple.queue_jump(index).await {
+                Ok(()) => {
+                    if let Ok(status) = self.apple.get_status().await {
+                        self.update_mirrored_status(status.clone()).await;
+                        self.emit(ClientEvent::StatusChanged(status));
+                    }
+                    if let Ok(queue) = self.apple.get_queue().await {
+                        self.update_mirrored_queue(queue.clone()).await;
+                        self.emit(ClientEvent::QueueChanged(queue));
+                    }
+                    ClientResponse::Ok
+                }
+                Err(e) => ClientResponse::err("QUEUE_JUMP_FAILED", e.to_string()),
+            },
+
+            ClientRequest::QueueRemove { index } => match self.apple.queue_remove(index).await {
+                Ok(()) => {
+                    if let Ok(queue) = self.apple.get_queue().await {
+                        self.update_mirrored_queue(queue.clone()).await;
+                        self.emit(ClientEvent::QueueChanged(queue));
+                    }
+                    ClientResponse::Ok
+                }
+                Err(e) => ClientResponse::err("QUEUE_REMOVE_FAILED", e.to_string()),
+            },
+
+            ClientRequest::QueueMove { from, to } => match self.apple.queue_move(from, to).await {
+                Ok(()) => {
+                    if let Ok(queue) = self.apple.get_queue().await {
+                        self.update_mirrored_queue(queue.clone()).await;
+                        self.emit(ClientEvent::QueueChanged(queue));
+                    }
+                    ClientResponse::Ok
+                }
+                Err(e) => ClientResponse::err("QUEUE_MOVE_FAILED", e.to_string()),
+            },
+
+            ClientRequest::QueueClearUpcoming => match self.apple.queue_clear_upcoming().await {
+                Ok(()) => {
+                    if let Ok(queue) = self.apple.get_queue().await {
+                        self.update_mirrored_queue(queue.clone()).await;
+                        self.emit(ClientEvent::QueueChanged(queue));
+                    }
+                    ClientResponse::Ok
+                }
+                Err(e) => ClientResponse::err("QUEUE_CLEAR_UPCOMING_FAILED", e.to_string()),
             },
 
             ClientRequest::SubscribeEvents => ClientResponse::Ok,

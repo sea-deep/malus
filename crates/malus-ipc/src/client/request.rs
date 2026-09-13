@@ -59,6 +59,23 @@ pub enum ClientRequest {
         cursor: Option<String>,
     },
     GetQueue,
+    PlayNext {
+        reference: MediaRef,
+    },
+    PlayLater {
+        reference: MediaRef,
+    },
+    QueueJump {
+        index: usize,
+    },
+    QueueRemove {
+        index: usize,
+    },
+    QueueMove {
+        from: usize,
+        to: usize,
+    },
+    QueueClearUpcoming,
     GetAuthStatus,
     AuthBegin,
     AuthLogout,

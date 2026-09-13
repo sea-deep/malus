@@ -33,7 +33,11 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
             page_item.artwork = attrs.get("artwork").and_then(parse_apple_artwork);
             let mref = MediaRef::Song(id.to_string());
             page_item.entity = Some(mref.clone());
-            page_item.actions = vec![PageActionWire::Play(mref)];
+            page_item.actions = vec![
+                PageActionWire::Play(mref.clone()),
+                PageActionWire::PlayNext(mref.clone()),
+                PageActionWire::PlayLater(mref),
+            ];
             page_item.presentation_hint = Some("track-row".to_string());
 
             if let Some(dur) = attrs
@@ -72,7 +76,11 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
             let mref = MediaRef::Album(id.to_string());
             page_item.entity = Some(mref.clone());
             page_item.open_route = Some(PageRoute::Album(id.to_string()));
-            page_item.actions = vec![PageActionWire::Play(mref)];
+            page_item.actions = vec![
+                PageActionWire::Play(mref.clone()),
+                PageActionWire::PlayNext(mref.clone()),
+                PageActionWire::PlayLater(mref),
+            ];
             page_item.presentation_hint = Some("card".to_string());
 
             if attrs.get("contentRating").and_then(|r| r.as_str()) == Some("explicit") {
@@ -123,7 +131,11 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
             let mref = MediaRef::Playlist(id.to_string());
             page_item.entity = Some(mref.clone());
             page_item.open_route = Some(PageRoute::Playlist(id.to_string()));
-            page_item.actions = vec![PageActionWire::Play(mref)];
+            page_item.actions = vec![
+                PageActionWire::Play(mref.clone()),
+                PageActionWire::PlayNext(mref.clone()),
+                PageActionWire::PlayLater(mref),
+            ];
             page_item.presentation_hint = Some("card".to_string());
 
             Some(page_item)
@@ -281,9 +293,11 @@ mod tests {
         assert_eq!(item.entity, Some(MediaRef::Song("1440857781".to_string())));
         assert_eq!(
             item.actions,
-            vec![PageActionWire::Play(MediaRef::Song(
-                "1440857781".to_string()
-            ))]
+            vec![
+                PageActionWire::Play(MediaRef::Song("1440857781".to_string())),
+                PageActionWire::PlayNext(MediaRef::Song("1440857781".to_string())),
+                PageActionWire::PlayLater(MediaRef::Song("1440857781".to_string())),
+            ]
         );
         assert_eq!(item.badges.len(), 1);
         assert_eq!(item.badges[0].label, "E");
@@ -317,9 +331,11 @@ mod tests {
         );
         assert_eq!(
             item.actions,
-            vec![PageActionWire::Play(MediaRef::Album(
-                "1440857780".to_string()
-            ))]
+            vec![
+                PageActionWire::Play(MediaRef::Album("1440857780".to_string())),
+                PageActionWire::PlayNext(MediaRef::Album("1440857780".to_string())),
+                PageActionWire::PlayLater(MediaRef::Album("1440857780".to_string())),
+            ]
         );
     }
 }

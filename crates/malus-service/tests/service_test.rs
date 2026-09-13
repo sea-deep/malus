@@ -71,9 +71,18 @@ struct MockAppleWebSession {
     begin_result: Mutex<Result<AuthState, AppleError>>,
     logout_called: Mutex<bool>,
     last_played_track: Mutex<Option<String>>,
+    last_played_kind: Mutex<Option<String>>,
     is_paused: Mutex<bool>,
     is_stopped: Mutex<bool>,
     last_seek_ms: Mutex<Option<u64>>,
+    last_play_next: Mutex<Option<(String, String)>>,
+    last_play_later: Mutex<Option<(String, String)>>,
+    last_jump_idx: Mutex<Option<usize>>,
+    last_remove_idx: Mutex<Option<usize>>,
+    last_move: Mutex<Option<(usize, usize)>>,
+    clear_upcoming_called: Mutex<bool>,
+    skip_next_called: Mutex<bool>,
+    skip_prev_called: Mutex<bool>,
     event_sink: Mutex<Option<mpsc::UnboundedSender<PlayerStatus>>>,
 }
 
@@ -84,9 +93,18 @@ impl MockAppleWebSession {
             begin_result: Mutex::new(Ok(AuthState::Authenticated)),
             logout_called: Mutex::new(false),
             last_played_track: Mutex::new(None),
+            last_played_kind: Mutex::new(None),
             is_paused: Mutex::new(false),
             is_stopped: Mutex::new(true),
             last_seek_ms: Mutex::new(None),
+            last_play_next: Mutex::new(None),
+            last_play_later: Mutex::new(None),
+            last_jump_idx: Mutex::new(None),
+            last_remove_idx: Mutex::new(None),
+            last_move: Mutex::new(None),
+            clear_upcoming_called: Mutex::new(false),
+            skip_next_called: Mutex::new(false),
+            skip_prev_called: Mutex::new(false),
             event_sink: Mutex::new(None),
         }
     }
@@ -129,6 +147,7 @@ impl AppleWebSession for MockAppleWebSession {
 
     async fn set_queue(&self, kind: &str, id: &str) -> Result<(), AppleError> {
         *self.last_played_track.lock().await = Some(id.to_string());
+        *self.last_played_kind.lock().await = Some(kind.to_string());
         *self.is_stopped.lock().await = false;
         *self.is_paused.lock().await = false;
 
@@ -212,6 +231,46 @@ impl AppleWebSession for MockAppleWebSession {
             }
             None => Ok(Queue::new()),
         }
+    }
+
+    async fn skip_to_next(&self) -> Result<(), AppleError> {
+        *self.skip_next_called.lock().await = true;
+        Ok(())
+    }
+
+    async fn skip_to_previous(&self) -> Result<(), AppleError> {
+        *self.skip_prev_called.lock().await = true;
+        Ok(())
+    }
+
+    async fn play_next(&self, kind: &str, id: &str) -> Result<(), AppleError> {
+        *self.last_play_next.lock().await = Some((kind.to_string(), id.to_string()));
+        Ok(())
+    }
+
+    async fn play_later(&self, kind: &str, id: &str) -> Result<(), AppleError> {
+        *self.last_play_later.lock().await = Some((kind.to_string(), id.to_string()));
+        Ok(())
+    }
+
+    async fn queue_jump(&self, index: usize) -> Result<(), AppleError> {
+        *self.last_jump_idx.lock().await = Some(index);
+        Ok(())
+    }
+
+    async fn queue_remove(&self, index: usize) -> Result<(), AppleError> {
+        *self.last_remove_idx.lock().await = Some(index);
+        Ok(())
+    }
+
+    async fn queue_move(&self, from: usize, to: usize) -> Result<(), AppleError> {
+        *self.last_move.lock().await = Some((from, to));
+        Ok(())
+    }
+
+    async fn queue_clear_upcoming(&self) -> Result<(), AppleError> {
+        *self.clear_upcoming_called.lock().await = true;
+        Ok(())
     }
 
     fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlayerStatus>) {
@@ -373,6 +432,106 @@ async fn test_playback_controls_forwarding() {
 
     service.stop().await.unwrap();
     assert!(*mock.is_stopped.lock().await);
+}
+
+#[tokio::test]
+async fn test_playback_all_media_kinds() {
+    let mock = Arc::new(MockAppleWebSession::new());
+    let service = AppleService::with_session(mock.clone());
+
+    // 1. Song
+    service
+        .play(&MediaRef::Song("123".to_string()))
+        .await
+        .unwrap();
+    assert_eq!(mock.last_played_kind.lock().await.as_deref(), Some("song"));
+    assert_eq!(mock.last_played_track.lock().await.as_deref(), Some("123"));
+
+    // 2. Album
+    service
+        .play(&MediaRef::Album("456".to_string()))
+        .await
+        .unwrap();
+    assert_eq!(mock.last_played_kind.lock().await.as_deref(), Some("album"));
+    assert_eq!(mock.last_played_track.lock().await.as_deref(), Some("456"));
+
+    // 3. Playlist
+    service
+        .play(&MediaRef::Playlist("pl.789".to_string()))
+        .await
+        .unwrap();
+    assert_eq!(
+        mock.last_played_kind.lock().await.as_deref(),
+        Some("playlist")
+    );
+    assert_eq!(
+        mock.last_played_track.lock().await.as_deref(),
+        Some("pl.789")
+    );
+
+    // 4. Station
+    service
+        .play(&MediaRef::Station("ra.101".to_string()))
+        .await
+        .unwrap();
+    assert_eq!(
+        mock.last_played_kind.lock().await.as_deref(),
+        Some("station")
+    );
+    assert_eq!(
+        mock.last_played_track.lock().await.as_deref(),
+        Some("ra.101")
+    );
+}
+
+#[tokio::test]
+async fn test_queue_mutations_forwarding() {
+    let mock = Arc::new(MockAppleWebSession::new());
+    let service = AppleService::with_session(mock.clone());
+
+    // Play next
+    service
+        .play_next(&MediaRef::Song("111".to_string()))
+        .await
+        .unwrap();
+    assert_eq!(
+        mock.last_play_next.lock().await.clone(),
+        Some(("song".to_string(), "111".to_string()))
+    );
+
+    // Play later
+    service
+        .play_later(&MediaRef::Album("222".to_string()))
+        .await
+        .unwrap();
+    assert_eq!(
+        mock.last_play_later.lock().await.clone(),
+        Some(("album".to_string(), "222".to_string()))
+    );
+
+    // Jump
+    service.queue_jump(5).await.unwrap();
+    assert_eq!(*mock.last_jump_idx.lock().await, Some(5));
+
+    // Remove
+    service.queue_remove(3).await.unwrap();
+    assert_eq!(*mock.last_remove_idx.lock().await, Some(3));
+
+    // Move
+    service.queue_move(1, 4).await.unwrap();
+    assert_eq!(*mock.last_move.lock().await, Some((1, 4)));
+
+    // Clear upcoming
+    service.queue_clear_upcoming().await.unwrap();
+    assert!(*mock.clear_upcoming_called.lock().await);
+
+    // Skip next
+    service.skip_to_next().await.unwrap();
+    assert!(*mock.skip_next_called.lock().await);
+
+    // Skip previous
+    service.skip_to_previous().await.unwrap();
+    assert!(*mock.skip_prev_called.lock().await);
 }
 
 #[tokio::test]

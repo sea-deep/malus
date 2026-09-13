@@ -184,6 +184,52 @@ impl AppleService {
         self.session.seek(position_ms).await
     }
 
+    /// Skip to next track.
+    pub async fn skip_to_next(&self) -> Result<(), AppleError> {
+        self.session.skip_to_next().await
+    }
+
+    /// Skip to previous track.
+    pub async fn skip_to_previous(&self) -> Result<(), AppleError> {
+        self.session.skip_to_previous().await
+    }
+
+    /// Insert a media item to play next in the queue.
+    pub async fn play_next(&self, reference: &MediaRef) -> Result<(), AppleError> {
+        info!("Apple Music play next: {reference}");
+        self.session
+            .play_next(reference.kind(), reference.id())
+            .await
+    }
+
+    /// Append a media item to the end of the queue.
+    pub async fn play_later(&self, reference: &MediaRef) -> Result<(), AppleError> {
+        info!("Apple Music play later: {reference}");
+        self.session
+            .play_later(reference.kind(), reference.id())
+            .await
+    }
+
+    /// Jump to a specific queue index.
+    pub async fn queue_jump(&self, index: usize) -> Result<(), AppleError> {
+        self.session.queue_jump(index).await
+    }
+
+    /// Remove item at index from queue.
+    pub async fn queue_remove(&self, index: usize) -> Result<(), AppleError> {
+        self.session.queue_remove(index).await
+    }
+
+    /// Move a queue item.
+    pub async fn queue_move(&self, from: usize, to: usize) -> Result<(), AppleError> {
+        self.session.queue_move(from, to).await
+    }
+
+    /// Clear all upcoming items in the queue.
+    pub async fn queue_clear_upcoming(&self) -> Result<(), AppleError> {
+        self.session.queue_clear_upcoming().await
+    }
+
     /// Get current player status from MusicKit runtime.
     pub async fn get_status(&self) -> Result<PlayerStatus, AppleError> {
         self.session.get_status().await

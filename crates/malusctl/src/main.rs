@@ -9,7 +9,7 @@ use malus_ipc::{
         SearchKindWire, SearchResultsWire,
     },
 };
-use malus_model::{MediaRef, PageRoute};
+use malus_model::{MediaRef, PageRoute, Queue};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -73,6 +73,40 @@ enum LibraryCommands {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum QueueCommands {
+    /// Add media to play next in queue
+    Next {
+        #[arg(help = "Media ID (e.g. song:123456, album:7890)")]
+        media_id: String,
+    },
+    /// Add media to play later in queue
+    Later {
+        #[arg(help = "Media ID (e.g. song:123456, album:7890)")]
+        media_id: String,
+    },
+    /// Jump to a specific queue index
+    Jump {
+        #[arg(help = "Target queue index (0-based)")]
+        index: usize,
+    },
+    /// Remove an item at the specified index from the queue
+    Remove {
+        #[arg(help = "Queue index to remove (0-based)")]
+        index: usize,
+    },
+    /// Move a queue item from one index to another
+    Move {
+        #[arg(help = "Source queue index (0-based)")]
+        from: usize,
+        #[arg(help = "Destination queue index (0-based)")]
+        to: usize,
+    },
+    /// Clear all upcoming items in the queue (preserving current)
+    #[command(name = "clear-upcoming")]
+    ClearUpcoming,
 }
 
 #[derive(Subcommand)]
@@ -143,8 +177,15 @@ enum Commands {
         json: bool,
     },
 
-    /// Display the current playback queue
-    Queue,
+    /// Display or manipulate the playback queue
+    Queue {
+        #[command(subcommand)]
+        action: Option<QueueCommands>,
+
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Search Apple Music audio catalog
     Search {
@@ -443,33 +484,119 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 other => print_response(&other),
             }
         }
-        Commands::Queue => {
-            let resp = client.send(&ClientRequest::GetQueue).await?;
-            match resp {
-                ClientResponse::Queue(q) => {
-                    if q.items.is_empty() {
-                        println!("Queue is empty.");
-                    } else {
-                        for (idx, track) in q.items.iter().enumerate() {
-                            let marker = if q.current_index == Some(idx) {
-                                ">"
-                            } else {
-                                " "
-                            };
-                            println!(
-                                "{} {:2}. [{}] {} - {}",
-                                marker,
-                                idx + 1,
-                                track.id,
-                                track.title,
-                                track.artist_display()
-                            );
+        Commands::Queue { action, json } => match action {
+            None => {
+                let resp = client.send(&ClientRequest::GetQueue).await?;
+                match resp {
+                    ClientResponse::Queue(q) => {
+                        display_queue(&q, json)?;
+                    }
+                    other => print_response(&other),
+                }
+            }
+            Some(QueueCommands::Next { media_id }) => {
+                let mref = MediaRef::parse(&media_id)?;
+                let resp = client
+                    .send(&ClientRequest::PlayNext { reference: mref })
+                    .await?;
+                match resp {
+                    ClientResponse::Ok => {
+                        let q_resp = client.send(&ClientRequest::GetQueue).await?;
+                        if let ClientResponse::Queue(q) = q_resp {
+                            display_queue(&q, json)?;
+                        } else if json {
+                            println!("{{\"status\":\"ok\"}}");
+                        } else {
+                            println!("Item queued to play next.");
                         }
                     }
+                    other => print_response(&other),
                 }
-                other => print_response(&other),
             }
-        }
+            Some(QueueCommands::Later { media_id }) => {
+                let mref = MediaRef::parse(&media_id)?;
+                let resp = client
+                    .send(&ClientRequest::PlayLater { reference: mref })
+                    .await?;
+                match resp {
+                    ClientResponse::Ok => {
+                        let q_resp = client.send(&ClientRequest::GetQueue).await?;
+                        if let ClientResponse::Queue(q) = q_resp {
+                            display_queue(&q, json)?;
+                        } else if json {
+                            println!("{{\"status\":\"ok\"}}");
+                        } else {
+                            println!("Item queued to play later.");
+                        }
+                    }
+                    other => print_response(&other),
+                }
+            }
+            Some(QueueCommands::Jump { index }) => {
+                let resp = client.send(&ClientRequest::QueueJump { index }).await?;
+                match resp {
+                    ClientResponse::Ok => {
+                        let q_resp = client.send(&ClientRequest::GetQueue).await?;
+                        if let ClientResponse::Queue(q) = q_resp {
+                            display_queue(&q, json)?;
+                        } else if json {
+                            println!("{{\"status\":\"ok\"}}");
+                        } else {
+                            println!("Jumped to queue index {index}.");
+                        }
+                    }
+                    other => print_response(&other),
+                }
+            }
+            Some(QueueCommands::Remove { index }) => {
+                let resp = client.send(&ClientRequest::QueueRemove { index }).await?;
+                match resp {
+                    ClientResponse::Ok => {
+                        let q_resp = client.send(&ClientRequest::GetQueue).await?;
+                        if let ClientResponse::Queue(q) = q_resp {
+                            display_queue(&q, json)?;
+                        } else if json {
+                            println!("{{\"status\":\"ok\"}}");
+                        } else {
+                            println!("Removed item at index {index}.");
+                        }
+                    }
+                    other => print_response(&other),
+                }
+            }
+            Some(QueueCommands::Move { from, to }) => {
+                let resp = client.send(&ClientRequest::QueueMove { from, to }).await?;
+                match resp {
+                    ClientResponse::Ok => {
+                        let q_resp = client.send(&ClientRequest::GetQueue).await?;
+                        if let ClientResponse::Queue(q) = q_resp {
+                            display_queue(&q, json)?;
+                        } else if json {
+                            println!("{{\"status\":\"ok\"}}");
+                        } else {
+                            println!("Moved item from index {from} to {to}.");
+                        }
+                    }
+                    other => print_response(&other),
+                }
+            }
+            Some(QueueCommands::ClearUpcoming) => {
+                let resp = client.send(&ClientRequest::QueueClearUpcoming).await?;
+                match resp {
+                    ClientResponse::Ok => {
+                        let q_resp = client.send(&ClientRequest::GetQueue).await?;
+                        if let ClientResponse::Queue(q) = q_resp {
+                            display_queue(&q, json)?;
+                        } else if json {
+                            println!("{{\"status\":\"ok\"}}");
+                        } else {
+                            println!("Cleared upcoming queue items.");
+                        }
+                    }
+                    other => print_response(&other),
+                }
+            }
+        },
         Commands::Search {
             query,
             r#type,
@@ -724,6 +851,30 @@ fn format_duration_ms(ms: Option<u64>) -> String {
         }
         None => "--:--".to_string(),
     }
+}
+
+fn display_queue(queue: &Queue, json: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(queue)?);
+        return Ok(());
+    }
+
+    if queue.items.is_empty() {
+        println!("Queue is empty.");
+        return Ok(());
+    }
+
+    println!("Queue\n");
+    for (idx, track) in queue.items.iter().enumerate() {
+        let marker = if queue.current_index == Some(idx) {
+            ">"
+        } else {
+            " "
+        };
+        let artist = track.artist_display();
+        println!("{marker} {:2}  {:<26} {:<24}", idx, track.title, artist);
+    }
+    Ok(())
 }
 
 fn display_navigation(nav: &NavigationWire) {

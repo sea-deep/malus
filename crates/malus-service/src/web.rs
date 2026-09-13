@@ -38,9 +38,6 @@ pub trait AppleWebSession: Send + Sync {
     async fn shutdown(&self) -> Result<(), AppleError>;
 
     /// Set MusicKit queue to a media item and begin playback.
-    ///
-    /// `kind` is the MusicKit media kind: `"song"`, `"album"`, `"playlist"`, `"station"`.
-    /// `id` is the Apple Music catalog or library ID.
     async fn set_queue(&self, kind: &str, id: &str) -> Result<(), AppleError>;
 
     /// Pause current playback.
@@ -55,11 +52,35 @@ pub trait AppleWebSession: Send + Sync {
     /// Seek to a specific position in milliseconds.
     async fn seek(&self, position_ms: u64) -> Result<(), AppleError>;
 
+    /// Skip to next track in queue.
+    async fn skip_to_next(&self) -> Result<(), AppleError>;
+
+    /// Skip to previous track in queue.
+    async fn skip_to_previous(&self) -> Result<(), AppleError>;
+
     /// Query current playback status directly from MusicKit.
     async fn get_status(&self) -> Result<PlayerStatus, AppleError>;
 
     /// Read the authoritative queue snapshot from MusicKit.
     async fn get_queue(&self) -> Result<Queue, AppleError>;
+
+    /// Insert a media item to play next in the queue.
+    async fn play_next(&self, kind: &str, id: &str) -> Result<(), AppleError>;
+
+    /// Append a media item to the end of the queue.
+    async fn play_later(&self, kind: &str, id: &str) -> Result<(), AppleError>;
+
+    /// Jump to a specific index in the queue.
+    async fn queue_jump(&self, index: usize) -> Result<(), AppleError>;
+
+    /// Remove an item at the specified index from the queue.
+    async fn queue_remove(&self, index: usize) -> Result<(), AppleError>;
+
+    /// Move a queue item from one index to another.
+    async fn queue_move(&self, from: usize, to: usize) -> Result<(), AppleError>;
+
+    /// Clear all upcoming items in the queue (preserve current).
+    async fn queue_clear_upcoming(&self) -> Result<(), AppleError>;
 
     /// Register a sink for streaming unsolicited player events.
     fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlayerStatus>);
@@ -377,7 +398,12 @@ fn build_inject_playback_bridge_script() -> String {
                             id: String(item.id || a?.playParams?.id || ""),
                             title: String(a?.name || item.title || ""),
                             artist: String(a?.artistName || item.artistName || ""),
-                            album: String(a?.albumName || item.albumName || "")
+                            album: String(a?.albumName || item.albumName || ""),
+                            artwork: (a?.artwork || item.artwork) ? {{
+                                url: (a?.artwork || item.artwork).url,
+                                width: (a?.artwork || item.artwork).width,
+                                height: (a?.artwork || item.artwork).height
+                            }} : null
                         }} : null
                     }};
                     const json = JSON.stringify(payload);
@@ -397,6 +423,8 @@ fn build_inject_playback_bridge_script() -> String {
                 mk.addEventListener("nowPlayingItemDidChange", notify);
                 mk.addEventListener("playbackVolumeDidChange", notify);
                 mk.addEventListener("playbackTimeDidChange", notify);
+                mk.addEventListener("queueItemsDidChange", notify);
+                mk.addEventListener("queuePositionDidChange", notify);
             }}
             setInterval(notify, 500);
             notify();
@@ -690,6 +718,11 @@ fn parse_player_status(payload: &Value) -> Option<PlayerStatus> {
             && !alb.is_empty()
         {
             track = track.with_album(alb);
+        }
+        if let Some(art_val) = t.get("artwork")
+            && let Some(artwork) = parse_apple_artwork(art_val)
+        {
+            track = track.with_artwork(artwork);
         }
         if duration_ms > 0 {
             track = track.with_duration_ms(duration_ms);
@@ -1331,6 +1364,7 @@ impl AppleWebSession for ProductionAppleWebSession {
                 }
                 const items = q.items.map(item => {
                     const a = item.attributes || item;
+                    const art = a?.artwork || item.artwork;
                     return {
                         id: String(item.id || a?.playParams?.id || ""),
                         title: String(a?.name || item.title || ""),
@@ -1338,7 +1372,12 @@ impl AppleWebSession for ProductionAppleWebSession {
                         album: String(a?.albumName || item.albumName || ""),
                         durationMs: a?.durationInMillis || Math.round((item.playbackDuration || 0) * 1000),
                         trackNumber: a?.trackNumber || 0,
-                        discNumber: a?.discNumber || 0
+                        discNumber: a?.discNumber || 0,
+                        artwork: art ? {
+                            url: art.url,
+                            width: art.width,
+                            height: art.height
+                        } : null
                     };
                 });
                 // MusicKit v3: queue.position is the current index
@@ -1376,6 +1415,11 @@ impl AppleWebSession for ProductionAppleWebSession {
                 {
                     track = track.with_album(alb);
                 }
+                if let Some(art_val) = item.get("artwork")
+                    && let Some(artwork) = parse_apple_artwork(art_val)
+                {
+                    track = track.with_artwork(artwork);
+                }
                 if let Some(dur) = item["durationMs"].as_u64()
                     && dur > 0
                 {
@@ -1396,6 +1440,173 @@ impl AppleWebSession for ProductionAppleWebSession {
         }
 
         Ok(Queue::with_items(tracks, current_index))
+    }
+
+    async fn play_next(&self, kind: &str, id: &str) -> Result<(), AppleError> {
+        let page = self.ensure_playback_session().await?;
+        let func = r#"
+            async function(kind, itemId) {
+                const mk = window.MusicKit && window.MusicKit.getInstance();
+                if (!mk) throw new Error("MusicKit instance not available");
+                let descriptor = {};
+                descriptor[kind] = itemId;
+                await mk.playNext(descriptor);
+            }
+        "#;
+        page.call_function(
+            func,
+            &[
+                Value::String(kind.to_string()),
+                Value::String(id.to_string()),
+            ],
+        )
+        .await
+        .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn play_later(&self, kind: &str, id: &str) -> Result<(), AppleError> {
+        let page = self.ensure_playback_session().await?;
+        let func = r#"
+            async function(kind, itemId) {
+                const mk = window.MusicKit && window.MusicKit.getInstance();
+                if (!mk) throw new Error("MusicKit instance not available");
+                let descriptor = {};
+                descriptor[kind] = itemId;
+                await mk.playLater(descriptor);
+            }
+        "#;
+        page.call_function(
+            func,
+            &[
+                Value::String(kind.to_string()),
+                Value::String(id.to_string()),
+            ],
+        )
+        .await
+        .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn queue_jump(&self, index: usize) -> Result<(), AppleError> {
+        let page = self.ensure_playback_session().await?;
+        let func = r#"
+            async function(idx) {
+                const mk = window.MusicKit && window.MusicKit.getInstance();
+                if (!mk) throw new Error("MusicKit instance not available");
+                const q = mk.queue;
+                if (!q || idx < 0 || idx >= q.items.length) {
+                    throw new Error("Queue index out of bounds: " + idx);
+                }
+                await mk.changeToMediaAtIndex(idx);
+                if (window.__malusPlaybackNotify) {
+                    window.__malusPlaybackNotify();
+                }
+            }
+        "#;
+        page.call_function(func, &[serde_json::json!(index)])
+            .await
+            .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn queue_remove(&self, index: usize) -> Result<(), AppleError> {
+        let page = self.ensure_playback_session().await?;
+        let func = r#"
+            async function(idx) {
+                const mk = window.MusicKit && window.MusicKit.getInstance();
+                if (!mk) throw new Error("MusicKit instance not available");
+                const q = mk.queue;
+                if (!q || idx < 0 || idx >= q.items.length) {
+                    throw new Error("Queue index out of bounds: " + idx);
+                }
+                q.splice(idx, 1);
+            }
+        "#;
+        page.call_function(func, &[serde_json::json!(index)])
+            .await
+            .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn queue_move(&self, from: usize, to: usize) -> Result<(), AppleError> {
+        let page = self.ensure_playback_session().await?;
+        let func = r#"
+            async function(fromIdx, toIdx) {
+                const mk = window.MusicKit && window.MusicKit.getInstance();
+                if (!mk) throw new Error("MusicKit instance not available");
+                const q = mk.queue;
+                if (!q) throw new Error("No active queue");
+                const len = q.items.length;
+                if (fromIdx < 0 || fromIdx >= len || toIdx < 0 || toIdx >= len) {
+                    throw new Error("Queue index out of bounds: from=" + fromIdx + " to=" + toIdx);
+                }
+                const item = q.items[fromIdx];
+                q.splice(fromIdx, 1);
+                q.splice(toIdx, 0, [item]);
+            }
+        "#;
+        page.call_function(func, &[serde_json::json!(from), serde_json::json!(to)])
+            .await
+            .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn queue_clear_upcoming(&self) -> Result<(), AppleError> {
+        let page = self.ensure_playback_session().await?;
+        let func = r#"
+            async function() {
+                const mk = window.MusicKit && window.MusicKit.getInstance();
+                if (!mk) throw new Error("MusicKit instance not available");
+                const q = mk.queue;
+                if (!q || q.items.length === 0) return;
+                const pos = typeof q.position === "number" ? q.position : 0;
+                // Remove everything after the current position
+                if (pos + 1 < q.items.length) {
+                    q.splice(pos + 1, q.items.length - pos - 1);
+                }
+            }
+        "#;
+        page.call_function(func, &[])
+            .await
+            .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn skip_to_next(&self) -> Result<(), AppleError> {
+        let page = self.ensure_playback_session().await?;
+        let func = r#"
+            async function() {
+                const mk = window.MusicKit && window.MusicKit.getInstance();
+                if (!mk) throw new Error("MusicKit instance not available");
+                await mk.skipToNextItem();
+                if (window.__malusPlaybackNotify) {
+                    window.__malusPlaybackNotify();
+                }
+            }
+        "#;
+        page.call_function(func, &[])
+            .await
+            .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn skip_to_previous(&self) -> Result<(), AppleError> {
+        let page = self.ensure_playback_session().await?;
+        let func = r#"
+            async function() {
+                const mk = window.MusicKit && window.MusicKit.getInstance();
+                if (!mk) throw new Error("MusicKit instance not available");
+                await mk.skipToPreviousItem();
+                if (window.__malusPlaybackNotify) {
+                    window.__malusPlaybackNotify();
+                }
+            }
+        "#;
+        page.call_function(func, &[])
+            .await
+            .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
+        Ok(())
     }
 
     fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlayerStatus>) {

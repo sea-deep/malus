@@ -403,6 +403,58 @@ impl MalusClient {
         }
     }
 
+    pub async fn play_next(&self, reference: &MediaRef) -> Result<(), ClientError> {
+        match self
+            .send(&ClientRequest::PlayNext {
+                reference: reference.clone(),
+            })
+            .await?
+        {
+            ClientResponse::Ok => Ok(()),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn play_later(&self, reference: &MediaRef) -> Result<(), ClientError> {
+        match self
+            .send(&ClientRequest::PlayLater {
+                reference: reference.clone(),
+            })
+            .await?
+        {
+            ClientResponse::Ok => Ok(()),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn queue_jump(&self, index: usize) -> Result<(), ClientError> {
+        match self.send(&ClientRequest::QueueJump { index }).await? {
+            ClientResponse::Ok => Ok(()),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn queue_remove(&self, index: usize) -> Result<(), ClientError> {
+        match self.send(&ClientRequest::QueueRemove { index }).await? {
+            ClientResponse::Ok => Ok(()),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn queue_move(&self, from: usize, to: usize) -> Result<(), ClientError> {
+        match self.send(&ClientRequest::QueueMove { from, to }).await? {
+            ClientResponse::Ok => Ok(()),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn queue_clear_upcoming(&self) -> Result<(), ClientError> {
+        match self.send(&ClientRequest::QueueClearUpcoming).await? {
+            ClientResponse::Ok => Ok(()),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
     pub async fn get_navigation(&self) -> Result<NavigationWire, ClientError> {
         match self.send(&ClientRequest::GetNavigation).await? {
             ClientResponse::Navigation(nav) => Ok(nav),

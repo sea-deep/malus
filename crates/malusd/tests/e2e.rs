@@ -147,3 +147,38 @@ async fn test_daemon_events_subscription() {
 
     drop(rx);
 }
+
+#[tokio::test]
+async fn test_daemon_multi_client_consistency_and_lifetime() {
+    let server = TestServer::start().await;
+
+    // Client A connects
+    let client_a = MalusClient::connect(&server.sock_path).await.unwrap();
+
+    // Verify initial queue
+    let queue_a = client_a.get_queue().await.unwrap();
+    assert!(queue_a.items.is_empty());
+
+    // Client B connects to the same running daemon
+    let client_b = MalusClient::connect(&server.sock_path).await.unwrap();
+
+    // Client B observes same initial status and queue
+    let status_b = client_b.get_status().await.unwrap();
+    assert_eq!(status_b.state, PlaybackState::Stopped);
+    let queue_b = client_b.get_queue().await.unwrap();
+    assert_eq!(queue_a, queue_b);
+
+    // Frontend-lifetime independence: Client A disconnects and exits
+    drop(client_a);
+
+    // Daemon is still running, Client B can still query state
+    let status_b2 = client_b.get_status().await.unwrap();
+    assert_eq!(status_b2.state, PlaybackState::Stopped);
+
+    // Client C connects anew
+    let client_c = MalusClient::connect(&server.sock_path).await.unwrap();
+    let status_c = client_c.get_status().await.unwrap();
+    assert_eq!(status_c.state, PlaybackState::Stopped);
+    let queue_c = client_c.get_queue().await.unwrap();
+    assert_eq!(queue_c.items.len(), 0);
+}
