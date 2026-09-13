@@ -1,6 +1,8 @@
 //! Client RPC request types sent by CLI / TUI / GUI frontends to `malusd` over IPC.
 
-use crate::wire::{ActionRequestV0, LibraryKindWire, RepeatModeWire, SearchKindWire, TrackWire};
+use crate::wire::{
+    ActionRequestV0, LibraryKindWire, RepeatModeWire, SearchKindWire, SurfaceCursorWire, TrackWire,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +78,22 @@ pub enum ClientRequest {
     },
     AuthLogout {
         provider: String,
+    },
+    GetProviderSurfaceManifest {
+        provider: String,
+    },
+    GetSurface {
+        provider: String,
+        surface_id: String,
+    },
+    ContinueSurface {
+        provider: String,
+        surface_id: String,
+        cursor: SurfaceCursorWire,
+    },
+    InvokeSurfaceAction {
+        provider: String,
+        invocation_token: String,
     },
     Action(ActionRequestV0),
     SubscribeEvents,

@@ -4,14 +4,12 @@ use async_trait::async_trait;
 use malus_protocol::{
     PlaybackStateWire, PlayerStatusWire, RepeatModeWire,
     provider::ProviderEvent,
-    wire::{
-        AlbumWire, ArtistWire, AuthStateWire, CatalogItemWire, LibraryKindWire, LibraryPageWire,
-        PageWire, PlaylistWire, SearchKindWire, SearchResultsWire, TrackWire,
-    },
+    wire::{AuthStateWire, CatalogItemWire, LibraryKindWire, LibraryPageWire, TrackWire},
 };
 use malus_provider_apple::{
-    AppleError, AppleProvider, AppleWebSession, AuthState, parse_apple_album, parse_apple_artist,
-    parse_apple_artwork, parse_apple_playlist, parse_apple_track,
+    AppleCredentials, AppleError, AppleProvider, AppleWebSession, AuthState, OfficialAppleMusicApi,
+    StaticTokenProvider, parse_apple_album, parse_apple_artist, parse_apple_artwork,
+    parse_apple_playlist, parse_apple_track,
 };
 use malus_provider_sdk::{
     Provider,
@@ -20,7 +18,51 @@ use malus_provider_sdk::{
         LIBRARY_ALBUMS, LIBRARY_PLAYLISTS, LIBRARY_TRACKS, PLAYBACK, PLAYBACK_SEEK, SEARCH,
     },
 };
-use tokio::sync::{Mutex, mpsc};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+    sync::{Mutex, mpsc},
+};
+
+async fn spawn_mock_apple_api(
+    responses: Vec<(u16, serde_json::Value)>,
+) -> (String, tokio::sync::oneshot::Sender<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (tx, mut rx) = tokio::sync::oneshot::channel::<()>();
+    let responses = Arc::new(tokio::sync::Mutex::new(responses));
+
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = &mut rx => break,
+                accept_res = listener.accept() => {
+                    let (mut stream, _) = match accept_res {
+                        Ok(p) => p,
+                        Err(_) => break,
+                    };
+                    let resps = responses.clone();
+                    tokio::spawn(async move {
+                        let mut buf = vec![0u8; 4096];
+                        let _ = stream.read(&mut buf).await;
+                        let (status, val) = {
+                            let mut g = resps.lock().await;
+                            if !g.is_empty() { g.remove(0) } else { (200, serde_json::json!({})) }
+                        };
+                        let body = val.to_string();
+                        let resp_str = format!(
+                            "HTTP/1.1 {} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            status, body.len(), body
+                        );
+                        let _ = stream.write_all(resp_str.as_bytes()).await;
+                    });
+                }
+            }
+        }
+    });
+
+    (format!("http://{addr}"), tx)
+}
 
 struct MockAppleWebSession {
     probe_result: Mutex<Result<AuthState, AppleError>>,
@@ -80,6 +122,14 @@ impl AppleWebSession for MockAppleWebSession {
                 _ => AppleError::AuthTimeout,
             }),
         }
+    }
+
+    async fn refresh_tokens(&self) -> Result<malus_provider_apple::AppleCredentials, AppleError> {
+        Ok(malus_provider_apple::AppleCredentials::new(
+            "mock-dev",
+            "mock-user",
+            "us",
+        ))
     }
 
     async fn logout(&self) -> Result<(), AppleError> {
@@ -177,111 +227,6 @@ impl AppleWebSession for MockAppleWebSession {
     fn set_event_sink(&self, sink: mpsc::UnboundedSender<ProviderEvent>) {
         if let Ok(mut guard) = self.event_sink.try_lock() {
             *guard = Some(sink);
-        }
-    }
-
-    async fn search(
-        &self,
-        query: &str,
-        _kinds: &[SearchKindWire],
-        _limit: usize,
-        _cursor: Option<&str>,
-    ) -> Result<SearchResultsWire, AppleError> {
-        let track = TrackWire::new("apple:track:123", format!("{query} Song"), "Test Artist");
-        let album = AlbumWire {
-            id: "apple:album:456".into(),
-            title: format!("{query} Album"),
-            artists: vec![],
-            track_count: Some(10),
-            release_date: None,
-            artwork: None,
-        };
-        Ok(SearchResultsWire {
-            tracks: Some(PageWire::new(vec![track], None)),
-            albums: Some(PageWire::new(vec![album], None)),
-            artists: None,
-            playlists: None,
-        })
-    }
-
-    async fn get_catalog_item(&self, media_id: &str) -> Result<CatalogItemWire, AppleError> {
-        let mid = malus_protocol::MediaIdWire::parse(media_id)
-            .map_err(|e| AppleError::Internal(e.to_string()))?;
-        match mid.kind() {
-            "track" => Ok(CatalogItemWire::Track(TrackWire::new(
-                media_id,
-                "Mock Track",
-                "Mock Artist",
-            ))),
-            "album" => Ok(CatalogItemWire::Album(AlbumWire {
-                id: media_id.to_string(),
-                title: "Mock Album".into(),
-                artists: vec![],
-                track_count: Some(12),
-                release_date: None,
-                artwork: None,
-            })),
-            "artist" => Ok(CatalogItemWire::Artist(ArtistWire {
-                id: media_id.to_string(),
-                name: "Mock Artist".into(),
-                artwork: None,
-            })),
-            "playlist" => Ok(CatalogItemWire::Playlist(PlaylistWire {
-                id: media_id.to_string(),
-                title: "Mock Playlist".into(),
-                curator: Some("Apple Music".into()),
-                description: None,
-                track_count: Some(50),
-                artwork: None,
-            })),
-            other => Err(AppleError::NotFound(format!("Unknown kind {other}"))),
-        }
-    }
-
-    async fn get_collection_items(
-        &self,
-        _media_id: &str,
-        _limit: usize,
-        _cursor: Option<&str>,
-    ) -> Result<PageWire<TrackWire>, AppleError> {
-        let t1 = TrackWire::new("apple:track:101", "Collection Song 1", "Collection Artist");
-        let t2 = TrackWire::new("apple:track:102", "Collection Song 2", "Collection Artist");
-        Ok(PageWire::new(vec![t1, t2], None))
-    }
-
-    async fn get_library(
-        &self,
-        kind: LibraryKindWire,
-        _limit: usize,
-        _cursor: Option<&str>,
-    ) -> Result<LibraryPageWire, AppleError> {
-        match kind {
-            LibraryKindWire::Tracks => {
-                let t = TrackWire::new("apple:track:i.123", "Library Song", "Library Artist");
-                Ok(LibraryPageWire::Tracks(PageWire::new(vec![t], None)))
-            }
-            LibraryKindWire::Albums => {
-                let a = AlbumWire {
-                    id: "apple:album:l.456".into(),
-                    title: "Library Album".into(),
-                    artists: vec![],
-                    track_count: Some(8),
-                    release_date: None,
-                    artwork: None,
-                };
-                Ok(LibraryPageWire::Albums(PageWire::new(vec![a], None)))
-            }
-            LibraryKindWire::Playlists => {
-                let p = PlaylistWire {
-                    id: "apple:playlist:p.789".into(),
-                    title: "Library Playlist".into(),
-                    curator: None,
-                    description: None,
-                    track_count: Some(20),
-                    artwork: None,
-                };
-                Ok(LibraryPageWire::Playlists(PageWire::new(vec![p], None)))
-            }
         }
     }
 }
@@ -453,7 +398,53 @@ async fn test_playback_controls_forwarding() {
 #[tokio::test]
 async fn test_apple_search_and_catalog() {
     let mock = Arc::new(MockAppleWebSession::new());
-    let provider = AppleProvider::with_session(mock.clone());
+
+    let (url, _shutdown) = spawn_mock_apple_api(vec![
+        // 1. Search
+        (200, serde_json::json!({
+            "results": {
+                "songs": {
+                    "data": [
+                        { "id": "123", "type": "songs", "attributes": { "name": "Daft Punk Song", "artistName": "Test Artist" } }
+                    ]
+                },
+                "albums": {
+                    "data": [
+                        { "id": "456", "type": "albums", "attributes": { "name": "Daft Punk Album", "trackCount": 10 } }
+                    ]
+                }
+            }
+        })),
+        // 2. Track lookup
+        (200, serde_json::json!({
+            "data": [
+                { "id": "123", "type": "songs", "attributes": { "name": "Mock Track", "artistName": "Mock Artist" } }
+            ]
+        })),
+        // 3. Album lookup
+        (200, serde_json::json!({
+            "data": [
+                { "id": "456", "type": "albums", "attributes": { "name": "Mock Album", "trackCount": 12 } }
+            ]
+        })),
+        // 4. Artist lookup
+        (200, serde_json::json!({
+            "data": [
+                { "id": "789", "type": "artists", "attributes": { "name": "Mock Artist" } }
+            ]
+        })),
+        // 5. Playlist lookup
+        (200, serde_json::json!({
+            "data": [
+                { "id": "pl.abc", "type": "playlists", "attributes": { "name": "Mock Playlist", "curatorName": "Apple Music", "trackCount": 50 } }
+            ]
+        })),
+    ]).await;
+
+    let creds = AppleCredentials::new("dev", "user", "us");
+    let token_provider = Arc::new(StaticTokenProvider::new(creds));
+    let api = Arc::new(OfficialAppleMusicApi::with_base_url(token_provider, url));
+    let provider = AppleProvider::with_session_and_api(mock.clone(), api);
 
     // 1. Search
     let search_res = provider
@@ -526,7 +517,39 @@ async fn test_apple_search_and_catalog() {
 #[tokio::test]
 async fn test_apple_collection_and_library() {
     let mock = Arc::new(MockAppleWebSession::new());
-    let provider = AppleProvider::with_session(mock.clone());
+
+    let (url, _shutdown) = spawn_mock_apple_api(vec![
+        // 1. Collection items
+        (200, serde_json::json!({
+            "data": [
+                { "id": "101", "type": "songs", "attributes": { "name": "Collection Song 1", "artistName": "Collection Artist" } },
+                { "id": "102", "type": "songs", "attributes": { "name": "Collection Song 2", "artistName": "Collection Artist" } }
+            ]
+        })),
+        // 2. Library tracks
+        (200, serde_json::json!({
+            "data": [
+                { "id": "i.123", "type": "library-songs", "attributes": { "name": "Library Song", "artistName": "Library Artist" } }
+            ]
+        })),
+        // 3. Library albums
+        (200, serde_json::json!({
+            "data": [
+                { "id": "l.456", "type": "library-albums", "attributes": { "name": "Library Album", "trackCount": 8 } }
+            ]
+        })),
+        // 4. Library playlists
+        (200, serde_json::json!({
+            "data": [
+                { "id": "p.789", "type": "library-playlists", "attributes": { "name": "Library Playlist", "trackCount": 20 } }
+            ]
+        })),
+    ]).await;
+
+    let creds = AppleCredentials::new("dev", "user", "us");
+    let token_provider = Arc::new(StaticTokenProvider::new(creds));
+    let api = Arc::new(OfficialAppleMusicApi::with_base_url(token_provider, url));
+    let provider = AppleProvider::with_session_and_api(mock.clone(), api);
 
     // 1. Collection items
     let page = provider

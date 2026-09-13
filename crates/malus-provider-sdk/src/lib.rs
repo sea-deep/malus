@@ -29,9 +29,13 @@ pub mod traits;
 
 pub use error::ProviderError;
 pub use malus_protocol::{
-    AlbumRefWire, AlbumWire, ArtistRefWire, ArtistWire, CatalogItemWire, LibraryKindWire,
-    LibraryPageWire, MediaIdWire, PageWire, PlaybackStateWire, PlayerStatusWire, PlaylistWire,
-    QueueWire, RepeatModeWire, SearchKindWire, SearchResultsWire, TrackWire,
+    ActionRoleWire, ActionStateWire, ActionStatusWire, AlbumRefWire, AlbumWire, ArtistRefWire,
+    ArtistWire, CatalogItemWire, LibraryKindWire, LibraryPageWire, MediaIdWire, PageWire,
+    PlaybackStateWire, PlayerStatusWire, PlaylistWire, ProviderEntityRefWire,
+    ProviderSurfaceManifestWire, QueueWire, RepeatModeWire, SearchKindWire, SearchResultsWire,
+    SurfaceActionResultWire, SurfaceActionWire, SurfaceBadgeWire, SurfaceContinuationWire,
+    SurfaceCursorWire, SurfaceHeaderWire, SurfaceItemWire, SurfaceNavEntryWire,
+    SurfaceNavGroupWire, SurfaceRefreshWire, SurfaceSectionWire, SurfaceWire, TrackWire,
 };
 pub use server::{serve, serve_io};
 pub use traits::{Provider, capability};

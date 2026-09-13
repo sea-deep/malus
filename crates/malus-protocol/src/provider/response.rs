@@ -1,8 +1,9 @@
 //! Provider RPC response types returned by provider child processes to `malusd`.
 
 use crate::wire::{
-    AuthStatusWire, CatalogItemWire, LibraryPageWire, PageWire, PlayerStatusWire, QueueWire,
-    SearchResultsWire, TrackWire,
+    AuthStatusWire, CatalogItemWire, LibraryPageWire, PageWire, PlayerStatusWire,
+    ProviderSurfaceManifestWire, QueueWire, SearchResultsWire, SurfaceActionResultWire,
+    SurfaceContinuationWire, SurfaceWire, TrackWire,
 };
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +19,10 @@ pub enum ProviderResponse {
         status: String,
     },
     Capabilities(Vec<String>),
+    SurfaceManifest(ProviderSurfaceManifestWire),
+    Surface(SurfaceWire),
+    SurfaceContinued(SurfaceContinuationWire),
+    SurfaceActionResult(SurfaceActionResultWire),
     SearchResults(SearchResultsWire),
     CatalogItem(CatalogItemWire),
     CollectionItems(PageWire<TrackWire>),

@@ -4,7 +4,8 @@ use crate::error::ProviderError;
 use async_trait::async_trait;
 use malus_protocol::{
     CatalogItemWire, LibraryKindWire, LibraryPageWire, MediaIdWire, PageWire, PlayerStatusWire,
-    QueueWire, SearchKindWire, SearchResultsWire, TrackWire,
+    ProviderSurfaceManifestWire, QueueWire, SearchKindWire, SearchResultsWire,
+    SurfaceActionResultWire, SurfaceContinuationWire, SurfaceCursorWire, SurfaceWire, TrackWire,
 };
 
 pub mod capability {
@@ -23,6 +24,7 @@ pub mod capability {
     pub const QUEUE_READ: &str = "queue.read";
     pub const QUEUE_EDIT: &str = "queue.edit";
     pub const LYRICS_SYNCED: &str = "lyrics.synced";
+    pub const SURFACES: &str = "surfaces";
 }
 
 /// The primary behavioral interface for a Malus audio provider.
@@ -216,6 +218,44 @@ pub trait Provider: Send + Sync {
         Err(ProviderError::NotSupported(format!(
             "Action '{action}' is not supported"
         )))
+    }
+
+    /// Return provider navigation manifest advertising top-level surfaces.
+    async fn get_surface_manifest(&self) -> Result<ProviderSurfaceManifestWire, ProviderError> {
+        Err(ProviderError::NotSupported(
+            "Surfaces are not supported by this provider".to_string(),
+        ))
+    }
+
+    /// Return a structured, provider-authored surface.
+    async fn get_surface(&self, surface_id: &str) -> Result<SurfaceWire, ProviderError> {
+        let _ = surface_id;
+        Err(ProviderError::NotSupported(
+            "Surfaces are not supported by this provider".to_string(),
+        ))
+    }
+
+    /// Continue pagination for a surface or section.
+    async fn continue_surface(
+        &self,
+        surface_id: &str,
+        cursor: &SurfaceCursorWire,
+    ) -> Result<SurfaceContinuationWire, ProviderError> {
+        let _ = (surface_id, cursor);
+        Err(ProviderError::NotSupported(
+            "Surface continuation is not supported by this provider".to_string(),
+        ))
+    }
+
+    /// Invoke a provider-authored surface action via its opaque token.
+    async fn invoke_surface_action(
+        &self,
+        invocation_token: &str,
+    ) -> Result<SurfaceActionResultWire, ProviderError> {
+        let _ = invocation_token;
+        Err(ProviderError::NotSupported(
+            "Surface actions are not supported by this provider".to_string(),
+        ))
     }
 
     /// Cleanly shut down provider background resources and children.

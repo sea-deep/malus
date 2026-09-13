@@ -1,6 +1,6 @@
 //! Provider RPC request types sent by `malusd` to provider child processes over stdio.
 
-use crate::wire::{ActionRequestV0, LibraryKindWire, SearchKindWire, TrackWire};
+use crate::wire::{ActionRequestV0, LibraryKindWire, SearchKindWire, SurfaceCursorWire, TrackWire};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -11,6 +11,17 @@ pub enum ProviderRequest {
         version: (u32, u32),
     },
     GetCapabilities,
+    GetSurfaceManifest,
+    GetSurface {
+        surface_id: String,
+    },
+    ContinueSurface {
+        surface_id: String,
+        cursor: SurfaceCursorWire,
+    },
+    InvokeSurfaceAction {
+        invocation_token: String,
+    },
     Search {
         query: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]

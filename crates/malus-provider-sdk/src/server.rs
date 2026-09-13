@@ -104,6 +104,32 @@ async fn handle_request(provider: &dyn Provider, req: ProviderRequest) -> Provid
 
         ProviderRequest::GetCapabilities => ProviderResponse::Capabilities(provider.capabilities()),
 
+        ProviderRequest::GetSurfaceManifest => match provider.get_surface_manifest().await {
+            Ok(manifest) => ProviderResponse::SurfaceManifest(manifest),
+            Err(e) => ProviderResponse::err("SURFACE_MANIFEST_FAILED", e.to_string()),
+        },
+
+        ProviderRequest::GetSurface { surface_id } => {
+            match provider.get_surface(&surface_id).await {
+                Ok(surface) => ProviderResponse::Surface(surface),
+                Err(e) => ProviderResponse::err("SURFACE_FAILED", e.to_string()),
+            }
+        }
+
+        ProviderRequest::ContinueSurface { surface_id, cursor } => {
+            match provider.continue_surface(&surface_id, &cursor).await {
+                Ok(cont) => ProviderResponse::SurfaceContinued(cont),
+                Err(e) => ProviderResponse::err("SURFACE_CONTINUE_FAILED", e.to_string()),
+            }
+        }
+
+        ProviderRequest::InvokeSurfaceAction { invocation_token } => {
+            match provider.invoke_surface_action(&invocation_token).await {
+                Ok(res) => ProviderResponse::SurfaceActionResult(res),
+                Err(e) => ProviderResponse::err("SURFACE_ACTION_FAILED", e.to_string()),
+            }
+        }
+
         ProviderRequest::Search {
             query,
             kinds,

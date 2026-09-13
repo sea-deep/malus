@@ -1,0 +1,37 @@
+From: Malus Team <malus@example.com>
+Subject: [PATCH 1/2] Allow ProcessExecutablePathGLib to find helper executables in Release mode
+
+Upstream WebKit only checks WEBKIT_EXEC_PATH and the current executable's directory
+when ENABLE(DEVELOPER_MODE) is enabled. In standalone Release builds, this prevents
+relocatable WPE hosts from locating WPEWebProcess and WPENetworkProcess placed alongside
+the host binary in a self-contained runtime directory.
+
+This patch enables checking WEBKIT_EXEC_PATH and the current executable directory
+unconditionally in findWebKitProcess.
+---
+ Source/WebKit/Shared/glib/ProcessExecutablePathGLib.cpp | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/Source/WebKit/Shared/glib/ProcessExecutablePathGLib.cpp b/Source/WebKit/Shared/glib/ProcessExecutablePathGLib.cpp
+index 8414349..4907994 100644
+--- a/Source/WebKit/Shared/glib/ProcessExecutablePathGLib.cpp
++++ b/Source/WebKit/Shared/glib/ProcessExecutablePathGLib.cpp
+@@ -32,7 +32,7 @@
+ 
+ namespace WebKit {
+ 
+-#if ENABLE(DEVELOPER_MODE)
++#if 1
+ static String getExecutablePath()
+ {
+     CString executablePath = FileSystem::currentExecutablePath();
+@@ -44,7 +44,7 @@ static String getExecutablePath()
+ 
+ static String findWebKitProcess(const char* processName)
+ {
+-#if ENABLE(DEVELOPER_MODE)
++#if 1
+     static const char* execDirectory = g_getenv("WEBKIT_EXEC_PATH");
+     if (execDirectory) {
+         String processPath = FileSystem::pathByAppendingComponent(FileSystem::stringFromFileSystemRepresentation(execDirectory), StringView::fromLatin1(processName));
+-- 

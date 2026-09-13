@@ -360,6 +360,50 @@ impl Engine {
                 }
             }
 
+            ClientRequest::GetProviderSurfaceManifest { provider } => {
+                match self.get_or_spawn_provider(&provider).await {
+                    Ok(p) => match p.get_surface_manifest().await {
+                        Ok(manifest) => ClientResponse::ProviderSurfaceManifest(manifest),
+                        Err(e) => ClientResponse::err("SURFACE_MANIFEST_FAILED", e.to_string()),
+                    },
+                    Err(e) => ClientResponse::err("PROVIDER_NOT_FOUND", e),
+                }
+            }
+
+            ClientRequest::GetSurface {
+                provider,
+                surface_id,
+            } => match self.get_or_spawn_provider(&provider).await {
+                Ok(p) => match p.get_surface(&surface_id).await {
+                    Ok(surface) => ClientResponse::Surface(surface),
+                    Err(e) => ClientResponse::err("SURFACE_FAILED", e.to_string()),
+                },
+                Err(e) => ClientResponse::err("PROVIDER_NOT_FOUND", e),
+            },
+
+            ClientRequest::ContinueSurface {
+                provider,
+                surface_id,
+                cursor,
+            } => match self.get_or_spawn_provider(&provider).await {
+                Ok(p) => match p.continue_surface(&surface_id, cursor).await {
+                    Ok(cont) => ClientResponse::SurfaceContinued(cont),
+                    Err(e) => ClientResponse::err("SURFACE_CONTINUE_FAILED", e.to_string()),
+                },
+                Err(e) => ClientResponse::err("PROVIDER_NOT_FOUND", e),
+            },
+
+            ClientRequest::InvokeSurfaceAction {
+                provider,
+                invocation_token,
+            } => match self.get_or_spawn_provider(&provider).await {
+                Ok(p) => match p.invoke_surface_action(&invocation_token).await {
+                    Ok(res) => ClientResponse::SurfaceActionResult(res),
+                    Err(e) => ClientResponse::err("SURFACE_ACTION_FAILED", e.to_string()),
+                },
+                Err(e) => ClientResponse::err("PROVIDER_NOT_FOUND", e),
+            },
+
             ClientRequest::Search {
                 query,
                 kinds,

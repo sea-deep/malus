@@ -242,4 +242,130 @@ mod tests {
         let decoded: client::ClientResponse = decode_message(&frame).unwrap();
         assert_eq!(lib_res, decoded);
     }
+
+    #[test]
+    fn test_surface_rpc_roundtrips() {
+        // 1. Client manifest request and response
+        let manifest_req = client::ClientRequest::GetProviderSurfaceManifest {
+            provider: "mock".to_string(),
+        };
+        let encoded = encode_message(&manifest_req).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientRequest = decode_message(&frame).unwrap();
+        assert_eq!(manifest_req, decoded);
+
+        let manifest = ProviderSurfaceManifestWire {
+            provider_id: "mock".to_string(),
+            default_surface_id: "home".to_string(),
+            groups: vec![SurfaceNavGroupWire::new(
+                "main",
+                Some("Main".to_string()),
+                vec![SurfaceNavEntryWire::with_icon("home", "Home", "house")],
+            )],
+        };
+        let manifest_res = client::ClientResponse::ProviderSurfaceManifest(manifest.clone());
+        let encoded = encode_message(&manifest_res).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientResponse = decode_message(&frame).unwrap();
+        assert_eq!(manifest_res, decoded);
+
+        // 2. Client get surface request and response
+        let surface_req = client::ClientRequest::GetSurface {
+            provider: "mock".to_string(),
+            surface_id: "home".to_string(),
+        };
+        let encoded = encode_message(&surface_req).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientRequest = decode_message(&frame).unwrap();
+        assert_eq!(surface_req, decoded);
+
+        let surface = SurfaceWire::new("home", "Home");
+        let surface_res = client::ClientResponse::Surface(surface.clone());
+        let encoded = encode_message(&surface_res).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientResponse = decode_message(&frame).unwrap();
+        assert_eq!(surface_res, decoded);
+
+        // 3. Client continue surface
+        let cont_req = client::ClientRequest::ContinueSurface {
+            provider: "mock".to_string(),
+            surface_id: "home".to_string(),
+            cursor: SurfaceCursorWire::section("sec-1", "cursor-xyz"),
+        };
+        let encoded = encode_message(&cont_req).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientRequest = decode_message(&frame).unwrap();
+        assert_eq!(cont_req, decoded);
+
+        let cont_res = client::ClientResponse::SurfaceContinued(SurfaceContinuationWire::Section {
+            section_id: "sec-1".to_string(),
+            items: vec![SurfaceItemWire::new("item-next", "Next Item")],
+            continuation: None,
+        });
+        let encoded = encode_message(&cont_res).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientResponse = decode_message(&frame).unwrap();
+        assert_eq!(cont_res, decoded);
+
+        // 4. Client invoke action
+        let act_req = client::ClientRequest::InvokeSurfaceAction {
+            provider: "mock".to_string(),
+            invocation_token: "tok:test-action".to_string(),
+        };
+        let encoded = encode_message(&act_req).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientRequest = decode_message(&frame).unwrap();
+        assert_eq!(act_req, decoded);
+
+        let act_res = client::ClientResponse::SurfaceActionResult(
+            SurfaceActionResultWire::success().with_refresh(SurfaceRefreshWire::CurrentSurface),
+        );
+        let encoded = encode_message(&act_res).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientResponse = decode_message(&frame).unwrap();
+        assert_eq!(act_res, decoded);
+
+        // 5. Provider requests & responses
+        let prov_req = provider::ProviderRequest::GetSurfaceManifest;
+        let encoded = encode_message(&prov_req).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: provider::ProviderRequest = decode_message(&frame).unwrap();
+        assert_eq!(prov_req, decoded);
+
+        let prov_res = provider::ProviderResponse::SurfaceManifest(manifest);
+        let encoded = encode_message(&prov_res).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: provider::ProviderResponse = decode_message(&frame).unwrap();
+        assert_eq!(prov_res, decoded);
+    }
 }

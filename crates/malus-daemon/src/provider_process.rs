@@ -17,8 +17,9 @@ use malus_protocol::{
     },
     wire::{
         ActionRequestV0, AuthStatusWire, CatalogItemWire, LibraryKindWire, LibraryPageWire,
-        MediaIdWire, PageWire, PlayerStatusWire, QueueWire, SearchKindWire, SearchResultsWire,
-        TrackWire,
+        MediaIdWire, PageWire, PlayerStatusWire, ProviderSurfaceManifestWire, QueueWire,
+        SearchKindWire, SearchResultsWire, SurfaceActionResultWire, SurfaceContinuationWire,
+        SurfaceCursorWire, SurfaceWire, TrackWire,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -826,6 +827,66 @@ impl ProviderProcess {
         let resp = self.send_request(ProviderRequest::AuthLogout).await?;
         if let ProviderResponse::AuthStatus(status) = resp {
             Ok(status)
+        } else {
+            Err(ProviderProcessError::UnexpectedResponse(Box::new(resp)))
+        }
+    }
+
+    pub async fn get_surface_manifest(
+        &self,
+    ) -> Result<ProviderSurfaceManifestWire, ProviderProcessError> {
+        let resp = self
+            .send_request(ProviderRequest::GetSurfaceManifest)
+            .await?;
+        if let ProviderResponse::SurfaceManifest(manifest) = resp {
+            Ok(manifest)
+        } else {
+            Err(ProviderProcessError::UnexpectedResponse(Box::new(resp)))
+        }
+    }
+
+    pub async fn get_surface(&self, surface_id: &str) -> Result<SurfaceWire, ProviderProcessError> {
+        let resp = self
+            .send_request(ProviderRequest::GetSurface {
+                surface_id: surface_id.to_string(),
+            })
+            .await?;
+        if let ProviderResponse::Surface(surface) = resp {
+            Ok(surface)
+        } else {
+            Err(ProviderProcessError::UnexpectedResponse(Box::new(resp)))
+        }
+    }
+
+    pub async fn continue_surface(
+        &self,
+        surface_id: &str,
+        cursor: SurfaceCursorWire,
+    ) -> Result<SurfaceContinuationWire, ProviderProcessError> {
+        let resp = self
+            .send_request(ProviderRequest::ContinueSurface {
+                surface_id: surface_id.to_string(),
+                cursor,
+            })
+            .await?;
+        if let ProviderResponse::SurfaceContinued(cont) = resp {
+            Ok(cont)
+        } else {
+            Err(ProviderProcessError::UnexpectedResponse(Box::new(resp)))
+        }
+    }
+
+    pub async fn invoke_surface_action(
+        &self,
+        invocation_token: &str,
+    ) -> Result<SurfaceActionResultWire, ProviderProcessError> {
+        let resp = self
+            .send_request(ProviderRequest::InvokeSurfaceAction {
+                invocation_token: invocation_token.to_string(),
+            })
+            .await?;
+        if let ProviderResponse::SurfaceActionResult(res) = resp {
+            Ok(res)
         } else {
             Err(ProviderProcessError::UnexpectedResponse(Box::new(resp)))
         }

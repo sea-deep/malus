@@ -655,3 +655,79 @@ async fn test_auth_status_rpc() {
         other => panic!("Expected AuthStatus response, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn test_surfaces_e2e() {
+    use malus_protocol::wire::{ActionStatusWire, SurfaceContinuationWire, SurfaceRefreshWire};
+
+    let server = TestServer::start().await;
+    let client = MalusClient::connect(&server.sock_path).await.unwrap();
+
+    // 1. Get Manifest
+    let manifest = client
+        .get_provider_surface_manifest("mock")
+        .await
+        .expect("Failed to get surface manifest");
+    assert_eq!(manifest.provider_id, "mock");
+    assert_eq!(manifest.default_surface_id, "home");
+    assert_eq!(manifest.groups.len(), 2);
+    assert_eq!(manifest.groups[0].id, "discover");
+    assert_eq!(manifest.groups[1].id, "library");
+
+    // 2. Get Home Surface
+    let home = client
+        .get_surface("mock", &manifest.default_surface_id)
+        .await
+        .expect("Failed to get home surface");
+    assert_eq!(home.id, "home");
+    assert_eq!(home.sections.len(), 2);
+    assert_eq!(home.sections[0].id, "recently-played");
+    assert_eq!(home.sections[0].presentation_hint.as_deref(), Some("shelf"));
+    assert_eq!(home.sections[1].id, "discover-weekly");
+    assert_eq!(home.sections[1].presentation_hint.as_deref(), Some("shelf"));
+    assert!(home.sections[1].continuation.is_some());
+
+    // 3. Continue Discover Weekly section
+    let cursor = home.sections[1].continuation.as_ref().unwrap();
+    let continuation = client
+        .continue_surface("mock", "home", cursor.clone())
+        .await
+        .expect("Failed to continue surface");
+    match continuation {
+        SurfaceContinuationWire::Section {
+            section_id,
+            items,
+            continuation,
+        } => {
+            assert_eq!(section_id, "discover-weekly");
+            assert_eq!(items.len(), 2);
+            assert!(continuation.is_none());
+        }
+        _ => panic!("Expected section continuation"),
+    }
+
+    // 4. Invoke surface play action
+    let play_res = client
+        .invoke_surface_action("mock", "mock:act:play:mock:track:3")
+        .await
+        .expect("Failed to invoke surface play action");
+    assert_eq!(play_res.status, ActionStatusWire::Success);
+
+    // Verify playback status reflects the action
+    let status_resp = client.send(&ClientRequest::GetStatus).await.unwrap();
+    match status_resp {
+        ClientResponse::Status(status) => {
+            assert_eq!(status.state, PlaybackStateWire::Playing);
+            assert_eq!(status.current_track.unwrap().id, "mock:track:3");
+        }
+        other => panic!("Expected Status, got {other:?}"),
+    }
+
+    // 5. Invoke surface favorite toggle action
+    let fav_res = client
+        .invoke_surface_action("mock", "mock:act:fav:mock:track:3")
+        .await
+        .expect("Failed to invoke surface favorite action");
+    assert_eq!(fav_res.status, ActionStatusWire::Success);
+    assert_eq!(fav_res.refresh, SurfaceRefreshWire::CurrentSurface);
+}

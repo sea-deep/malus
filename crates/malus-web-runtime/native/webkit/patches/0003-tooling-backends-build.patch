@@ -1,0 +1,7 @@
+--- a/Tools/PlatformWPE.cmake
++++ b/Tools/PlatformWPE.cmake
+@@ -1,3 +1,3 @@
+-if (ENABLE_WPE_LEGACY_API AND (ENABLE_API_TESTS OR ENABLE_LAYOUT_TESTS OR ENABLE_MINIBROWSER))
++if (ENABLE_WPE_LEGACY_API)
+     add_subdirectory(wpe/backends)
+ endif ()

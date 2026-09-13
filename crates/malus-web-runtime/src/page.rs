@@ -1,7 +1,7 @@
 //! Backend-neutral web page abstraction.
 //!
-//! Exposes page navigation, script evaluation, and event sinks without
-//! leaking underlying protocol details.
+//! Exposes page navigation, script evaluation, document loading, and event sinks
+//! without leaking underlying browser engine or protocol details.
 
 use std::{sync::Arc, time::Duration};
 
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{Mutex, broadcast, oneshot};
 
-use crate::{cdp::BrowserCdpClient, error::WebError};
+use crate::{cdp::BrowserCdpClient, error::WebError, wpe::WpePage};
 
 struct DocumentInterceptorState {
     url_pattern: String,
@@ -38,25 +38,26 @@ pub struct PageHealth {
     pub url: String,
 }
 
-/// A provider-facing handle to an active web page.
-pub struct WebPage {
+pub(crate) struct ChromiumPageInner {
     target_id: String,
     session_id: String,
     client: BrowserCdpClient,
     event_tx: broadcast::Sender<WebEvent>,
     document_interceptor: Arc<Mutex<Option<DocumentInterceptorState>>>,
+    current_url: Arc<Mutex<String>>,
 }
 
-impl WebPage {
-    /// Initialize and attach to a page target on the browser client.
+impl ChromiumPageInner {
     pub async fn attach(
         client: BrowserCdpClient,
         target_id: String,
         session_id: String,
+        initial_url: String,
     ) -> Result<Self, WebError> {
         let (event_tx, _) = broadcast::channel::<WebEvent>(256);
         let interceptor: Arc<Mutex<Option<DocumentInterceptorState>>> = Arc::new(Mutex::new(None));
         let main_frame_id: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let current_url = Arc::new(Mutex::new(initial_url));
 
         // Enable Page and Runtime domains for this session
         client
@@ -98,6 +99,7 @@ impl WebPage {
         let page_event_tx = event_tx.clone();
         let interceptor_bg = interceptor.clone();
         let main_frame_id_bg = main_frame_id.clone();
+        let current_url_bg = current_url.clone();
         let client_bg = client.clone();
 
         tokio::spawn(async move {
@@ -117,7 +119,6 @@ impl WebPage {
                     let raw_payload = event.params.get("payload");
                     let payload = match raw_payload {
                         Some(Value::String(s)) => {
-                            // Try parsing as JSON; if not valid JSON, preserve raw string
                             serde_json::from_str(s).unwrap_or_else(|_| Value::String(s.clone()))
                         }
                         Some(val) => val.clone(),
@@ -126,10 +127,16 @@ impl WebPage {
 
                     let _ = page_event_tx.send(WebEvent { name, payload });
                 } else if event.method == "Page.frameNavigated" {
-                    if event.params.pointer("/frame/parentId").is_none()
-                        && let Some(id) = event.params.pointer("/frame/id").and_then(|v| v.as_str())
-                    {
-                        *main_frame_id_bg.lock().await = Some(id.to_string());
+                    if event.params.pointer("/frame/parentId").is_none() {
+                        if let Some(id) = event.params.pointer("/frame/id").and_then(|v| v.as_str())
+                        {
+                            *main_frame_id_bg.lock().await = Some(id.to_string());
+                        }
+                        if let Some(url) =
+                            event.params.pointer("/frame/url").and_then(|v| v.as_str())
+                        {
+                            *current_url_bg.lock().await = url.to_string();
+                        }
                     }
                 } else if event.method == "Fetch.requestPaused" {
                     let request_id = event
@@ -164,7 +171,8 @@ impl WebPage {
                     if resource_type == "Document"
                         && is_main_frame
                         && let Some(active) = guard.as_mut()
-                        && request_url.contains(&active.url_pattern)
+                        && (request_url.contains(&active.url_pattern)
+                            || active.url_pattern.contains(&request_url))
                     {
                         let fulfill_params = serde_json::json!({
                             "requestId": request_id,
@@ -219,18 +227,10 @@ impl WebPage {
             client,
             event_tx,
             document_interceptor: interceptor,
+            current_url,
         })
     }
 
-    pub fn target_id(&self) -> &str {
-        &self.target_id
-    }
-
-    pub fn session_id(&self) -> &str {
-        &self.session_id
-    }
-
-    /// Navigate the page to a URL.
     pub async fn navigate(&self, url: &str) -> Result<(), WebError> {
         let params = serde_json::json!({ "url": url });
         self.client
@@ -241,45 +241,31 @@ impl WebPage {
                 Duration::from_secs(15),
             )
             .await?;
+        *self.current_url.lock().await = url.to_string();
         Ok(())
     }
 
-    /// Reload the page.
-    pub async fn reload(&self) -> Result<(), WebError> {
-        self.client
-            .send_command(
-                Some(&self.session_id),
-                "Page.reload",
-                serde_json::json!({}),
-                Duration::from_secs(15),
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// Intercept the next top-level document navigation matching `url_pattern` and fulfill it with `body`.
-    ///
-    /// This is strictly one-shot for the main frame. Immediately after fulfillment, or if cancelled,
-    /// the interceptor state is cleared and `Fetch.disable` is invoked.
-    pub async fn intercept_next_main_document(
-        &self,
-        url_pattern: &str,
-        content_type: &str,
-        body: &str,
-    ) -> Result<oneshot::Receiver<()>, WebError> {
-        let body_b64 = BASE64_STANDARD.encode(body.as_bytes());
+    pub async fn load_document(&self, url: &str, html: &str) -> Result<(), WebError> {
+        let body_b64 = BASE64_STANDARD.encode(html.as_bytes());
         let (tx, rx) = oneshot::channel();
 
-        let mut guard = self.document_interceptor.lock().await;
-        *guard = Some(DocumentInterceptorState {
-            url_pattern: url_pattern.to_string(),
-            status: 200,
-            content_type: content_type.to_string(),
-            body_base64: body_b64,
-            fulfilled_tx: Some(tx),
-        });
+        let pattern = if let Ok(parsed) = url::Url::parse(url) {
+            parsed.host_str().unwrap_or(url).to_string()
+        } else {
+            url.to_string()
+        };
 
-        // Enable Fetch domain for Document resources
+        {
+            let mut guard = self.document_interceptor.lock().await;
+            *guard = Some(DocumentInterceptorState {
+                url_pattern: pattern,
+                status: 200,
+                content_type: "text/html; charset=utf-8".to_string(),
+                body_base64: body_b64,
+                fulfilled_tx: Some(tx),
+            });
+        }
+
         let params = serde_json::json!({
             "patterns": [
                 {
@@ -300,15 +286,37 @@ impl WebPage {
             )
             .await
         {
-            *guard = None;
+            let _ = self.cancel_document_interception().await;
             return Err(e);
         }
 
-        Ok(rx)
+        if let Err(e) = self.navigate(url).await {
+            let _ = self.cancel_document_interception().await;
+            return Err(e);
+        }
+
+        let wait_res = tokio::time::timeout(Duration::from_secs(10), rx).await;
+        match wait_res {
+            Ok(Ok(())) => {
+                *self.current_url.lock().await = url.to_string();
+                Ok(())
+            }
+            Ok(Err(_)) => {
+                let _ = self.cancel_document_interception().await;
+                Err(WebError::Internal(
+                    "Document fulfillment channel dropped".into(),
+                ))
+            }
+            Err(_) => {
+                let _ = self.cancel_document_interception().await;
+                Err(WebError::Timeout(
+                    "Timed out waiting for document fulfillment".into(),
+                ))
+            }
+        }
     }
 
-    /// Cancel any active document interceptor and unconditionally disable the CDP Fetch domain.
-    pub async fn cancel_document_interception(&self) -> Result<(), WebError> {
+    async fn cancel_document_interception(&self) -> Result<(), WebError> {
         {
             let mut guard = self.document_interceptor.lock().await;
             *guard = None;
@@ -325,7 +333,18 @@ impl WebPage {
         Ok(())
     }
 
-    /// Evaluate a JavaScript expression in the page context and return its result as JSON.
+    pub async fn reload(&self) -> Result<(), WebError> {
+        self.client
+            .send_command(
+                Some(&self.session_id),
+                "Page.reload",
+                serde_json::json!({}),
+                Duration::from_secs(15),
+            )
+            .await?;
+        Ok(())
+    }
+
     pub async fn evaluate(&self, expression: &str) -> Result<Value, WebError> {
         let params = serde_json::json!({
             "expression": expression,
@@ -354,15 +373,21 @@ impl WebPage {
             .unwrap_or(Value::Null))
     }
 
-    /// Call a JavaScript function on the `window` object with structured arguments.
-    /// Call a JavaScript function on the `window` object with structured arguments and a custom timeout.
+    pub async fn call_function(
+        &self,
+        function_declaration: &str,
+        arguments: &[Value],
+    ) -> Result<Value, WebError> {
+        self.call_function_with_timeout(function_declaration, arguments, Duration::from_secs(30))
+            .await
+    }
+
     pub async fn call_function_with_timeout(
         &self,
         function_declaration: &str,
         arguments: &[Value],
         timeout: Duration,
     ) -> Result<Value, WebError> {
-        // Evaluate window to get an objectId for the call context
         let window_res = self
             .client
             .send_command(
@@ -407,7 +432,6 @@ impl WebPage {
             )
             .await;
 
-        // Release remote object handle unconditionally
         let _ = self
             .client
             .send_command(
@@ -430,14 +454,131 @@ impl WebPage {
             .unwrap_or(Value::Null))
     }
 
+    pub async fn register_event_sink(&self, name: &str) -> Result<(), WebError> {
+        let params = serde_json::json!({ "name": name });
+        self.client
+            .send_command(
+                Some(&self.session_id),
+                "Runtime.addBinding",
+                params,
+                Duration::from_secs(5),
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub fn subscribe_events(&self) -> broadcast::Receiver<WebEvent> {
+        self.event_tx.subscribe()
+    }
+
+    pub async fn check_health(&self) -> Result<PageHealth, WebError> {
+        let targets = self.client.get_targets().await?;
+        let current_target = targets.into_iter().find(|t| t.target_id == self.target_id);
+
+        match current_target {
+            Some(info) => Ok(PageHealth {
+                target_id: self.target_id.clone(),
+                session_id: self.session_id.clone(),
+                connected: self.client.is_connected(),
+                url: info.url,
+            }),
+            None => Ok(PageHealth {
+                target_id: self.target_id.clone(),
+                session_id: self.session_id.clone(),
+                connected: false,
+                url: String::new(),
+            }),
+        }
+    }
+}
+
+enum PageInner {
+    Chromium(ChromiumPageInner),
+    Wpe(Arc<WpePage>),
+}
+
+/// A provider-facing handle to an active web page.
+pub struct WebPage {
+    inner: PageInner,
+}
+
+impl WebPage {
+    pub(crate) fn from_chromium(inner: ChromiumPageInner) -> Self {
+        Self {
+            inner: PageInner::Chromium(inner),
+        }
+    }
+
+    pub(crate) fn from_wpe(wpe: Arc<WpePage>) -> Self {
+        Self {
+            inner: PageInner::Wpe(wpe),
+        }
+    }
+
+    /// Navigate the page to a URL.
+    pub async fn navigate(&self, url: &str) -> Result<(), WebError> {
+        match &self.inner {
+            PageInner::Chromium(c) => c.navigate(url).await,
+            PageInner::Wpe(w) => w.navigate(url).await,
+        }
+    }
+
+    /// Load an explicit HTML document rooted at `url` origin.
+    ///
+    /// For Chromium, this is achieved via one-shot document interception.
+    /// For WPE, this is achieved via native alternate HTML loading.
+    pub async fn load_document(&self, url: &str, html: &str) -> Result<(), WebError> {
+        match &self.inner {
+            PageInner::Chromium(c) => c.load_document(url, html).await,
+            PageInner::Wpe(w) => w.load_document(url, html).await,
+        }
+    }
+
+    /// Reload the page.
+    pub async fn reload(&self) -> Result<(), WebError> {
+        match &self.inner {
+            PageInner::Chromium(c) => c.reload().await,
+            PageInner::Wpe(w) => w.reload().await,
+        }
+    }
+
+    /// Evaluate a JavaScript expression in the page context and return its result as JSON.
+    pub async fn evaluate(&self, expression: &str) -> Result<Value, WebError> {
+        match &self.inner {
+            PageInner::Chromium(c) => c.evaluate(expression).await,
+            PageInner::Wpe(w) => w.evaluate(expression).await,
+        }
+    }
+
     /// Call a JavaScript function on the `window` object with structured arguments.
     pub async fn call_function(
         &self,
         function_declaration: &str,
         arguments: &[Value],
     ) -> Result<Value, WebError> {
-        self.call_function_with_timeout(function_declaration, arguments, Duration::from_secs(30))
-            .await
+        match &self.inner {
+            PageInner::Chromium(c) => c.call_function(function_declaration, arguments).await,
+            PageInner::Wpe(w) => w.call_function(function_declaration, arguments).await,
+        }
+    }
+
+    /// Call a JavaScript function on the `window` object with structured arguments and a custom timeout.
+    pub async fn call_function_with_timeout(
+        &self,
+        function_declaration: &str,
+        arguments: &[Value],
+        timeout: Duration,
+    ) -> Result<Value, WebError> {
+        match &self.inner {
+            PageInner::Chromium(c) => {
+                c.call_function_with_timeout(function_declaration, arguments, timeout)
+                    .await
+            }
+            PageInner::Wpe(w) => {
+                w.call_function_with_timeout(function_declaration, arguments, timeout)
+                    .await
+            }
+        }
     }
 
     /// Repeatedly evaluate a JavaScript expression until it produces a truthy value or times out.
@@ -478,60 +619,25 @@ impl WebPage {
 
     /// Register a named event sink callable from web scripts as `window.<name>(payload)`.
     pub async fn register_event_sink(&self, name: &str) -> Result<(), WebError> {
-        let params = serde_json::json!({ "name": name });
-        self.client
-            .send_command(
-                Some(&self.session_id),
-                "Runtime.addBinding",
-                params,
-                Duration::from_secs(5),
-            )
-            .await?;
-        Ok(())
+        match &self.inner {
+            PageInner::Chromium(c) => c.register_event_sink(name).await,
+            PageInner::Wpe(w) => w.register_event_sink(name).await,
+        }
     }
 
     /// Subscribe to web events triggered by registered event sinks.
     pub fn subscribe_events(&self) -> broadcast::Receiver<WebEvent> {
-        self.event_tx.subscribe()
-    }
-
-    /// Access the underlying CDP client.
-    pub fn client(&self) -> &BrowserCdpClient {
-        &self.client
-    }
-
-    /// Minimize the browser window displaying this page via CDP.
-    pub async fn minimize_window(&self) -> Result<(), WebError> {
-        let (window_id, _) = self.client.get_window_for_target(&self.target_id).await?;
-        self.client
-            .set_window_bounds(
-                window_id,
-                serde_json::json!({
-                    "windowState": "minimized"
-                }),
-            )
-            .await?;
-        Ok(())
+        match &self.inner {
+            PageInner::Chromium(c) => c.subscribe_events(),
+            PageInner::Wpe(w) => w.subscribe_events(),
+        }
     }
 
     /// Diagnostic health query for this page target.
     pub async fn check_health(&self) -> Result<PageHealth, WebError> {
-        let targets = self.client.get_targets().await?;
-        let current_target = targets.into_iter().find(|t| t.target_id == self.target_id);
-
-        match current_target {
-            Some(info) => Ok(PageHealth {
-                target_id: self.target_id.clone(),
-                session_id: self.session_id.clone(),
-                connected: self.client.is_connected(),
-                url: info.url,
-            }),
-            None => Ok(PageHealth {
-                target_id: self.target_id.clone(),
-                session_id: self.session_id.clone(),
-                connected: false,
-                url: String::new(),
-            }),
+        match &self.inner {
+            PageInner::Chromium(c) => c.check_health().await,
+            PageInner::Wpe(w) => w.check_health().await,
         }
     }
 }

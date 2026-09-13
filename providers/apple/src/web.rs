@@ -9,11 +9,7 @@ use async_trait::async_trait;
 use malus_protocol::{
     PlaybackStateWire, PlayerStatusWire, RepeatModeWire,
     provider::ProviderEvent,
-    wire::{
-        AlbumRefWire, AlbumWire, ArtistRefWire, ArtistWire, ArtworkWire, CatalogItemWire,
-        LibraryKindWire, LibraryPageWire, PageWire, PlaylistWire, SearchKindWire,
-        SearchResultsWire, TrackWire,
-    },
+    wire::{AlbumRefWire, TrackWire},
 };
 use malus_web_runtime::{LaunchMode, ProfileManager, RuntimeOptions, WebPage, WebRuntime};
 use serde_json::Value;
@@ -35,6 +31,9 @@ pub trait AppleWebSession: Send + Sync {
 
     /// Begin interactive authentication in a visible browser window and wait until authorized.
     async fn begin_auth(&self, timeout: Duration) -> Result<AuthState, AppleError>;
+
+    /// Refresh and return current Apple Music API credentials.
+    async fn refresh_tokens(&self) -> Result<crate::api::AppleCredentials, AppleError>;
 
     /// Log out by wiping the managed Apple profile directory.
     async fn logout(&self) -> Result<(), AppleError>;
@@ -62,34 +61,6 @@ pub trait AppleWebSession: Send + Sync {
 
     /// Register a sink for streaming unsolicited player events.
     fn set_event_sink(&self, sink: mpsc::UnboundedSender<ProviderEvent>);
-
-    /// Search the Apple Music catalog.
-    async fn search(
-        &self,
-        query: &str,
-        kinds: &[SearchKindWire],
-        limit: usize,
-        cursor: Option<&str>,
-    ) -> Result<SearchResultsWire, AppleError>;
-
-    /// Fetch a single catalog or library item by its MediaId.
-    async fn get_catalog_item(&self, media_id: &str) -> Result<CatalogItemWire, AppleError>;
-
-    /// Fetch collection tracks (album or playlist) with pagination.
-    async fn get_collection_items(
-        &self,
-        media_id: &str,
-        limit: usize,
-        cursor: Option<&str>,
-    ) -> Result<PageWire<TrackWire>, AppleError>;
-
-    /// Fetch a page of user's personal library items.
-    async fn get_library(
-        &self,
-        kind: LibraryKindWire,
-        limit: usize,
-        cursor: Option<&str>,
-    ) -> Result<LibraryPageWire, AppleError>;
 }
 
 struct ActiveSession {
@@ -119,10 +90,49 @@ const MINIMAL_MUSICKIT_HTML: &str = r#"<!doctype html>
   <body></body>
 </html>"#;
 
-struct AppleHarvestedTokens {
-    developer_token: String,
-    music_user_token: String,
-    storefront: String,
+pub type AppleHarvestedTokens = crate::api::AppleCredentials;
+
+fn load_cached_tokens(profile: &ProfileManager) -> Option<AppleHarvestedTokens> {
+    let token_file = profile.profile_dir().join("tokens.json");
+    if let Ok(content) = std::fs::read_to_string(&token_file)
+        && let Ok(tokens) = serde_json::from_str::<AppleHarvestedTokens>(&content)
+        && !tokens.developer_token.is_empty()
+        && !tokens.music_user_token.is_empty()
+    {
+        return Some(tokens);
+    }
+    None
+}
+
+fn resolve_apple_music_url(profile: Option<&ProfileManager>) -> String {
+    if let Ok(sf) = std::env::var("MALUS_APPLE_STOREFRONT") {
+        let sf = sf.trim().to_lowercase();
+        if !sf.is_empty() {
+            return format!("https://music.apple.com/{sf}");
+        }
+    }
+    if let Some(profile) = profile
+        && let Some(tokens) = load_cached_tokens(profile)
+    {
+        let sf = tokens.storefront.trim().to_lowercase();
+        if !sf.is_empty() {
+            return format!("https://music.apple.com/{sf}");
+        }
+    }
+    APPLE_MUSIC_URL.to_string()
+}
+
+fn save_cached_tokens(profile: &ProfileManager, tokens: &AppleHarvestedTokens) {
+    let token_file = profile.profile_dir().join("tokens.json");
+    if let Ok(json) = serde_json::to_string(tokens) {
+        let _ = std::fs::write(&token_file, json);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            let _ = std::fs::set_permissions(&token_file, perms);
+        }
+    }
 }
 
 async fn harvest_tokens(page: &WebPage) -> Result<AppleHarvestedTokens, AppleError> {
@@ -205,37 +215,21 @@ async fn bootstrap_minimal_page(
     page: &WebPage,
     tokens: &AppleHarvestedTokens,
 ) -> Result<(), AppleError> {
-    info!("Transitioning to minimal intercepted Apple Music document...");
+    info!("Transitioning to minimal Apple Music document...");
 
-    // 1. Arm one-shot document interceptor on main frame
-    let fulfill_rx = page
-        .intercept_next_main_document(
-            "music.apple.com",
-            "text/html; charset=utf-8",
-            MINIMAL_MUSICKIT_HTML,
-        )
+    // 1. Load minimal document via unified capability API
+    page.load_document(APPLE_MUSIC_URL, MINIMAL_MUSICKIT_HTML)
         .await
         .map_err(AppleError::Web)?;
 
-    // 2. Reload/navigate same page to APPLE_MUSIC_URL
-    page.navigate(APPLE_MUSIC_URL)
-        .await
-        .map_err(AppleError::Web)?;
-
-    // 3. Await document fulfillment
-    tokio::time::timeout(Duration::from_secs(10), fulfill_rx)
-        .await
-        .map_err(|_| AppleError::Internal("Document fulfillment timed out".into()))?
-        .map_err(|_| AppleError::Internal("Fulfillment channel dropped".into()))?;
-
-    // 4. Verify origin
+    // 2. Verify origin
     let origin_val = page
         .wait_for_expression("window.location.origin", Duration::from_secs(5))
         .await
         .map_err(AppleError::Web)?;
     if origin_val.as_str() != Some("https://music.apple.com") {
         return Err(AppleError::Internal(format!(
-            "Intercepted page origin mismatch: {:?}",
+            "Loaded page origin mismatch: {:?}",
             origin_val
         )));
     }
@@ -257,10 +251,12 @@ async fn bootstrap_minimal_page(
                     app: {
                         name: appName,
                         build: appBuild
-                    }
+                    },
+                    persist: "cookie"
                 };
                 if (expectedStorefront && expectedStorefront.length > 0) {
                     configOpts.storefrontId = expectedStorefront;
+                    configOpts.storefrontCountryCode = expectedStorefront;
                 }
                 const music = await window.MusicKit.configure(configOpts);
                 window.music = music;
@@ -417,18 +413,6 @@ impl ProductionAppleWebSession {
         }
     }
 
-    async fn ensure_catalog_session(&self) -> Result<Arc<WebPage>, AppleError> {
-        let session_guard = self.active_session.lock().await;
-        if let Some(ref session) = *session_guard
-            && let Ok(health) = session.runtime.check_health().await
-            && health.alive
-        {
-            return Ok(session.runtime.page_handle());
-        }
-        drop(session_guard);
-        self.ensure_playback_session().await
-    }
-
     async fn ensure_playback_session(&self) -> Result<Arc<WebPage>, AppleError> {
         let mut session_guard = self.active_session.lock().await;
         if let Some(ref session) = *session_guard
@@ -464,25 +448,27 @@ impl ProductionAppleWebSession {
             .map(|v| v.eq_ignore_ascii_case("full_page"))
             .unwrap_or(false);
 
-        let mut extra_args = Vec::new();
-        if launch_mode == LaunchMode::Headless {
-            if try_minimal {
-                extra_args.push("--disable-gpu".to_string());
-            } else {
-                extra_args.push("--window-size=1,1".to_string());
-            }
-        }
+        let profile =
+            ProfileManager::for_namespace(APPLE_PROFILE_NAMESPACE).map_err(AppleError::Web)?;
+        let cached_tokens = load_cached_tokens(&profile);
+
+        let initial_url = if cached_tokens.is_some() && try_minimal {
+            "about:blank".to_string()
+        } else {
+            resolve_apple_music_url(Some(&profile))
+        };
 
         info!(
-            "Launching browser for Apple Music session (launch_mode: {:?}, try_minimal: {})...",
-            launch_mode, try_minimal
+            "Launching browser for Apple Music session (launch_mode: {:?}, try_minimal: {}, cached_tokens: {})...",
+            launch_mode,
+            try_minimal,
+            cached_tokens.is_some()
         );
 
         let options = RuntimeOptions {
             launch_mode,
-            initial_url: APPLE_MUSIC_URL.to_string(),
+            initial_url,
             profile_namespace: Some(APPLE_PROFILE_NAMESPACE.to_string()),
-            extra_args,
             disable_background_throttling: true,
             ..Default::default()
         };
@@ -490,61 +476,84 @@ impl ProductionAppleWebSession {
         let runtime = WebRuntime::launch(options).await.map_err(AppleError::Web)?;
         let page = runtime.page_handle();
 
-        // Wait up to 25 seconds for MusicKit to be ready on initial full page
+        // Wait expression for full-page MusicKit
         let musickit_ready_expr = r#"
             (() => {
                 return (window.MusicKit && window.MusicKit.getInstance()) ? true : false;
             })()
         "#;
 
-        if page
-            .wait_for_expression(musickit_ready_expr, Duration::from_secs(25))
-            .await
-            .is_err()
-        {
-            let _ = runtime.shutdown().await;
-            return Err(AppleError::MusicKitUnavailable);
-        }
-
         let mut minimal_active = false;
 
-        if try_minimal {
-            let minimal_res: Result<(), AppleError> = async {
-                let tokens = harvest_tokens(&page).await?;
-                bootstrap_minimal_page(&page, &tokens).await?;
-                Ok(())
-            }
-            .await;
-
-            match minimal_res {
+        if let Some(tokens) = cached_tokens
+            && try_minimal
+        {
+            info!("Bootstrapping minimal Apple Music document with cached tokens...");
+            match bootstrap_minimal_page(&page, &tokens).await {
                 Ok(()) => {
                     minimal_active = true;
                 }
-                Err(AppleError::NotAuthorized) => {
-                    let _ = runtime.shutdown().await;
-                    return Err(AppleError::NotAuthorized);
-                }
                 Err(e) => {
                     warn!(
-                        "Minimal MusicKit document bootstrap failed ({e}), falling back to full music.apple.com web application..."
+                        "Minimal bootstrap with cached tokens failed: {e}; falling back to full music.apple.com..."
                     );
-                    // Ensure interceptor is cancelled and Fetch is disabled
-                    let _ = page.cancel_document_interception().await;
-
-                    // Navigate back to full page
-                    if let Err(nav_err) = page.navigate(APPLE_MUSIC_URL).await {
+                    if let Err(nav_err) = page
+                        .navigate(&resolve_apple_music_url(Some(&profile)))
+                        .await
+                    {
                         let _ = runtime.shutdown().await;
                         return Err(AppleError::Web(nav_err));
                     }
+                }
+            }
+        }
 
-                    // Wait for full-page MusicKit to initialize
-                    if page
-                        .wait_for_expression(musickit_ready_expr, Duration::from_secs(25))
-                        .await
-                        .is_err()
-                    {
+        if !minimal_active {
+            if page
+                .wait_for_expression(musickit_ready_expr, Duration::from_secs(25))
+                .await
+                .is_err()
+            {
+                let _ = runtime.shutdown().await;
+                return Err(AppleError::MusicKitUnavailable);
+            }
+
+            if try_minimal {
+                let minimal_res: Result<(), AppleError> = async {
+                    let tokens = harvest_tokens(&page).await?;
+                    save_cached_tokens(&profile, &tokens);
+                    bootstrap_minimal_page(&page, &tokens).await?;
+                    Ok(())
+                }
+                .await;
+
+                match minimal_res {
+                    Ok(()) => {
+                        minimal_active = true;
+                    }
+                    Err(AppleError::NotAuthorized) => {
                         let _ = runtime.shutdown().await;
-                        return Err(AppleError::MusicKitUnavailable);
+                        return Err(AppleError::NotAuthorized);
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Minimal MusicKit document bootstrap failed ({e}), falling back to full music.apple.com web application..."
+                        );
+                        if let Err(nav_err) = page
+                            .navigate(&resolve_apple_music_url(Some(&profile)))
+                            .await
+                        {
+                            let _ = runtime.shutdown().await;
+                            return Err(AppleError::Web(nav_err));
+                        }
+                        if page
+                            .wait_for_expression(musickit_ready_expr, Duration::from_secs(25))
+                            .await
+                            .is_err()
+                        {
+                            let _ = runtime.shutdown().await;
+                            return Err(AppleError::MusicKitUnavailable);
+                        }
                     }
                 }
             }
@@ -617,54 +626,20 @@ impl ProductionAppleWebSession {
         *session_guard = Some(ActiveSession { runtime });
         Ok(handle)
     }
-
-    async fn get_storefront_id(&self, page: &WebPage) -> Result<String, AppleError> {
-        let expr = r#"
-            (() => {
-                const mk = window.MusicKit && window.MusicKit.getInstance();
-                if (!mk) return null;
-                return mk.storefrontId || mk.storefrontCountryCode || null;
-            })()
-        "#;
-        let start = tokio::time::Instant::now();
-        let timeout = Duration::from_secs(10);
-        while start.elapsed() < timeout {
-            if let Ok(Value::String(sf)) = page.evaluate(expr).await
-                && !sf.is_empty()
-            {
-                return Ok(sf);
-            }
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
-        Err(AppleError::StorefrontUnavailable(
-            "Timed out waiting for MusicKit storefrontId".into(),
-        ))
-    }
-
-    async fn call_musickit_api(&self, path: &str, params: Value) -> Result<Value, AppleError> {
-        let page = self.ensure_catalog_session().await?;
-        let resolved_path = if path.contains("{storefront}") {
-            let sf = self.get_storefront_id(&page).await?;
-            path.replace("{storefront}", &sf)
-        } else {
-            path.to_string()
-        };
-
-        let func = r#"
-            async function(path, params) {
-                const mk = window.MusicKit && window.MusicKit.getInstance();
-                if (!mk || !mk.api) throw new Error("MusicKit API not available");
-                const res = await mk.api.music(path, params);
-                return res && res.data ? res.data : res;
-            }
-        "#;
-        page.call_function(func, &[Value::String(resolved_path), params])
-            .await
-            .map_err(|e| AppleError::Internal(format!("MusicKit API error: {e}")))
-    }
 }
 
 fn parse_player_status(payload: &Value) -> Option<PlayerStatusWire> {
+    let payload_parsed: Value;
+    let payload = if let Some(s) = payload.as_str() {
+        if let Ok(p) = serde_json::from_str::<Value>(s) {
+            payload_parsed = p;
+            &payload_parsed
+        } else {
+            payload
+        }
+    } else {
+        payload
+    };
     let is_playing = payload["isPlaying"].as_bool().unwrap_or(false);
     let raw_state = payload["playbackState"].as_i64().unwrap_or(0);
     let position_ms = payload["positionMs"].as_u64().unwrap_or(0);
@@ -745,10 +720,19 @@ impl AppleWebSession for ProductionAppleWebSession {
             Err(_) => return Err(AppleError::ProfileBusy),
         };
 
+        let profile =
+            ProfileManager::for_namespace(APPLE_PROFILE_NAMESPACE).map_err(AppleError::Web)?;
+        if let Some(tokens) = load_cached_tokens(&profile)
+            && !tokens.music_user_token.is_empty()
+        {
+            info!("Apple Music probe: session is Authenticated (cached tokens present)");
+            return Ok(AuthState::Authenticated);
+        }
+
         info!("Probing Apple Music authorization state...");
         let options = RuntimeOptions {
             launch_mode: LaunchMode::Headless,
-            initial_url: APPLE_MUSIC_URL.to_string(),
+            initial_url: resolve_apple_music_url(Some(&profile)),
             profile_namespace: Some(APPLE_PROFILE_NAMESPACE.to_string()),
             ..Default::default()
         };
@@ -791,6 +775,9 @@ impl AppleWebSession for ProductionAppleWebSession {
                     .unwrap_or(false);
                 if is_authorized {
                     info!("Apple Music probe: session is Authenticated");
+                    if let Ok(tokens) = harvest_tokens(&page).await {
+                        save_cached_tokens(&profile, &tokens);
+                    }
                     final_state = AuthState::Authenticated;
                     break;
                 }
@@ -815,10 +802,13 @@ impl AppleWebSession for ProductionAppleWebSession {
             Err(_) => return Err(AppleError::ProfileBusy),
         };
 
-        info!("Launching headed browser for Apple Music authentication...");
+        let profile =
+            ProfileManager::for_namespace(APPLE_PROFILE_NAMESPACE).map_err(AppleError::Web)?;
+        let initial_url = resolve_apple_music_url(Some(&profile));
+        info!("Launching headed browser for Apple Music authentication at {initial_url}...");
         let options = RuntimeOptions {
             launch_mode: LaunchMode::Headed,
-            initial_url: APPLE_MUSIC_URL.to_string(),
+            initial_url,
             profile_namespace: Some(APPLE_PROFILE_NAMESPACE.to_string()),
             ..Default::default()
         };
@@ -885,6 +875,53 @@ impl AppleWebSession for ProductionAppleWebSession {
         );
         let _ = page.evaluate(&inject_listener_expr).await;
 
+        // Directly open the Apple Music sign-in modal
+        info!("Directly opening Apple Music sign-in modal...");
+        let trigger_signin_modal_expr = r#"
+            (() => {
+                const clickSignIn = () => {
+                    const btn = document.querySelector('button[data-testid="sign-in-button"]')
+                        || document.querySelector('.commerce-button.signin')
+                        || document.querySelector('.signin')
+                        || document.querySelector('[data-testid="auth-content"] button');
+                    if (btn) {
+                        btn.click();
+                        return true;
+                    }
+                    return false;
+                };
+
+                if (clickSignIn()) {
+                    return "clicked";
+                }
+
+                const observer = new MutationObserver((_, obs) => {
+                    if (clickSignIn()) {
+                        obs.disconnect();
+                    }
+                });
+                observer.observe(document.body || document.documentElement, {
+                    childList: true,
+                    subtree: true
+                });
+
+                setTimeout(() => {
+                    observer.disconnect();
+                    if (!clickSignIn()) {
+                        try {
+                            const mk = window.MusicKit && window.MusicKit.getInstance();
+                            if (mk && typeof mk.authorize === 'function') {
+                                mk.authorize().catch(() => {});
+                            }
+                        } catch (_) {}
+                    }
+                }, 3000);
+
+                return "observer_attached";
+            })()
+        "#;
+        let _ = page.evaluate(trigger_signin_modal_expr).await;
+
         info!("Waiting for user authentication in Apple Music browser window...");
         let start = tokio::time::Instant::now();
 
@@ -896,6 +933,11 @@ impl AppleWebSession for ProductionAppleWebSession {
                 && event.payload.get("isAuthorized").and_then(|v| v.as_bool()) == Some(true)
             {
                 info!("Received authorization event from MusicKit.");
+                if let Ok(tokens) = harvest_tokens(&page).await
+                    && let Ok(profile) = ProfileManager::for_namespace(APPLE_PROFILE_NAMESPACE)
+                {
+                    save_cached_tokens(&profile, &tokens);
+                }
                 // Allow cookies/tokens to flush to profile storage
                 tokio::time::sleep(Duration::from_millis(1500)).await;
                 let _ = runtime.shutdown().await;
@@ -905,6 +947,11 @@ impl AppleWebSession for ProductionAppleWebSession {
             // 2. Defensive poll on page
             if let Ok(Value::Bool(true)) = page.evaluate(probe_auth_expr).await {
                 info!("Defensive poll detected MusicKit authorization.");
+                if let Ok(tokens) = harvest_tokens(&page).await
+                    && let Ok(profile) = ProfileManager::for_namespace(APPLE_PROFILE_NAMESPACE)
+                {
+                    save_cached_tokens(&profile, &tokens);
+                }
                 tokio::time::sleep(Duration::from_millis(1500)).await;
                 let _ = runtime.shutdown().await;
                 return Ok(AuthState::Authenticated);
@@ -929,6 +976,82 @@ impl AppleWebSession for ProductionAppleWebSession {
         Err(AppleError::AuthTimeout)
     }
 
+    /// Refresh and return current Apple Music API credentials.
+    async fn refresh_tokens(&self) -> Result<crate::api::AppleCredentials, AppleError> {
+        // 1. If an active session is running, harvest directly from its page handle
+        {
+            let guard = self.active_session.lock().await;
+            if let Some(ref session) = *guard
+                && let Ok(health) = session.runtime.check_health().await
+                && health.alive
+            {
+                let page = session.runtime.page_handle();
+                if let Ok(tokens) = harvest_tokens(&page).await {
+                    if let Ok(profile) = ProfileManager::for_namespace(APPLE_PROFILE_NAMESPACE) {
+                        save_cached_tokens(&profile, &tokens);
+                    }
+                    return Ok(tokens);
+                }
+            }
+        }
+
+        // 2. Otherwise launch a headless browser session to harvest fresh tokens
+        let _guard = match self.profile_lock.try_lock() {
+            Ok(g) => g,
+            Err(_) => return Err(AppleError::ProfileBusy),
+        };
+
+        let profile =
+            ProfileManager::for_namespace(APPLE_PROFILE_NAMESPACE).map_err(AppleError::Web)?;
+
+        info!("Launching headless session to harvest fresh Apple Music tokens...");
+        let options = RuntimeOptions {
+            launch_mode: LaunchMode::Headless,
+            initial_url: resolve_apple_music_url(Some(&profile)),
+            profile_namespace: Some(APPLE_PROFILE_NAMESPACE.to_string()),
+            ..Default::default()
+        };
+
+        let runtime = WebRuntime::launch(options).await.map_err(AppleError::Web)?;
+        let page = runtime.page_handle();
+        let start = tokio::time::Instant::now();
+        let timeout = Duration::from_secs(12);
+
+        let check_expr = r#"
+            (() => {
+                try {
+                    const mk = window.MusicKit && window.MusicKit.getInstance();
+                    if (!mk) return null;
+                    return { ready: true, isAuthorized: !!mk.isAuthorized };
+                } catch (_) {
+                    return null;
+                }
+            })()
+        "#;
+
+        let mut harvested = None;
+        while start.elapsed() < timeout {
+            if let Ok(val) = page.evaluate(check_expr).await
+                && let Some(obj) = val.as_object()
+            {
+                let is_auth = obj
+                    .get("isAuthorized")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if is_auth && let Ok(tokens) = harvest_tokens(&page).await {
+                    save_cached_tokens(&profile, &tokens);
+                    harvested = Some(tokens);
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+
+        let _ = runtime.shutdown().await;
+
+        harvested.ok_or(AppleError::NotAuthorized)
+    }
+
     /// Logout by wiping the managed Apple profile directory safely.
     async fn logout(&self) -> Result<(), AppleError> {
         let _ = self.shutdown().await;
@@ -940,6 +1063,7 @@ impl AppleWebSession for ProductionAppleWebSession {
         info!("Wiping managed Apple Music profile directory...");
         let pm = ProfileManager::for_namespace(APPLE_PROFILE_NAMESPACE).map_err(AppleError::Web)?;
 
+        let _ = std::fs::remove_file(pm.profile_dir().join("tokens.json"));
         pm.wipe_managed().map_err(AppleError::Web)?;
         info!("Apple Music managed profile wiped successfully.");
         Ok(())
@@ -956,6 +1080,15 @@ impl AppleWebSession for ProductionAppleWebSession {
 
     async fn play_track(&self, catalog_id: &str) -> Result<(), AppleError> {
         let page = self.ensure_playback_session().await?;
+        {
+            let guard = self.active_session.lock().await;
+            if let Some(session) = guard.as_ref() {
+                session
+                    .runtime
+                    .ensure_drm_supported()
+                    .map_err(AppleError::Web)?;
+            }
+        }
         let func = r#"
             async function(trackId) {
                 const mk = window.MusicKit && window.MusicKit.getInstance();
@@ -1029,6 +1162,15 @@ impl AppleWebSession for ProductionAppleWebSession {
 
     async fn resume(&self) -> Result<(), AppleError> {
         let page = self.ensure_playback_session().await?;
+        {
+            let guard = self.active_session.lock().await;
+            if let Some(session) = guard.as_ref() {
+                session
+                    .runtime
+                    .ensure_drm_supported()
+                    .map_err(AppleError::Web)?;
+            }
+        }
         let func = r#"
             async function() {
                 const mk = window.MusicKit && window.MusicKit.getInstance();
@@ -1156,469 +1298,9 @@ impl AppleWebSession for ProductionAppleWebSession {
             *sink_lock.lock().await = Some(sink);
         });
     }
-
-    async fn search(
-        &self,
-        query: &str,
-        kinds: &[SearchKindWire],
-        limit: usize,
-        cursor: Option<&str>,
-    ) -> Result<SearchResultsWire, AppleError> {
-        let res = if let Some(c) = cursor
-            && c.starts_with("/v1/")
-        {
-            self.call_musickit_api(c, serde_json::json!({})).await?
-        } else {
-            let mut types = Vec::new();
-            if kinds.is_empty() || kinds.contains(&SearchKindWire::Track) {
-                types.push("songs");
-            }
-            if kinds.is_empty() || kinds.contains(&SearchKindWire::Album) {
-                types.push("albums");
-            }
-            if kinds.is_empty() || kinds.contains(&SearchKindWire::Artist) {
-                types.push("artists");
-            }
-            if kinds.is_empty() || kinds.contains(&SearchKindWire::Playlist) {
-                types.push("playlists");
-            }
-            let types_str = types.join(",");
-            let mut params = serde_json::json!({
-                "term": query,
-                "types": types_str,
-                "limit": limit,
-            });
-            if let Some(c) = cursor {
-                params["offset"] = serde_json::json!(c);
-            }
-            self.call_musickit_api("/v1/catalog/{storefront}/search", params)
-                .await?
-        };
-
-        let results = res.get("results").unwrap_or(&res);
-
-        let tracks = results.get("songs").map(|sec| {
-            let items: Vec<TrackWire> = sec
-                .get("data")
-                .and_then(|d| d.as_array())
-                .map(|arr| arr.iter().filter_map(parse_apple_track).collect())
-                .unwrap_or_default();
-            let next = sec.get("next").and_then(|v| v.as_str()).map(str::to_string);
-            PageWire::new(items, next)
-        });
-
-        let albums = results.get("albums").map(|sec| {
-            let items: Vec<AlbumWire> = sec
-                .get("data")
-                .and_then(|d| d.as_array())
-                .map(|arr| arr.iter().filter_map(parse_apple_album).collect())
-                .unwrap_or_default();
-            let next = sec.get("next").and_then(|v| v.as_str()).map(str::to_string);
-            PageWire::new(items, next)
-        });
-
-        let artists = results.get("artists").map(|sec| {
-            let items: Vec<ArtistWire> = sec
-                .get("data")
-                .and_then(|d| d.as_array())
-                .map(|arr| arr.iter().filter_map(parse_apple_artist).collect())
-                .unwrap_or_default();
-            let next = sec.get("next").and_then(|v| v.as_str()).map(str::to_string);
-            PageWire::new(items, next)
-        });
-
-        let playlists = results.get("playlists").map(|sec| {
-            let items: Vec<PlaylistWire> = sec
-                .get("data")
-                .and_then(|d| d.as_array())
-                .map(|arr| arr.iter().filter_map(parse_apple_playlist).collect())
-                .unwrap_or_default();
-            let next = sec.get("next").and_then(|v| v.as_str()).map(str::to_string);
-            PageWire::new(items, next)
-        });
-
-        Ok(SearchResultsWire {
-            tracks,
-            albums,
-            artists,
-            playlists,
-        })
-    }
-
-    async fn get_catalog_item(&self, media_id: &str) -> Result<CatalogItemWire, AppleError> {
-        let mid = malus_protocol::MediaIdWire::parse(media_id)
-            .map_err(|e| AppleError::Internal(format!("Invalid MediaId '{media_id}': {e}")))?;
-
-        let raw_id = mid.id();
-        let kind = mid.kind();
-
-        let is_library = raw_id.starts_with("i.")
-            || raw_id.starts_with("l.")
-            || (raw_id.starts_with("p.") && !raw_id.starts_with("pl."));
-
-        let path = if is_library {
-            match kind {
-                "track" => format!("/v1/me/library/songs/{raw_id}"),
-                "album" => format!("/v1/me/library/albums/{raw_id}"),
-                "playlist" => format!("/v1/me/library/playlists/{raw_id}"),
-                other => {
-                    return Err(AppleError::NotFound(format!(
-                        "Unsupported library kind '{other}'"
-                    )));
-                }
-            }
-        } else {
-            match kind {
-                "track" => format!("/v1/catalog/{{storefront}}/songs/{raw_id}"),
-                "album" => format!("/v1/catalog/{{storefront}}/albums/{raw_id}"),
-                "artist" => format!("/v1/catalog/{{storefront}}/artists/{raw_id}"),
-                "playlist" => format!("/v1/catalog/{{storefront}}/playlists/{raw_id}"),
-                other => {
-                    return Err(AppleError::NotFound(format!(
-                        "Unsupported catalog kind '{other}'"
-                    )));
-                }
-            }
-        };
-
-        let res = self.call_musickit_api(&path, serde_json::json!({})).await?;
-        let item = res
-            .get("data")
-            .and_then(|d| d.as_array())
-            .and_then(|arr| arr.first())
-            .ok_or_else(|| AppleError::NotFound(format!("Item '{media_id}' not found")))?;
-
-        match kind {
-            "track" => {
-                let mut track = parse_apple_track(item).ok_or_else(|| {
-                    AppleError::Internal(format!("Failed to parse track '{media_id}'"))
-                })?;
-                track.id = media_id.to_string();
-                Ok(CatalogItemWire::Track(track))
-            }
-            "album" => {
-                let mut album = parse_apple_album(item).ok_or_else(|| {
-                    AppleError::Internal(format!("Failed to parse album '{media_id}'"))
-                })?;
-                album.id = media_id.to_string();
-                Ok(CatalogItemWire::Album(album))
-            }
-            "artist" => {
-                let mut artist = parse_apple_artist(item).ok_or_else(|| {
-                    AppleError::Internal(format!("Failed to parse artist '{media_id}'"))
-                })?;
-                artist.id = media_id.to_string();
-                Ok(CatalogItemWire::Artist(artist))
-            }
-            "playlist" => {
-                let mut playlist = parse_apple_playlist(item).ok_or_else(|| {
-                    AppleError::Internal(format!("Failed to parse playlist '{media_id}'"))
-                })?;
-                playlist.id = media_id.to_string();
-                Ok(CatalogItemWire::Playlist(playlist))
-            }
-            other => Err(AppleError::NotFound(format!(
-                "Unknown media kind '{other}'"
-            ))),
-        }
-    }
-
-    async fn get_collection_items(
-        &self,
-        media_id: &str,
-        limit: usize,
-        cursor: Option<&str>,
-    ) -> Result<PageWire<TrackWire>, AppleError> {
-        let mid = malus_protocol::MediaIdWire::parse(media_id)
-            .map_err(|e| AppleError::Internal(format!("Invalid MediaId '{media_id}': {e}")))?;
-
-        let raw_id = mid.id();
-        let kind = mid.kind();
-
-        let res = if let Some(c) = cursor
-            && c.starts_with("/v1/")
-        {
-            self.call_musickit_api(c, serde_json::json!({})).await?
-        } else {
-            let is_library = raw_id.starts_with("l.")
-                || (raw_id.starts_with("p.") && !raw_id.starts_with("pl."));
-            let path = match (kind, is_library) {
-                ("album", false) => format!("/v1/catalog/{{storefront}}/albums/{raw_id}/tracks"),
-                ("album", true) => format!("/v1/me/library/albums/{raw_id}/tracks"),
-                ("playlist", false) => {
-                    format!("/v1/catalog/{{storefront}}/playlists/{raw_id}/tracks")
-                }
-                ("playlist", true) => format!("/v1/me/library/playlists/{raw_id}/tracks"),
-                _ => {
-                    return Err(AppleError::NotFound(format!(
-                        "Kind '{kind}' cannot have collection items"
-                    )));
-                }
-            };
-            let mut params = serde_json::json!({ "limit": limit });
-            if let Some(c) = cursor {
-                params["offset"] = serde_json::json!(c);
-            }
-            self.call_musickit_api(&path, params).await?
-        };
-
-        let items: Vec<TrackWire> = res
-            .get("data")
-            .and_then(|d| d.as_array())
-            .map(|arr| arr.iter().filter_map(parse_apple_track).collect())
-            .unwrap_or_default();
-        let next = res.get("next").and_then(|v| v.as_str()).map(str::to_string);
-        Ok(PageWire::new(items, next))
-    }
-
-    async fn get_library(
-        &self,
-        kind: LibraryKindWire,
-        limit: usize,
-        cursor: Option<&str>,
-    ) -> Result<LibraryPageWire, AppleError> {
-        let res = if let Some(c) = cursor
-            && c.starts_with("/v1/")
-        {
-            self.call_musickit_api(c, serde_json::json!({})).await?
-        } else {
-            let path = match kind {
-                LibraryKindWire::Tracks => "/v1/me/library/songs",
-                LibraryKindWire::Albums => "/v1/me/library/albums",
-                LibraryKindWire::Playlists => "/v1/me/library/playlists",
-            };
-            let mut params = serde_json::json!({ "limit": limit });
-            if let Some(c) = cursor {
-                params["offset"] = serde_json::json!(c);
-            }
-            self.call_musickit_api(path, params).await?
-        };
-
-        let next = res.get("next").and_then(|v| v.as_str()).map(str::to_string);
-        let data = res.get("data").and_then(|d| d.as_array());
-
-        match kind {
-            LibraryKindWire::Tracks => {
-                let items: Vec<TrackWire> = data
-                    .map(|arr| arr.iter().filter_map(parse_apple_track).collect())
-                    .unwrap_or_default();
-                Ok(LibraryPageWire::Tracks(PageWire::new(items, next)))
-            }
-            LibraryKindWire::Albums => {
-                let items: Vec<AlbumWire> = data
-                    .map(|arr| arr.iter().filter_map(parse_apple_album).collect())
-                    .unwrap_or_default();
-                Ok(LibraryPageWire::Albums(PageWire::new(items, next)))
-            }
-            LibraryKindWire::Playlists => {
-                let items: Vec<PlaylistWire> = data
-                    .map(|arr| arr.iter().filter_map(parse_apple_playlist).collect())
-                    .unwrap_or_default();
-                Ok(LibraryPageWire::Playlists(PageWire::new(items, next)))
-            }
-        }
-    }
 }
 
-pub fn parse_apple_artwork(art: &Value) -> Option<ArtworkWire> {
-    let raw_url = art["url"].as_str()?;
-    let width = art["width"].as_u64().map(|w| w as u32);
-    let height = art["height"].as_u64().map(|h| h as u32);
-    let url = raw_url.replace("{w}", "600").replace("{h}", "600");
-    Some(ArtworkWire { url, width, height })
-}
-
-pub fn parse_apple_track(item: &Value) -> Option<TrackWire> {
-    let attrs = item.get("attributes").unwrap_or(item);
-    let id_str = item["id"]
-        .as_str()
-        .or_else(|| attrs["playParams"]["id"].as_str())?;
-
-    let media_id = if id_str.starts_with("apple:track:") {
-        id_str.to_string()
-    } else {
-        format!("apple:track:{id_str}")
-    };
-
-    let title = attrs["name"]
-        .as_str()
-        .or_else(|| item["title"].as_str())
-        .unwrap_or("Unknown Title")
-        .to_string();
-
-    let mut artists = Vec::new();
-    if let Some(art_arr) = item["relationships"]["artists"]["data"].as_array() {
-        for a in art_arr {
-            let name = a["attributes"]["name"]
-                .as_str()
-                .or_else(|| a["name"].as_str())
-                .unwrap_or("");
-            if !name.is_empty() {
-                let id = a["id"].as_str().map(|i| format!("apple:artist:{i}"));
-                artists.push(ArtistRefWire::new(id, name));
-            }
-        }
-    }
-    if artists.is_empty()
-        && let Some(name) = attrs["artistName"]
-            .as_str()
-            .or_else(|| item["artist"].as_str())
-        && !name.is_empty()
-    {
-        artists.push(ArtistRefWire::named(name));
-    }
-
-    let album = if let Some(alb_arr) = item["relationships"]["albums"]["data"].as_array()
-        && let Some(first_alb) = alb_arr.first()
-    {
-        let title = first_alb["attributes"]["name"]
-            .as_str()
-            .or_else(|| attrs["albumName"].as_str())
-            .unwrap_or("");
-        let id = first_alb["id"].as_str().map(|i| format!("apple:album:{i}"));
-        Some(AlbumRefWire::new(id, title))
-    } else if let Some(title) = attrs["albumName"]
-        .as_str()
-        .or_else(|| item["album"].as_str())
-    {
-        if !title.is_empty() {
-            Some(AlbumRefWire::titled(title))
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    let duration_ms = attrs["durationInMillis"]
-        .as_u64()
-        .or_else(|| attrs["durationInMillis"].as_f64().map(|f| f as u64))
-        .or_else(|| item["duration_ms"].as_u64());
-
-    let track_number = attrs["trackNumber"].as_u64().map(|n| n as u32);
-    let disc_number = attrs["discNumber"].as_u64().map(|n| n as u32);
-    let explicit = attrs["contentRating"].as_str().map(|r| r == "explicit");
-
-    let artwork = attrs
-        .get("artwork")
-        .or_else(|| item.get("artwork"))
-        .and_then(parse_apple_artwork);
-    let uri = attrs["url"]
-        .as_str()
-        .or_else(|| item["url"].as_str())
-        .map(str::to_string);
-
-    Some(TrackWire {
-        id: media_id,
-        title,
-        artists,
-        album,
-        duration_ms,
-        track_number,
-        disc_number,
-        explicit,
-        artwork,
-        uri,
-    })
-}
-
-pub fn parse_apple_album(item: &Value) -> Option<AlbumWire> {
-    let attrs = item.get("attributes").unwrap_or(item);
-    let id_str = item["id"].as_str()?;
-    let media_id = if id_str.starts_with("apple:album:") {
-        id_str.to_string()
-    } else {
-        format!("apple:album:{id_str}")
-    };
-
-    let title = attrs["name"]
-        .as_str()
-        .unwrap_or("Unknown Album")
-        .to_string();
-
-    let mut artists = Vec::new();
-    if let Some(art_arr) = item["relationships"]["artists"]["data"].as_array() {
-        for a in art_arr {
-            let name = a["attributes"]["name"]
-                .as_str()
-                .or_else(|| a["name"].as_str())
-                .unwrap_or("");
-            if !name.is_empty() {
-                let id = a["id"].as_str().map(|i| format!("apple:artist:{i}"));
-                artists.push(ArtistRefWire::new(id, name));
-            }
-        }
-    }
-    if artists.is_empty()
-        && let Some(name) = attrs["artistName"].as_str()
-        && !name.is_empty()
-    {
-        artists.push(ArtistRefWire::named(name));
-    }
-
-    let track_count = attrs["trackCount"].as_u64().map(|n| n as u32);
-    let release_date = attrs["releaseDate"].as_str().map(str::to_string);
-    let artwork = attrs.get("artwork").and_then(parse_apple_artwork);
-
-    Some(AlbumWire {
-        id: media_id,
-        title,
-        artists,
-        release_date,
-        track_count,
-        artwork,
-    })
-}
-
-pub fn parse_apple_artist(item: &Value) -> Option<ArtistWire> {
-    let attrs = item.get("attributes").unwrap_or(item);
-    let id_str = item["id"].as_str()?;
-    let media_id = if id_str.starts_with("apple:artist:") {
-        id_str.to_string()
-    } else {
-        format!("apple:artist:{id_str}")
-    };
-
-    let name = attrs["name"]
-        .as_str()
-        .unwrap_or("Unknown Artist")
-        .to_string();
-    let artwork = attrs.get("artwork").and_then(parse_apple_artwork);
-
-    Some(ArtistWire {
-        id: media_id,
-        name,
-        artwork,
-    })
-}
-
-pub fn parse_apple_playlist(item: &Value) -> Option<PlaylistWire> {
-    let attrs = item.get("attributes").unwrap_or(item);
-    let id_str = item["id"].as_str()?;
-    let media_id = if id_str.starts_with("apple:playlist:") {
-        id_str.to_string()
-    } else {
-        format!("apple:playlist:{id_str}")
-    };
-
-    let title = attrs["name"]
-        .as_str()
-        .unwrap_or("Unknown Playlist")
-        .to_string();
-    let description = attrs["description"]["standard"]
-        .as_str()
-        .or_else(|| attrs["description"].as_str())
-        .map(str::to_string);
-    let curator = attrs["curatorName"].as_str().map(str::to_string);
-    let track_count = attrs["trackCount"].as_u64().map(|n| n as u32);
-    let artwork = attrs.get("artwork").and_then(parse_apple_artwork);
-
-    Some(PlaylistWire {
-        id: media_id,
-        title,
-        curator,
-        description,
-        track_count,
-        artwork,
-    })
-}
+pub use crate::api::{
+    parse_apple_album, parse_apple_artist, parse_apple_artwork, parse_apple_playlist,
+    parse_apple_track,
+};

@@ -9,7 +9,8 @@ use malus_protocol::{
         SearchKindWire, SearchResultsWire, TrackWire,
     },
 };
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(name = "malus", about = "Malus audio player command-line interface")]
@@ -285,11 +286,63 @@ enum Commands {
 
     /// Ping the daemon to check connectivity
     Ping,
+
+    /// Run system diagnostics and verify Malus prerequisites
+    Doctor,
+
+    /// Configure, install, or verify Widevine CDM
+    SetupWidevine {
+        /// Optional path to libwidevinecdm.so or WidevineCdm directory
+        #[arg(long, help = "Path to libwidevinecdm.so or WidevineCdm directory")]
+        path: Option<PathBuf>,
+
+        /// Download and install Widevine CDM from Google's official Linux package
+        #[arg(
+            long,
+            help = "Download and install Widevine CDM from Google's official package"
+        )]
+        install: bool,
+
+        /// Accept Google Chrome terms of service (required for non-interactive --install)
+        #[arg(long, help = "Accept Google Chrome terms of service for --install")]
+        accept_google_terms: bool,
+
+        /// Force re-installation of managed Widevine CDM even if already present
+        #[arg(long, help = "Force reinstall of managed Widevine CDM")]
+        force: bool,
+
+        /// Reset Widevine configuration and delete Malus-managed CDM files
+        #[arg(
+            long,
+            help = "Reset Widevine configuration and delete Malus-managed files"
+        )]
+        reset: bool,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+
+    // Standalone commands that do not require an active daemon connection
+    match cli.command {
+        Commands::Doctor => {
+            run_doctor();
+            return Ok(());
+        }
+        Commands::SetupWidevine {
+            path,
+            install,
+            accept_google_terms,
+            force,
+            reset,
+        } => {
+            run_setup_widevine(path, install, accept_google_terms, force, reset).await?;
+            return Ok(());
+        }
+        _ => {}
+    }
+
     let socket_path = cli.socket.unwrap_or_else(default_socket_path);
 
     let mut client = MalusClient::connect(&socket_path).await.map_err(|e| {
@@ -738,6 +791,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 other => print_response(&other),
             }
         }
+        Commands::Doctor | Commands::SetupWidevine { .. } => unreachable!(),
     }
 
     Ok(())
@@ -1295,6 +1349,318 @@ fn print_response(resp: &ClientResponse) {
             if let Some(msg) = &s.message {
                 println!("  Message: {msg}");
             }
+        }
+        ClientResponse::ProviderSurfaceManifest(manifest) => println!("{manifest:?}"),
+        ClientResponse::Surface(surface) => println!("{surface:?}"),
+        ClientResponse::SurfaceContinued(cont) => println!("{cont:?}"),
+        ClientResponse::SurfaceActionResult(res) => println!("{res:?}"),
+    }
+}
+
+fn run_doctor() {
+    println!("Malus diagnostics\n");
+
+    let wpe_cand = malus_web_runtime::discover_wpe(None);
+    if wpe_cand.is_some() {
+        println!("{:<18} OK", "WPE runtime");
+    } else {
+        println!("{:<18} MISSING", "WPE runtime");
+    }
+
+    let bwrap_paths = ["/usr/bin/bwrap", "/usr/sbin/bwrap", "/bin/bwrap"];
+    let bwrap_ok = bwrap_paths.iter().any(|p| Path::new(p).is_file());
+    if bwrap_ok {
+        println!("{:<18} OK", "WebKit sandbox");
+    } else {
+        println!("{:<18} MISSING", "WebKit sandbox");
+    }
+
+    let ocdm_ok = wpe_cand
+        .as_ref()
+        .and_then(|c| c.ocdm_path.as_ref())
+        .map(|p| p.is_file())
+        .unwrap_or(false);
+    if ocdm_ok {
+        println!("{:<18} OK", "OpenCDM");
+    } else {
+        println!("{:<18} MISSING", "OpenCDM");
+    }
+
+    let persisted_status = malus_web_runtime::check_persisted_widevine_status();
+    let widevine_res = malus_web_runtime::discover_widevine();
+    let mut show_setup_hint = false;
+
+    match widevine_res {
+        Ok(inst) => {
+            if let malus_web_runtime::PersistedWidevineStatus::Invalid(ref bad_path) =
+                persisted_status
+            {
+                println!(
+                    "{:<18} OK  {} (persisted config '{}' is invalid)",
+                    "Widevine CDM",
+                    inst.library_path.display(),
+                    bad_path.display()
+                );
+            } else if inst.source == malus_web_runtime::WidevineSource::ManagedInstall {
+                if let Some(meta) = malus_web_runtime::read_managed_metadata(&inst.directory) {
+                    println!(
+                        "{:<18} OK  {} (source: Managed install, version: {})",
+                        "Widevine CDM",
+                        inst.library_path.display(),
+                        meta.version
+                    );
+                } else {
+                    println!(
+                        "{:<18} OK  {} (source: Managed install)",
+                        "Widevine CDM",
+                        inst.library_path.display()
+                    );
+                }
+            } else {
+                println!("{:<18} OK  {}", "Widevine CDM", inst.library_path.display());
+            }
+        }
+        Err(malus_web_runtime::WidevineError::InvalidPath(msg)) => {
+            println!("{:<18} INVALID CONFIG ({msg})", "Widevine CDM");
+            show_setup_hint = true;
+        }
+        Err(_) => {
+            if let malus_web_runtime::PersistedWidevineStatus::Invalid(ref bad_path) =
+                persisted_status
+            {
+                println!(
+                    "{:<18} INVALID CONFIG ({})",
+                    "Widevine CDM",
+                    bad_path.display()
+                );
+            } else {
+                println!("{:<18} MISSING", "Widevine CDM");
+            }
+            show_setup_hint = true;
+        }
+    }
+
+    let apple_provider_ok = check_apple_provider_binary();
+    if apple_provider_ok {
+        println!("{:<18} OK", "Apple provider");
+    } else {
+        println!("{:<18} MISSING", "Apple provider");
+    }
+
+    if show_setup_hint {
+        println!("\nRun: malus setup-widevine --install");
+    }
+}
+
+fn check_apple_provider_binary() -> bool {
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(parent) = exe.parent()
+        && parent.join("malus-provider-apple").is_file()
+    {
+        return true;
+    }
+    if Path::new("target/debug/malus-provider-apple").is_file()
+        || Path::new("target/release/malus-provider-apple").is_file()
+    {
+        return true;
+    }
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in path_var.split(':') {
+            if Path::new(dir).join("malus-provider-apple").is_file() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+async fn run_setup_widevine(
+    path: Option<PathBuf>,
+    install: bool,
+    accept_google_terms: bool,
+    force: bool,
+    reset: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Malus Widevine Setup\n");
+
+    // Phase 11: Validate CLI arguments
+    if path.is_some() && install {
+        eprintln!("Error: --path and --install cannot be used together.");
+        std::process::exit(1);
+    }
+    if reset && install {
+        eprintln!("Error: --reset and --install cannot be used together.");
+        std::process::exit(1);
+    }
+    if reset && path.is_some() {
+        eprintln!("Error: --reset and --path cannot be used together.");
+        std::process::exit(1);
+    }
+    if force && !install {
+        eprintln!("Error: --force requires --install.");
+        std::process::exit(1);
+    }
+    if accept_google_terms && !install {
+        eprintln!("Error: --accept-google-terms requires --install.");
+        std::process::exit(1);
+    }
+
+    // Phase 12: Handle --reset
+    if reset {
+        match malus_web_runtime::reset_widevine_config() {
+            Ok(res) => {
+                if let Some(ref dir) = res.managed_files_removed {
+                    println!(
+                        "Removed Malus-managed Widevine directory: {}",
+                        dir.display()
+                    );
+                }
+                if let Some(ref ext) = res.preserved_external_path {
+                    println!(
+                        "Removed persisted configuration. External library was preserved: {}",
+                        ext.display()
+                    );
+                }
+                if res.config_removed {
+                    println!("Persisted configuration removed.");
+                } else {
+                    println!("No persisted configuration was present.");
+                }
+                println!("\nWidevine configuration reset complete.");
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("Error during reset: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Phase 10: Handle --install
+    if install {
+        use std::io::IsTerminal;
+        if !accept_google_terms {
+            if !std::io::stdin().is_terminal() {
+                eprintln!(
+                    "Error: --accept-google-terms is required for non-interactive installation."
+                );
+                std::process::exit(1);
+            }
+
+            println!("Widevine is proprietary software provided by Google.\n");
+            println!("Malus can download Google's official Linux Chrome package and extract");
+            println!("only the Widevine CDM for local use. Chrome itself will not be installed.\n");
+            println!("Downloading Google's package is subject to Google's terms:");
+            println!("https://www.google.com/chrome/terms/\n");
+            print!("Continue? [y/N]: ");
+            std::io::stdout().flush()?;
+
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input)?;
+            let trimmed = input.trim();
+            if trimmed != "y" && trimmed != "Y" {
+                println!("Installation cancelled.");
+                return Ok(());
+            }
+        }
+
+        println!("Downloading and extracting Widevine CDM from Google's official package...");
+        match malus_web_runtime::install_managed_widevine(None, force).await {
+            Ok(inst) => {
+                println!("\nWidevine CDM successfully configured:");
+                println!("  Source:       {}", inst.source);
+                println!("  Library path: {}", inst.library_path.display());
+                println!("  Sandbox root: {}", inst.directory.display());
+                if let Some(meta) = malus_web_runtime::read_managed_metadata(&inst.directory) {
+                    println!("  Version:      {}", meta.version);
+                    println!("  Installed at: {}", meta.installed_at);
+                }
+                if let Some(cfg) = malus_web_runtime::widevine::get_user_config_path() {
+                    println!("  Persisted in: {}", cfg.display());
+                }
+                println!("\nWidevine is ready for Apple Music playback.");
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("Error installing Widevine: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Existing --path handler
+    if let Some(custom_path) = path {
+        println!(
+            "Validating provided Widevine path: {}",
+            custom_path.display()
+        );
+        match malus_web_runtime::persist_widevine_path(&custom_path) {
+            Ok(inst) => {
+                println!("Widevine CDM validated and configured:");
+                println!("  Library path: {}", inst.library_path.display());
+                println!("  Sandbox root: {}", inst.directory.display());
+                if let Some(cfg) = malus_web_runtime::widevine::get_user_config_path() {
+                    println!("  Persisted in: {}", cfg.display());
+                }
+                println!("\nWidevine is ready for Apple Music playback.");
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("Error configuring Widevine: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Default discovery
+    match malus_web_runtime::discover_widevine() {
+        Ok(inst) => {
+            println!("Found existing Widevine CDM installation:");
+            println!("  Source:       {}", inst.source);
+            println!("  Library path: {}", inst.library_path.display());
+            println!("  Sandbox root: {}", inst.directory.display());
+            println!("  Validation:   OK (regular ELF shared library)");
+            println!("\nWidevine is available and ready for playback.");
+            Ok(())
+        }
+        Err(e) => {
+            println!("No working Widevine CDM installation was detected ({e}).");
+            println!("\nApple Music playback requires libwidevinecdm.so.");
+            println!("You can install Widevine automatically from Google's official package with:");
+            println!("\n  malus setup-widevine --install");
+            println!("\nOr configure an existing Widevine CDM installation with:");
+            println!("\n  malus setup-widevine --path /path/to/libwidevinecdm.so");
+            println!("\nKnown sources for libwidevinecdm.so on Linux:");
+            println!("  - Installed browser packages (Google Chrome, Chromium, Brave, Vivaldi)");
+            println!("  - Distribution Widevine packages (e.g. chromium-widevine, widevine)");
+            println!("  - Custom or system library directories");
+
+            use std::io::IsTerminal;
+            if std::io::stdin().is_terminal() {
+                println!("\nEnter path to libwidevinecdm.so (or press Enter to cancel): ");
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input)?;
+                let trimmed = input.trim();
+                if !trimmed.is_empty() {
+                    match malus_web_runtime::persist_widevine_path(Path::new(trimmed)) {
+                        Ok(inst) => {
+                            println!("\nWidevine CDM validated and configured:");
+                            println!("  Library path: {}", inst.library_path.display());
+                            println!("  Sandbox root: {}", inst.directory.display());
+                            if let Some(cfg) = malus_web_runtime::widevine::get_user_config_path() {
+                                println!("  Persisted in: {}", cfg.display());
+                            }
+                            println!("\nWidevine is ready for Apple Music playback.");
+                            return Ok(());
+                        }
+                        Err(err) => {
+                            eprintln!("Error configuring Widevine: {err}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            }
+            std::process::exit(1);
         }
     }
 }

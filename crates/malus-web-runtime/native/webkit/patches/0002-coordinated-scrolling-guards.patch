@@ -1,0 +1,83 @@
+From: Malus Team <malus@example.com>
+Subject: [PATCH 2/2] Guard coordinated async scrollbar usages with ENABLE(ASYNC_SCROLLING)
+
+When building WebKit with -DENABLE_ASYNC_SCROLLING=OFF, coordinated graphics
+scrollbar files were still included by USE(COORDINATED_GRAPHICS_ASYNC_SCROLLBAR)
+even though the required scrolling node types are guarded by ENABLE(ASYNC_SCROLLING).
+
+This patch ensures that coordinated scrollbar headers and implementations are only
+compiled when ENABLE(ASYNC_SCROLLING) is also enabled.
+---
+ Source/WebCore/page/scrolling/coordinated/ScrollerCoordinated.cpp                 | 2 +-
+ Source/WebCore/page/scrolling/coordinated/ScrollerCoordinated.h                   | 2 +-
+ Source/WebCore/page/scrolling/coordinated/ScrollerPairCoordinated.cpp             | 2 +-
+ Source/WebCore/page/scrolling/coordinated/ScrollerPairCoordinated.h               | 2 +-
+ Source/WebCore/page/scrolling/coordinated/ScrollingStateScrollingNodeCoordinated.cpp | 2 +-
+ 5 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/Source/WebCore/page/scrolling/coordinated/ScrollerCoordinated.cpp b/Source/WebCore/page/scrolling/coordinated/ScrollerCoordinated.cpp
+index e79f140..fbf6da9 100644
+--- a/Source/WebCore/page/scrolling/coordinated/ScrollerCoordinated.cpp
++++ b/Source/WebCore/page/scrolling/coordinated/ScrollerCoordinated.cpp
+@@ -28,7 +28,7 @@
+ #include "config.h"
+ #include "ScrollerCoordinated.h"
+ 
+-#if USE(COORDINATED_GRAPHICS_ASYNC_SCROLLBAR)
++#if USE(COORDINATED_GRAPHICS_ASYNC_SCROLLBAR) && ENABLE(ASYNC_SCROLLING)
+ #include "BitmapTexturePool.h"
+ #include "CoordinatedPlatformLayer.h"
+ #include "CoordinatedPlatformLayerBufferRGB.h"
+diff --git a/Source/WebCore/page/scrolling/coordinated/ScrollerCoordinated.h b/Source/WebCore/page/scrolling/coordinated/ScrollerCoordinated.h
+index 3274246..84ea9bf 100644
+--- a/Source/WebCore/page/scrolling/coordinated/ScrollerCoordinated.h
++++ b/Source/WebCore/page/scrolling/coordinated/ScrollerCoordinated.h
+@@ -27,7 +27,7 @@
+ 
+ #pragma once
+ 
+-#if USE(COORDINATED_GRAPHICS_ASYNC_SCROLLBAR)
++#if USE(COORDINATED_GRAPHICS_ASYNC_SCROLLBAR) && ENABLE(ASYNC_SCROLLING)
+ 
+ #include "ScrollTypes.h"
+ #include "ScrollerImpAdwaita.h"
+diff --git a/Source/WebCore/page/scrolling/coordinated/ScrollerPairCoordinated.cpp b/Source/WebCore/page/scrolling/coordinated/ScrollerPairCoordinated.cpp
+index 72ef919..13e3db9 100644
+--- a/Source/WebCore/page/scrolling/coordinated/ScrollerPairCoordinated.cpp
++++ b/Source/WebCore/page/scrolling/coordinated/ScrollerPairCoordinated.cpp
+@@ -28,7 +28,7 @@
+ #include "config.h"
+ #include "ScrollerPairCoordinated.h"
+ 
+-#if USE(COORDINATED_GRAPHICS_ASYNC_SCROLLBAR)
++#if USE(COORDINATED_GRAPHICS_ASYNC_SCROLLBAR) && ENABLE(ASYNC_SCROLLING)
+ 
+ #include "ScrollTypes.h"
+ #include "ScrollerCoordinated.h"
+diff --git a/Source/WebCore/page/scrolling/coordinated/ScrollerPairCoordinated.h b/Source/WebCore/page/scrolling/coordinated/ScrollerPairCoordinated.h
+index eb1496b..1913fb9 100644
+--- a/Source/WebCore/page/scrolling/coordinated/ScrollerPairCoordinated.h
++++ b/Source/WebCore/page/scrolling/coordinated/ScrollerPairCoordinated.h
+@@ -27,7 +27,7 @@
+ 
+ #pragma once
+ 
+-#if USE(COORDINATED_GRAPHICS_ASYNC_SCROLLBAR)
++#if USE(COORDINATED_GRAPHICS_ASYNC_SCROLLBAR) && ENABLE(ASYNC_SCROLLING)
+ 
+ #include "ScrollingStateScrollingNode.h"
+ #include <wtf/Forward.h>
+diff --git a/Source/WebCore/page/scrolling/coordinated/ScrollingStateScrollingNodeCoordinated.cpp b/Source/WebCore/page/scrolling/coordinated/ScrollingStateScrollingNodeCoordinated.cpp
+index a5bdfc9..8a7c1b5 100644
+--- a/Source/WebCore/page/scrolling/coordinated/ScrollingStateScrollingNodeCoordinated.cpp
++++ b/Source/WebCore/page/scrolling/coordinated/ScrollingStateScrollingNodeCoordinated.cpp
+@@ -26,7 +26,7 @@
+ #include "config.h"
+ #include "ScrollingStateScrollingNode.h"
+ 
+-#if USE(COORDINATED_GRAPHICS_ASYNC_SCROLLBAR)
++#if USE(COORDINATED_GRAPHICS_ASYNC_SCROLLBAR) && ENABLE(ASYNC_SCROLLING)
+ #include "ScrollbarThemeAdwaita.h"
+ #include "ScrollerImpAdwaita.h"
+ 
+-- 

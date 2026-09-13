@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 malus-client = { path = "../malus-client" }
 malus-protocol = { path = "../malus-protocol" }
+malus-web-runtime = { path = "../malus-web-runtime" }
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net", "io-util"] }
 thiserror = "2"

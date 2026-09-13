@@ -27,6 +27,11 @@ libc = "0.2"
 url = "2.5"
 directories = "6.0"
 base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+ar = "0.9"
+tar = "0.4"
+xz2 = "0.1"
+tempfile = "3.17"
 
 [dev-dependencies]
-tempfile = "3.17"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

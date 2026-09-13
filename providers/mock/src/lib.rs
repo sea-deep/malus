@@ -13,10 +13,13 @@
 
 use async_trait::async_trait;
 use malus_provider_sdk::{
-    AlbumRefWire, AlbumWire, ArtistRefWire, ArtistWire, CatalogItemWire, LibraryKindWire,
-    LibraryPageWire, MediaIdWire, PageWire, PlaybackStateWire, PlayerStatusWire, PlaylistWire,
-    QueueWire, RepeatModeWire, SearchKindWire, SearchResultsWire, TrackWire, capability,
-    error::ProviderError, traits::Provider,
+    ActionRoleWire, ActionStateWire, AlbumRefWire, AlbumWire, ArtistRefWire, ArtistWire,
+    CatalogItemWire, LibraryKindWire, LibraryPageWire, MediaIdWire, PageWire, PlaybackStateWire,
+    PlayerStatusWire, PlaylistWire, ProviderEntityRefWire, ProviderSurfaceManifestWire, QueueWire,
+    RepeatModeWire, SearchKindWire, SearchResultsWire, SurfaceActionResultWire, SurfaceActionWire,
+    SurfaceBadgeWire, SurfaceContinuationWire, SurfaceCursorWire, SurfaceHeaderWire,
+    SurfaceItemWire, SurfaceNavEntryWire, SurfaceNavGroupWire, SurfaceRefreshWire,
+    SurfaceSectionWire, SurfaceWire, TrackWire, capability, error::ProviderError, traits::Provider,
 };
 use std::{sync::Arc, time::Instant};
 use tokio::sync::Mutex;
@@ -191,6 +194,7 @@ impl Provider for MockProvider {
             capability::PLAYBACK_SEEK.into(),
             capability::QUEUE_READ.into(),
             capability::QUEUE_EDIT.into(),
+            capability::SURFACES.into(),
             "mock.repost".into(),
         ]
     }
@@ -512,11 +516,277 @@ impl Provider for MockProvider {
             )))
         }
     }
+
+    async fn get_surface_manifest(&self) -> Result<ProviderSurfaceManifestWire, ProviderError> {
+        Ok(ProviderSurfaceManifestWire {
+            provider_id: "mock".to_string(),
+            default_surface_id: "home".to_string(),
+            groups: vec![
+                SurfaceNavGroupWire::new(
+                    "discover",
+                    Some("Discover".to_string()),
+                    vec![
+                        SurfaceNavEntryWire::with_icon("home", "Home", "house"),
+                        SurfaceNavEntryWire::with_icon("explore", "Explore", "compass"),
+                    ],
+                ),
+                SurfaceNavGroupWire::new(
+                    "library",
+                    Some("Library".to_string()),
+                    vec![
+                        SurfaceNavEntryWire::with_icon("library/albums", "Albums", "record-vinyl"),
+                        SurfaceNavEntryWire::with_icon("library/tracks", "Tracks", "music-note"),
+                    ],
+                ),
+            ],
+        })
+    }
+
+    async fn get_surface(&self, surface_id: &str) -> Result<SurfaceWire, ProviderError> {
+        let state = self.state.lock().await;
+        match surface_id {
+            "home" => {
+                let mut surface = SurfaceWire::new("home", "Home");
+                surface.subtitle = Some("Welcome to Mock Music".to_string());
+
+                // Section 1: Recently Played (Shelf)
+                let recent_items: Vec<SurfaceItemWire> = state
+                    .albums
+                    .iter()
+                    .map(|album| {
+                        let mut item = SurfaceItemWire::new(&album.id, &album.title);
+                        item.subtitle = Some(album.artist_display());
+                        item.entity = Some(ProviderEntityRefWire::new("mock", &album.id, "album"));
+                        item.open_surface_id = Some(format!("album:{}", album.id));
+                        item.actions = vec![SurfaceActionWire::new(
+                            format!("mock:act:play:{}", album.id),
+                            "Play",
+                            ActionRoleWire::Primary,
+                        )];
+                        item.presentation_hint = Some("card".to_string());
+                        item
+                    })
+                    .collect();
+
+                let recent_sec = SurfaceSectionWire::new(
+                    "recently-played",
+                    Some("Recently Played".to_string()),
+                    recent_items,
+                )
+                .with_hint("shelf");
+                surface.sections.push(recent_sec);
+
+                // Section 2: Discover Weekly (Shelf with continuation & action)
+                let mut disc_items = Vec::new();
+                if let Some(t3) = state.tracks.iter().find(|t| t.id == "mock:track:3") {
+                    let mut item = SurfaceItemWire::new(&t3.id, &t3.title);
+                    item.subtitle = Some(t3.artist_display());
+                    item.entity = Some(ProviderEntityRefWire::new("mock", &t3.id, "song"));
+                    item.badges = vec![SurfaceBadgeWire::new("Staff Pick")];
+                    item.actions = vec![
+                        SurfaceActionWire::new(
+                            format!("mock:act:play:{}", t3.id),
+                            "Play",
+                            ActionRoleWire::Primary,
+                        ),
+                        SurfaceActionWire::toggle(
+                            format!("mock:act:fav:{}", t3.id),
+                            "Favorite",
+                            ActionStateWire::Active,
+                        ),
+                    ];
+                    disc_items.push(item);
+                }
+
+                let mut disc_sec = SurfaceSectionWire::new(
+                    "discover-weekly",
+                    Some("Discover Weekly".to_string()),
+                    disc_items,
+                )
+                .with_hint("shelf");
+                disc_sec.continuation = Some(SurfaceCursorWire::section(
+                    "discover-weekly",
+                    "cursor:discover:page2",
+                ));
+                surface.sections.push(disc_sec);
+
+                Ok(surface)
+            }
+
+            "library/albums" => {
+                let mut surface = SurfaceWire::new("library/albums", "Albums");
+                let items: Vec<SurfaceItemWire> = state
+                    .albums
+                    .iter()
+                    .map(|album| {
+                        let mut item = SurfaceItemWire::new(&album.id, &album.title);
+                        item.subtitle = Some(album.artist_display());
+                        item.entity = Some(ProviderEntityRefWire::new("mock", &album.id, "album"));
+                        item.open_surface_id = Some(format!("album:{}", album.id));
+                        item.actions = vec![SurfaceActionWire::new(
+                            format!("mock:act:play:{}", album.id),
+                            "Play",
+                            ActionRoleWire::Primary,
+                        )];
+                        item
+                    })
+                    .collect();
+
+                surface
+                    .sections
+                    .push(SurfaceSectionWire::new("all-albums", None, items).with_hint("grid"));
+                Ok(surface)
+            }
+
+            "library/tracks" => {
+                let mut surface = SurfaceWire::new("library/tracks", "Tracks");
+                let items: Vec<SurfaceItemWire> = state
+                    .tracks
+                    .iter()
+                    .map(|track| {
+                        let mut item = SurfaceItemWire::new(&track.id, &track.title);
+                        item.subtitle = Some(track.artist_display());
+                        item.entity = Some(ProviderEntityRefWire::new("mock", &track.id, "song"));
+                        if let Some(dur) = track.duration_ms {
+                            let mins = dur / 60_000;
+                            let secs = (dur % 60_000) / 1000;
+                            item.metadata.push(format!("{}:{:02}", mins, secs));
+                        }
+                        item.actions = vec![
+                            SurfaceActionWire::new(
+                                format!("mock:act:play:{}", track.id),
+                                "Play",
+                                ActionRoleWire::Primary,
+                            ),
+                            SurfaceActionWire::toggle(
+                                format!("mock:act:fav:{}", track.id),
+                                "Favorite",
+                                ActionStateWire::Inactive,
+                            ),
+                        ];
+                        item
+                    })
+                    .collect();
+
+                surface.sections.push(
+                    SurfaceSectionWire::new("all-tracks", None, items).with_hint("track-list"),
+                );
+                Ok(surface)
+            }
+
+            s if s.starts_with("album:") => {
+                let album_id = &s["album:".len()..];
+                let album = state
+                    .albums
+                    .iter()
+                    .find(|a| a.id == album_id)
+                    .ok_or_else(|| ProviderError::NotFound(s.to_string()))?;
+
+                let mut surface = SurfaceWire::new(s, &album.title);
+                let mut header = SurfaceHeaderWire::new(&album.title);
+                header.subtitle = Some(album.artist_display());
+                header.badges = vec![SurfaceBadgeWire::new("Lossless Available")];
+                header.actions = vec![
+                    SurfaceActionWire::new(
+                        format!("mock:act:play:{}", album.id),
+                        "Play",
+                        ActionRoleWire::Primary,
+                    ),
+                    SurfaceActionWire::toggle(
+                        format!("mock:act:fav:{}", album.id),
+                        "Favorite",
+                        ActionStateWire::Active,
+                    ),
+                ];
+                surface.header = Some(header);
+
+                let album_tracks: Vec<SurfaceItemWire> = state
+                    .tracks
+                    .iter()
+                    .filter(|t| t.album.as_ref().and_then(|a| a.id.as_deref()) == Some(album_id))
+                    .map(|t| {
+                        let mut item = SurfaceItemWire::new(&t.id, &t.title);
+                        item.subtitle = Some(t.artist_display());
+                        item.entity = Some(ProviderEntityRefWire::new("mock", &t.id, "song"));
+                        item.actions = vec![SurfaceActionWire::new(
+                            format!("mock:act:play:{}", t.id),
+                            "Play",
+                            ActionRoleWire::Primary,
+                        )];
+                        item
+                    })
+                    .collect();
+
+                surface.sections.push(
+                    SurfaceSectionWire::new("tracks", None, album_tracks).with_hint("track-list"),
+                );
+                Ok(surface)
+            }
+
+            other => Err(ProviderError::NotFound(format!(
+                "Surface '{other}' not found"
+            ))),
+        }
+    }
+
+    async fn continue_surface(
+        &self,
+        surface_id: &str,
+        cursor: &SurfaceCursorWire,
+    ) -> Result<SurfaceContinuationWire, ProviderError> {
+        let state = self.state.lock().await;
+        if surface_id == "home" && cursor.token == "cursor:discover:page2" {
+            let more_items: Vec<SurfaceItemWire> = state
+                .tracks
+                .iter()
+                .filter(|t| t.id != "mock:track:3")
+                .map(|t| {
+                    let mut item = SurfaceItemWire::new(&t.id, &t.title);
+                    item.subtitle = Some(t.artist_display());
+                    item.entity = Some(ProviderEntityRefWire::new("mock", &t.id, "song"));
+                    item.actions = vec![SurfaceActionWire::new(
+                        format!("mock:act:play:{}", t.id),
+                        "Play",
+                        ActionRoleWire::Primary,
+                    )];
+                    item
+                })
+                .collect();
+
+            Ok(SurfaceContinuationWire::Section {
+                section_id: "discover-weekly".to_string(),
+                items: more_items,
+                continuation: None,
+            })
+        } else {
+            Err(ProviderError::NotFound(format!(
+                "Continuation not found for cursor '{}'",
+                cursor.token
+            )))
+        }
+    }
+
+    async fn invoke_surface_action(
+        &self,
+        invocation_token: &str,
+    ) -> Result<SurfaceActionResultWire, ProviderError> {
+        if let Some(target) = invocation_token.strip_prefix("mock:act:play:") {
+            self.play(target).await?;
+            Ok(SurfaceActionResultWire::success())
+        } else if let Some(_target) = invocation_token.strip_prefix("mock:act:fav:") {
+            Ok(SurfaceActionResultWire::success().with_refresh(SurfaceRefreshWire::CurrentSurface))
+        } else {
+            Ok(SurfaceActionResultWire::failed(format!(
+                "Unsupported action: {invocation_token}"
+            )))
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use malus_provider_sdk::ActionStatusWire;
     use std::time::Duration;
     use tokio::time::sleep;
 
@@ -624,6 +894,112 @@ mod tests {
         assert!(caps.contains(&"library.tracks".to_string()));
         assert!(caps.contains(&"playback".to_string()));
         assert!(caps.contains(&"mock.repost".to_string()));
+        assert!(caps.contains(&capability::SURFACES.to_string()));
         assert!(!caps.contains(&"lyrics.synced".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_mock_surfaces_manifest_and_navigation() {
+        let p = MockProvider::new();
+        let manifest = p.get_surface_manifest().await.unwrap();
+        assert_eq!(manifest.provider_id, "mock");
+        assert_eq!(manifest.default_surface_id, "home");
+        assert_eq!(manifest.groups.len(), 2);
+        assert_eq!(manifest.groups[0].id, "discover");
+        assert_eq!(manifest.groups[1].id, "library");
+    }
+
+    #[tokio::test]
+    async fn test_mock_surface_home_and_shelves() {
+        let p = MockProvider::new();
+        let home = p.get_surface("home").await.unwrap();
+        assert_eq!(home.id, "home");
+        assert_eq!(home.title, "Home");
+        assert_eq!(home.sections.len(), 2);
+
+        // Section 1: Recently Played shelf
+        let s1 = &home.sections[0];
+        assert_eq!(s1.id, "recently-played");
+        assert_eq!(s1.presentation_hint.as_deref(), Some("shelf"));
+        assert_eq!(s1.items.len(), 2);
+        assert_eq!(s1.items[0].entity.as_ref().unwrap().kind, "album");
+        assert_eq!(
+            s1.items[0].open_surface_id.as_deref(),
+            Some("album:mock:album:1")
+        );
+
+        // Section 2: Discover Weekly shelf with actions and continuation
+        let s2 = &home.sections[1];
+        assert_eq!(s2.id, "discover-weekly");
+        assert_eq!(s2.presentation_hint.as_deref(), Some("shelf"));
+        assert_eq!(s2.items.len(), 1);
+        assert_eq!(s2.items[0].badges[0].label, "Staff Pick");
+        assert_eq!(s2.items[0].actions.len(), 2);
+        assert_eq!(s2.items[0].actions[1].role, ActionRoleWire::Toggle);
+        assert_eq!(s2.items[0].actions[1].state, Some(ActionStateWire::Active));
+        assert!(s2.continuation.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_mock_surface_continuation() {
+        let p = MockProvider::new();
+        let cursor = SurfaceCursorWire::section("discover-weekly", "cursor:discover:page2");
+        let cont = p.continue_surface("home", &cursor).await.unwrap();
+        match cont {
+            SurfaceContinuationWire::Section {
+                section_id,
+                items,
+                continuation,
+            } => {
+                assert_eq!(section_id, "discover-weekly");
+                assert_eq!(items.len(), 2);
+                assert!(continuation.is_none());
+            }
+            _ => panic!("Expected section continuation"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mock_surface_actions() {
+        let p = MockProvider::new();
+
+        // 1. Play action triggers playback
+        let res_play = p
+            .invoke_surface_action("mock:act:play:mock:track:2")
+            .await
+            .unwrap();
+        assert_eq!(res_play.status, ActionStatusWire::Success);
+        let status = p.get_status().await.unwrap();
+        assert_eq!(status.state, PlaybackStateWire::Playing);
+        assert_eq!(status.current_track.unwrap().id, "mock:track:2");
+
+        // 2. Favorite toggle action triggers CurrentSurface refresh
+        let res_fav = p
+            .invoke_surface_action("mock:act:fav:mock:track:2")
+            .await
+            .unwrap();
+        assert_eq!(res_fav.status, ActionStatusWire::Success);
+        assert_eq!(res_fav.refresh, SurfaceRefreshWire::CurrentSurface);
+
+        // 3. Unknown action fails gracefully
+        let res_unknown = p.invoke_surface_action("invalid:token").await.unwrap();
+        assert_eq!(res_unknown.status, ActionStatusWire::Failed);
+    }
+
+    #[tokio::test]
+    async fn test_mock_album_detail_surface() {
+        let p = MockProvider::new();
+        let surf = p.get_surface("album:mock:album:1").await.unwrap();
+        assert_eq!(surf.title, "Mock Album A");
+        let header = surf.header.expect("Header must be present");
+        assert_eq!(header.title, "Mock Album A");
+        assert_eq!(header.badges[0].label, "Lossless Available");
+        assert_eq!(header.actions.len(), 2);
+        assert_eq!(surf.sections.len(), 1);
+        assert_eq!(
+            surf.sections[0].presentation_hint.as_deref(),
+            Some("track-list")
+        );
+        assert_eq!(surf.sections[0].items.len(), 2);
     }
 }

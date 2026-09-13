@@ -5,8 +5,9 @@ use malus_protocol::{
     codec::{decode_message, read_frame, write_message},
     wire::{
         AuthStatusWire, CatalogItemWire, LibraryKindWire, LibraryPageWire, PageWire,
-        PlayerStatusWire, ProviderInfoWire, QueueWire, RepeatModeWire, SearchKindWire,
-        SearchResultsWire, TrackWire,
+        PlayerStatusWire, ProviderInfoWire, ProviderSurfaceManifestWire, QueueWire, RepeatModeWire,
+        SearchKindWire, SearchResultsWire, SurfaceActionResultWire, SurfaceContinuationWire,
+        SurfaceCursorWire, SurfaceWire, TrackWire,
     },
 };
 use std::path::{Path, PathBuf};
@@ -435,6 +436,74 @@ impl MalusClient {
     pub async fn enqueue(&self, track: TrackWire) -> Result<(), ClientError> {
         match self.send(&ClientRequest::Enqueue { track }).await? {
             ClientResponse::Ok => Ok(()),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn get_provider_surface_manifest(
+        &self,
+        provider: &str,
+    ) -> Result<ProviderSurfaceManifestWire, ClientError> {
+        match self
+            .send(&ClientRequest::GetProviderSurfaceManifest {
+                provider: provider.to_string(),
+            })
+            .await?
+        {
+            ClientResponse::ProviderSurfaceManifest(manifest) => Ok(manifest),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn get_surface(
+        &self,
+        provider: &str,
+        surface_id: &str,
+    ) -> Result<SurfaceWire, ClientError> {
+        match self
+            .send(&ClientRequest::GetSurface {
+                provider: provider.to_string(),
+                surface_id: surface_id.to_string(),
+            })
+            .await?
+        {
+            ClientResponse::Surface(surface) => Ok(surface),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn continue_surface(
+        &self,
+        provider: &str,
+        surface_id: &str,
+        cursor: SurfaceCursorWire,
+    ) -> Result<SurfaceContinuationWire, ClientError> {
+        match self
+            .send(&ClientRequest::ContinueSurface {
+                provider: provider.to_string(),
+                surface_id: surface_id.to_string(),
+                cursor,
+            })
+            .await?
+        {
+            ClientResponse::SurfaceContinued(cont) => Ok(cont),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn invoke_surface_action(
+        &self,
+        provider: &str,
+        invocation_token: &str,
+    ) -> Result<SurfaceActionResultWire, ClientError> {
+        match self
+            .send(&ClientRequest::InvokeSurfaceAction {
+                provider: provider.to_string(),
+                invocation_token: invocation_token.to_string(),
+            })
+            .await?
+        {
+            ClientResponse::SurfaceActionResult(res) => Ok(res),
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
         }
     }

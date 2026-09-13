@@ -26,6 +26,7 @@ use tokio::sync::{Mutex, mpsc};
 use tracing::info;
 
 use crate::{
+    api::{OfficialAppleMusicApi, ProfileTokenProvider},
     auth::AuthState,
     error::AppleError,
     web::{AppleWebSession, ProductionAppleWebSession},
@@ -33,21 +34,36 @@ use crate::{
 
 pub struct AppleProvider {
     session: Arc<dyn AppleWebSession>,
+    api: Arc<OfficialAppleMusicApi>,
     current_auth_state: Arc<Mutex<AuthState>>,
 }
 
 impl AppleProvider {
-    /// Initialize production Apple provider wrapping real browser runtime.
+    /// Initialize production Apple provider wrapping real browser runtime and native HTTP engine.
     pub fn production() -> Self {
-        Self::with_session(Arc::new(ProductionAppleWebSession::new()))
+        let session = Arc::new(ProductionAppleWebSession::new());
+        let token_provider = Arc::new(ProfileTokenProvider::new(session.clone()));
+        let api = Arc::new(OfficialAppleMusicApi::new(token_provider));
+        Self::with_session_and_api(session, api)
     }
 
-    /// Initialize with an arbitrary web session (used for test seam mocking).
-    pub fn with_session(session: Arc<dyn AppleWebSession>) -> Self {
+    /// Initialize with an explicit web session and native API client (used for test seams).
+    pub fn with_session_and_api(
+        session: Arc<dyn AppleWebSession>,
+        api: Arc<OfficialAppleMusicApi>,
+    ) -> Self {
         Self {
             session,
+            api,
             current_auth_state: Arc::new(Mutex::new(AuthState::Unknown)),
         }
+    }
+
+    /// Backwards-compatible test seam constructor initializing native API with ProfileTokenProvider.
+    pub fn with_session(session: Arc<dyn AppleWebSession>) -> Self {
+        let token_provider = Arc::new(ProfileTokenProvider::new(session.clone()));
+        let api = Arc::new(OfficialAppleMusicApi::new(token_provider));
+        Self::with_session_and_api(session, api)
     }
 }
 
@@ -213,17 +229,17 @@ impl Provider for AppleProvider {
         limit: usize,
         cursor: Option<&str>,
     ) -> Result<SearchResultsWire, ProviderError> {
-        self.session
+        self.api
             .search(query, kinds, limit, cursor)
             .await
-            .map_err(|e| ProviderError::Other(e.to_string()))
+            .map_err(ProviderError::from)
     }
 
     async fn get_catalog_item(&self, media_id: &str) -> Result<CatalogItemWire, ProviderError> {
-        self.session
+        self.api
             .get_catalog_item(media_id)
             .await
-            .map_err(|e| ProviderError::Other(e.to_string()))
+            .map_err(ProviderError::from)
     }
 
     async fn get_collection_items(
@@ -232,10 +248,10 @@ impl Provider for AppleProvider {
         limit: usize,
         cursor: Option<&str>,
     ) -> Result<PageWire<TrackWire>, ProviderError> {
-        self.session
+        self.api
             .get_collection_items(media_id, limit, cursor)
             .await
-            .map_err(|e| ProviderError::Other(e.to_string()))
+            .map_err(ProviderError::from)
     }
 
     async fn get_library(
@@ -244,9 +260,9 @@ impl Provider for AppleProvider {
         limit: usize,
         cursor: Option<&str>,
     ) -> Result<LibraryPageWire, ProviderError> {
-        self.session
+        self.api
             .get_library(kind, limit, cursor)
             .await
-            .map_err(|e| ProviderError::Other(e.to_string()))
+            .map_err(ProviderError::from)
     }
 }

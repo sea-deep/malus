@@ -11,6 +11,7 @@ members = [
     "providers/mock",
     "providers/apple",
     "apps/malus-gui",
+    "apps/malus-gui-next",
 ]
 
 [workspace.package]

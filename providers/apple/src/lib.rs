@@ -1,10 +1,13 @@
-//! Apple Music provider library.
-
+pub mod api;
 pub mod auth;
 pub mod error;
 pub mod provider;
 pub mod web;
 
+pub use api::{
+    AppleApiError, AppleCredentials, OfficialAppleMusicApi, ProfileTokenProvider,
+    StaticTokenProvider, TokenProvider,
+};
 pub use auth::AuthState;
 pub use error::AppleError;
 pub use provider::AppleProvider;

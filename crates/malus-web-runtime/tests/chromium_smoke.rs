@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use malus_web_runtime::{LaunchMode, RuntimeOptions, WebRuntime};
+use malus_web_runtime::{BrowserEngine, EnginePreference, LaunchMode, RuntimeOptions, WebRuntime};
 use serde_json::json;
 
 #[tokio::test]
@@ -11,22 +11,19 @@ async fn test_chromium_headless_smoke_and_lifecycle() {
     let initial_html = "data:text/html,<html><head><title>Malus Web Runtime</title></head><body><p>Running</p></body></html>";
 
     let options = RuntimeOptions {
+        engine: Some(EnginePreference::Chromium),
         launch_mode: LaunchMode::Headless,
         initial_url: initial_html.to_string(),
         custom_profile_path: Some(profile_path),
         ..Default::default()
     };
 
-    println!("Launching headless browser session...");
+    println!("Launching headless browser session with Chromium...");
     let runtime = WebRuntime::launch(options)
         .await
-        .expect("Failed to launch WebRuntime with installed browser");
+        .expect("Failed to launch WebRuntime with Chromium");
 
-    let candidate = runtime.candidate();
-    println!(
-        "Active browser candidate: {} at {:?}",
-        candidate.display_name, candidate.path
-    );
+    assert_eq!(runtime.engine(), BrowserEngine::Chromium);
 
     // 1. Diagnostic health query
     let health = runtime
@@ -34,9 +31,10 @@ async fn test_chromium_headless_smoke_and_lifecycle() {
         .await
         .expect("Health check should succeed");
     assert!(health.alive, "Runtime must report alive: true");
+    assert_eq!(health.engine, BrowserEngine::Chromium);
     let pid = health.pid;
     assert!(pid > 0, "Valid PID expected");
-    println!("Browser PID: {}, CDP port: {}", pid, health.port);
+    println!("Browser PID: {}, CDP port: {:?}", pid, health.port);
 
     // 2. Evaluate DOM property
     let page = runtime.page();
@@ -114,85 +112,6 @@ async fn test_chromium_headless_smoke_and_lifecycle() {
 }
 
 #[tokio::test]
-async fn test_chromium_headed_minimize() {
-    let tmp = tempfile::tempdir().expect("Failed to create tempdir for test profile");
-    let profile_path = tmp.path().join("browser_profile");
-
-    let initial_html = "data:text/html,<html><head><title>Minimize Test</title></head><body><p>Testing minimize</p></body></html>";
-
-    let options = RuntimeOptions {
-        launch_mode: LaunchMode::Headed,
-        initial_url: initial_html.to_string(),
-        custom_profile_path: Some(profile_path),
-        ..Default::default()
-    };
-
-    println!("Launching headed browser session for minimize test...");
-    let runtime = WebRuntime::launch(options)
-        .await
-        .expect("Failed to launch WebRuntime");
-
-    let page = runtime.page();
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    // Check Hyprland clients before minimize
-    let before_output = std::process::Command::new("hyprctl")
-        .args(["clients", "-j"])
-        .output()
-        .expect("hyprctl failed");
-    let before_str = String::from_utf8_lossy(&before_output.stdout);
-    let before_json: serde_json::Value = serde_json::from_str(&before_str).unwrap();
-    let before_chrome: Vec<_> = before_json
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|c| {
-            c["class"]
-                .as_str()
-                .unwrap_or("")
-                .to_lowercase()
-                .contains("chrome")
-        })
-        .collect();
-    println!("Chrome windows before minimize: {}", before_chrome.len());
-
-    println!("Calling page.minimize_window()...");
-    let res = page.minimize_window().await;
-    println!("Minimize result: {:?}", res);
-
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    // Check Hyprland clients after minimize
-    let after_output = std::process::Command::new("hyprctl")
-        .args(["clients", "-j"])
-        .output()
-        .expect("hyprctl failed");
-    let after_str = String::from_utf8_lossy(&after_output.stdout);
-    let after_json: serde_json::Value = serde_json::from_str(&after_str).unwrap();
-    let after_chrome: Vec<_> = after_json
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|c| {
-            c["class"]
-                .as_str()
-                .unwrap_or("")
-                .to_lowercase()
-                .contains("chrome")
-        })
-        .collect();
-    println!("Chrome windows after minimize: {}", after_chrome.len());
-    if let Some(w) = after_chrome.first() {
-        println!(
-            "Window after minimize details: hidden={}, mapped={}, workspace={:?}",
-            w["hidden"], w["mapped"], w["workspace"]
-        );
-    }
-
-    runtime.shutdown().await.expect("Shutdown failed");
-}
-
-#[tokio::test]
 async fn test_chromium_windowless() {
     let tmp = tempfile::tempdir().expect("Failed to create tempdir for test profile");
     let profile_path = tmp.path().join("browser_profile");
@@ -200,6 +119,7 @@ async fn test_chromium_windowless() {
     let initial_html = "data:text/html,<html><head><title>Windowless Test</title></head><body><p>Testing windowless</p></body></html>";
 
     let options = RuntimeOptions {
+        engine: Some(EnginePreference::Chromium),
         launch_mode: LaunchMode::Windowless,
         initial_url: initial_html.to_string(),
         custom_profile_path: Some(profile_path),
@@ -214,30 +134,6 @@ async fn test_chromium_windowless() {
     let page = runtime.page();
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Check Hyprland clients
-    let output = std::process::Command::new("hyprctl")
-        .args(["clients", "-j"])
-        .output()
-        .expect("hyprctl failed");
-    let json_str = String::from_utf8_lossy(&output.stdout);
-    let clients: serde_json::Value = serde_json::from_str(&json_str).unwrap();
-    let chrome_clients: Vec<_> = clients
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|c| {
-            c["class"]
-                .as_str()
-                .unwrap_or("")
-                .to_lowercase()
-                .contains("chrome")
-        })
-        .collect();
-    println!(
-        "Chrome windows on Hyprland in windowless mode: {}",
-        chrome_clients.len()
-    );
-
     let title_val = page
         .wait_for_expression("document.title", Duration::from_secs(5))
         .await
@@ -248,11 +144,12 @@ async fn test_chromium_windowless() {
 }
 
 #[tokio::test]
-async fn test_chromium_main_document_interception() {
+async fn test_chromium_load_document() {
     let tmp = tempfile::tempdir().expect("Failed to create tempdir for test profile");
     let profile_path = tmp.path().join("browser_profile");
 
     let options = RuntimeOptions {
+        engine: Some(EnginePreference::Chromium),
         launch_mode: LaunchMode::Headless,
         initial_url: "about:blank".to_string(),
         custom_profile_path: Some(profile_path),
@@ -261,25 +158,15 @@ async fn test_chromium_main_document_interception() {
 
     let runtime = WebRuntime::launch(options)
         .await
-        .expect("Failed to launch WebRuntime for interception test");
+        .expect("Failed to launch WebRuntime for load_document test");
 
     let page = runtime.page();
 
     let intercepted_html = "<!DOCTYPE html><html><head><title>Intercepted Origin Test</title></head><body><h1>Hello Intercepted</h1></body></html>";
 
-    let rx = page
-        .intercept_next_main_document("example.com", "text/html; charset=utf-8", intercepted_html)
+    page.load_document("https://example.com/subpath", intercepted_html)
         .await
-        .expect("Failed to arm document interceptor");
-
-    page.navigate("https://example.com/subpath")
-        .await
-        .expect("Failed to navigate to target URL");
-
-    tokio::time::timeout(Duration::from_secs(5), rx)
-        .await
-        .expect("Timed out waiting for document fulfillment")
-        .expect("Fulfillment channel closed without notification");
+        .expect("Failed to load document");
 
     let origin_val = page
         .wait_for_expression("window.location.origin", Duration::from_secs(5))

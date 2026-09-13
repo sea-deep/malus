@@ -1,0 +1,304 @@
+/* ================================================================
+ * Malus Consumer Music Player Design System
+ * Governed strictly by:
+ * - 4px Base Grid
+ * - 8px Primary Layout Rhythm
+ * - Modular Typography Scale (13, 16, 19, 23, 32)
+ * - GTK System Theme Inheritance (Dark & Light)
+ * - Zero Gradients in Application Chrome
+ * - Zero Card Hell
+ * ================================================================ */
+
+/* --- Base Window Surface --- */
+window.malus-window {
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+    font-size: 16px;
+    line-height: 24px;
+}
+
+/* Minimal Top Navigation Header */
+headerbar.malus-header {
+    min-height: 40px;
+    padding: 0 12px;
+    background-color: transparent;
+    border-bottom: 1px solid alpha(currentColor, 0.08);
+}
+
+.header-nav-btn {
+    min-width: 32px;
+    min-height: 32px;
+    padding: 4px;
+    border-radius: 6px;
+    background: transparent;
+    border: none;
+    color: alpha(currentColor, 0.7);
+}
+
+.header-nav-btn:hover {
+    background-color: alpha(currentColor, 0.08);
+    color: currentColor;
+}
+
+.header-nav-btn:disabled {
+    color: alpha(currentColor, 0.25);
+}
+
+/* --- Quiet Sidebar Navigation (224px) --- */
+.sidebar {
+    background-color: alpha(currentColor, 0.02);
+    border-right: 1px solid alpha(currentColor, 0.08);
+    min-width: 224px;
+    padding: 16px 8px;
+}
+
+.sidebar-heading {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: alpha(currentColor, 0.5);
+    padding: 8px 12px 4px 12px;
+    margin-top: 16px;
+}
+
+.sidebar-item {
+    min-height: 40px;
+    padding: 0 12px;
+    border-radius: 6px;
+    background: transparent;
+    border: none;
+    color: alpha(currentColor, 0.8);
+    font-size: 15px;
+    font-weight: 500;
+    transition: background-color 120ms ease, color 120ms ease;
+}
+
+.sidebar-item:hover {
+    background-color: alpha(currentColor, 0.06);
+    color: currentColor;
+}
+
+.sidebar-item-selected {
+    background-color: alpha(currentColor, 0.12);
+    color: currentColor;
+    font-weight: 600;
+}
+
+.sidebar-icon {
+    min-width: 20px;
+    min-height: 20px;
+    margin-right: 12px;
+}
+
+/* --- Content Surface & Typography --- */
+.page {
+    padding: 32px;
+    background-color: @view_bg_color;
+}
+
+.page-title {
+    font-size: 32px;
+    line-height: 40px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: @view_fg_color;
+    margin-bottom: 24px;
+}
+
+.section-title {
+    font-size: 23px;
+    line-height: 28px;
+    font-weight: 600;
+    color: @view_fg_color;
+    margin-top: 32px;
+    margin-bottom: 16px;
+}
+
+.secondary {
+    font-size: 13px;
+    line-height: 18px;
+    color: alpha(currentColor, 0.6);
+}
+
+/* --- Music Content Grid & Tiles --- */
+.content-grid {
+    margin-bottom: 32px;
+}
+
+.album-tile {
+    padding: 8px;
+    border-radius: 8px;
+    background: transparent;
+    border: none;
+    transition: background-color 150ms ease;
+}
+
+.album-tile:hover {
+    background-color: alpha(currentColor, 0.05);
+}
+
+.album-artwork {
+    border-radius: 10px;
+    background-color: alpha(currentColor, 0.06);
+}
+
+.album-title {
+    font-size: 16px;
+    line-height: 22px;
+    font-weight: 600;
+    color: @view_fg_color;
+    margin-top: 8px;
+}
+
+.album-artist {
+    font-size: 13px;
+    line-height: 18px;
+    color: alpha(currentColor, 0.6);
+    margin-top: 2px;
+}
+
+/* --- Persistent Player (88px structurally attached) --- */
+.player {
+    min-height: 88px;
+    background-color: @window_bg_color;
+    border-top: 1px solid alpha(currentColor, 0.08);
+    padding: 4px 24px 8px 24px;
+}
+
+.player-control-row {
+    min-height: 52px;
+}
+
+.player-artwork {
+    border-radius: 10px;
+    background-color: alpha(currentColor, 0.06);
+}
+
+.player-title {
+    font-size: 15px;
+    line-height: 20px;
+    font-weight: 600;
+    color: @window_fg_color;
+}
+
+.player-artist {
+    font-size: 13px;
+    line-height: 18px;
+    color: alpha(currentColor, 0.6);
+}
+
+.player-idle {
+    font-size: 13px;
+    color: alpha(currentColor, 0.4);
+}
+
+/* Transport Buttons */
+.player-btn-normal {
+    min-width: 40px;
+    min-height: 40px;
+    border-radius: 6px;
+    background: transparent;
+    border: none;
+    color: alpha(currentColor, 0.75);
+    padding: 8px;
+}
+
+.player-btn-normal:hover {
+    background-color: alpha(currentColor, 0.08);
+    color: currentColor;
+}
+
+.player-btn-normal:disabled {
+    color: alpha(currentColor, 0.25);
+}
+
+.player-btn-prominent {
+    min-width: 48px;
+    min-height: 48px;
+    border-radius: 50%;
+    background-color: alpha(currentColor, 0.12);
+    border: none;
+    color: currentColor;
+    padding: 12px;
+    transition: background-color 120ms ease, transform 80ms ease;
+}
+
+.player-btn-prominent:hover {
+    background-color: alpha(currentColor, 0.2);
+}
+
+.player-btn-prominent:disabled {
+    opacity: 0.4;
+}
+
+/* Progress / Seek Row (32px) */
+.player-progress-row {
+    min-height: 28px;
+}
+
+.player-time {
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: alpha(currentColor, 0.55);
+    min-width: 44px;
+}
+
+/* Native GtkScale Styling */
+.player-seek-scale {
+    margin: 0 12px;
+}
+
+.player-seek-scale trough {
+    min-height: 4px;
+    border-radius: 2px;
+    background-color: alpha(currentColor, 0.15);
+}
+
+.player-seek-scale highlight {
+    min-height: 4px;
+    border-radius: 2px;
+    background-color: currentColor;
+}
+
+.player-seek-scale slider {
+    min-width: 8px;
+    min-height: 8px;
+    margin: -2px;
+    border-radius: 50%;
+    background-color: currentColor;
+    opacity: 0.7;
+    transition: min-width 100ms ease, min-height 100ms ease, opacity 100ms ease;
+}
+
+.player-seek-scale:hover slider {
+    min-width: 12px;
+    min-height: 12px;
+    margin: -4px;
+    opacity: 1.0;
+}
+
+/* Volume Control */
+.player-volume-scale {
+    min-width: 80px;
+}
+
+.player-volume-scale trough {
+    min-height: 4px;
+    border-radius: 2px;
+    background-color: alpha(currentColor, 0.15);
+}
+
+.player-volume-scale highlight {
+    min-height: 4px;
+    border-radius: 2px;
+    background-color: currentColor;
+}
+
+.player-volume-scale slider {
+    min-width: 8px;
+    min-height: 8px;
+    margin: -2px;
+    border-radius: 50%;
+    background-color: currentColor;
+}

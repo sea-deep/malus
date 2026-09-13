@@ -2,7 +2,8 @@
 
 use crate::wire::{
     AuthStatusWire, CatalogItemWire, LibraryPageWire, PageWire, PlayerStatusWire, ProviderInfoWire,
-    QueueWire, SearchResultsWire, TrackWire,
+    ProviderSurfaceManifestWire, QueueWire, SearchResultsWire, SurfaceActionResultWire,
+    SurfaceContinuationWire, SurfaceWire, TrackWire,
 };
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +22,10 @@ pub enum ClientResponse {
         capabilities: Vec<String>,
     },
     Providers(Vec<ProviderInfoWire>),
+    ProviderSurfaceManifest(ProviderSurfaceManifestWire),
+    Surface(SurfaceWire),
+    SurfaceContinued(SurfaceContinuationWire),
+    SurfaceActionResult(SurfaceActionResultWire),
     ActionResult(serde_json::Value),
     AuthStatus(AuthStatusWire),
     Ok,
