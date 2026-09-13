@@ -2,6 +2,9 @@
 //!
 //! Free of I/O, tokio, UI frameworks, provider-specific details, or external transports.
 
+pub mod account;
+pub mod credits;
+pub mod lyrics;
 pub mod media;
 pub mod media_ref;
 pub mod page_route;
@@ -9,6 +12,9 @@ pub mod playback;
 pub mod player;
 pub mod queue;
 
+pub use account::{AccountMediaState, Rating};
+pub use credits::{CreditCategory, CreditItem, Credits};
+pub use lyrics::{LyricLine, LyricSyllable, Lyrics};
 pub use media::{Album, AlbumRef, Artist, ArtistRef, Artwork, Playlist, Track};
 pub use media_ref::{MediaRef, MediaRefError};
 pub use page_route::{PageRoute, ParseRouteError};
@@ -120,5 +126,40 @@ mod tests {
         assert_eq!(p.volume, 100);
         p.set_volume(45);
         assert_eq!(p.volume, 45);
+    }
+
+    #[test]
+    fn test_lyrics_and_credits_models() {
+        let line = LyricLine::new("Test lyric line").with_timing(0, 3000);
+        let lyrics = Lyrics::new(vec![line], true);
+        assert!(lyrics.synced);
+        assert_eq!(lyrics.lines.len(), 1);
+
+        let json = serde_json::to_string(&lyrics).unwrap();
+        let decoded: Lyrics = serde_json::from_str(&json).unwrap();
+        assert_eq!(lyrics, decoded);
+
+        let cat = CreditCategory::new(
+            "COMPOSITION & LYRICS",
+            "songwriters",
+            vec![CreditItem::new("Artist", vec!["Composer".to_string()])],
+        );
+        let credits = Credits::new(vec![cat]);
+        let json = serde_json::to_string(&credits).unwrap();
+        let decoded: Credits = serde_json::from_str(&json).unwrap();
+        assert_eq!(credits, decoded);
+    }
+
+    #[test]
+    fn test_account_media_state_model() {
+        let reference = MediaRef::Song("123".to_string());
+        let state = AccountMediaState::new(reference.clone(), true, Rating::Favorite);
+        assert!(state.in_library);
+        assert_eq!(state.rating, Rating::Favorite);
+        assert!(state.is_favorite());
+
+        let json = serde_json::to_string(&state).unwrap();
+        let decoded: AccountMediaState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state, decoded);
     }
 }

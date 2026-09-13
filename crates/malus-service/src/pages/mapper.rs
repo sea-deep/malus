@@ -36,7 +36,10 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
             page_item.actions = vec![
                 PageActionWire::Play(mref.clone()),
                 PageActionWire::PlayNext(mref.clone()),
-                PageActionWire::PlayLater(mref),
+                PageActionWire::PlayLater(mref.clone()),
+                PageActionWire::AddToLibrary(mref.clone()),
+                PageActionWire::Favorite(mref.clone()),
+                PageActionWire::SuggestLess(mref),
             ];
             page_item.presentation_hint = Some("track-row".to_string());
 
@@ -79,7 +82,9 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
             page_item.actions = vec![
                 PageActionWire::Play(mref.clone()),
                 PageActionWire::PlayNext(mref.clone()),
-                PageActionWire::PlayLater(mref),
+                PageActionWire::PlayLater(mref.clone()),
+                PageActionWire::AddToLibrary(mref.clone()),
+                PageActionWire::Favorite(mref),
             ];
             page_item.presentation_hint = Some("card".to_string());
 
@@ -134,7 +139,9 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
             page_item.actions = vec![
                 PageActionWire::Play(mref.clone()),
                 PageActionWire::PlayNext(mref.clone()),
-                PageActionWire::PlayLater(mref),
+                PageActionWire::PlayLater(mref.clone()),
+                PageActionWire::AddToLibrary(mref.clone()),
+                PageActionWire::Favorite(mref),
             ];
             page_item.presentation_hint = Some("card".to_string());
 
@@ -297,6 +304,9 @@ mod tests {
                 PageActionWire::Play(MediaRef::Song("1440857781".to_string())),
                 PageActionWire::PlayNext(MediaRef::Song("1440857781".to_string())),
                 PageActionWire::PlayLater(MediaRef::Song("1440857781".to_string())),
+                PageActionWire::AddToLibrary(MediaRef::Song("1440857781".to_string())),
+                PageActionWire::Favorite(MediaRef::Song("1440857781".to_string())),
+                PageActionWire::SuggestLess(MediaRef::Song("1440857781".to_string())),
             ]
         );
         assert_eq!(item.badges.len(), 1);
@@ -335,6 +345,8 @@ mod tests {
                 PageActionWire::Play(MediaRef::Album("1440857780".to_string())),
                 PageActionWire::PlayNext(MediaRef::Album("1440857780".to_string())),
                 PageActionWire::PlayLater(MediaRef::Album("1440857780".to_string())),
+                PageActionWire::AddToLibrary(MediaRef::Album("1440857780".to_string())),
+                PageActionWire::Favorite(MediaRef::Album("1440857780".to_string())),
             ]
         );
     }

@@ -12,14 +12,18 @@ use malus_ipc::wire::{
     CatalogItemWire, LibraryKindWire, LibraryPageWire, PagedListWire, SearchKindWire,
     SearchResultsWire,
 };
-use malus_model::{Album, Artist, MediaRef, Playlist, Track};
+use malus_model::{
+    AccountMediaState, Album, Artist, Credits, Lyrics, MediaRef, Playlist, Rating, Track,
+};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
 use serde_json::Value;
 use tracing::{info, warn};
 
 use crate::api::{
     credentials::{AppleCredentials, TokenProvider},
+    credits::parse_apple_credits,
     error::AppleApiError,
+    lyrics::parse_ttml_lyrics,
     parse::{parse_apple_album, parse_apple_artist, parse_apple_playlist, parse_apple_track},
 };
 
@@ -124,29 +128,30 @@ impl OfficialAppleMusicApi {
         Ok(headers)
     }
 
-    /// Execute a single HTTP GET request against Apple Music API.
+    /// Execute a single HTTP request against Apple Music API.
     async fn execute_single_request(
         &self,
+        method: reqwest::Method,
         url: &str,
         query: &[(&str, &str)],
+        body: Option<&Value>,
         creds: &AppleCredentials,
     ) -> Result<reqwest::Response, AppleApiError> {
-        let headers = self.build_headers(creds)?;
-        let mut req = self.client.get(url).headers(headers);
-        if !query.is_empty() {
-            req = req.query(query);
-        }
-
-        // Retry transport network errors up to 2 times with short backoff
         let mut attempts = 0;
         loop {
             attempts += 1;
-            match req
-                .try_clone()
-                .unwrap_or_else(|| self.client.get(url))
-                .send()
-                .await
-            {
+            let headers = self.build_headers(creds)?;
+            let mut req = self.client.request(method.clone(), url).headers(headers);
+            if !query.is_empty() {
+                req = req.query(query);
+            }
+            if let Some(b) = body {
+                req = req.json(b);
+            } else if method == reqwest::Method::POST || method == reqwest::Method::PUT {
+                req = req.header(reqwest::header::CONTENT_LENGTH, "0");
+            }
+
+            match req.send().await {
                 Ok(resp) => return Ok(resp),
                 Err(err) if attempts <= 2 => {
                     warn!(
@@ -159,11 +164,13 @@ impl OfficialAppleMusicApi {
         }
     }
 
-    /// Canonical request pipeline with 401 token refresh and retry.
-    pub async fn send_request(
+    /// Canonical request pipeline with 401 token refresh and retry for arbitrary HTTP methods.
+    pub async fn send_request_with_method(
         &self,
+        method: reqwest::Method,
         path_or_url: &str,
         query: &[(&str, &str)],
+        body: Option<&Value>,
     ) -> Result<Value, AppleApiError> {
         let mut creds = self.token_provider.get_credentials()?;
         if creds.developer_token.is_empty() || creds.music_user_token.is_empty() {
@@ -175,7 +182,9 @@ impl OfficialAppleMusicApi {
         let url = self.build_url(path_or_url, &creds.storefront);
         let start = Instant::now();
 
-        let mut resp = self.execute_single_request(&url, query, &creds).await?;
+        let mut resp = self
+            .execute_single_request(method.clone(), &url, query, body, &creds)
+            .await?;
 
         // HTTP 401 Handling: Refresh credentials and retry exactly once
         if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
@@ -189,7 +198,7 @@ impl OfficialAppleMusicApi {
                     creds = new_creds;
                     let retry_url = self.build_url(path_or_url, &creds.storefront);
                     resp = self
-                        .execute_single_request(&retry_url, query, &creds)
+                        .execute_single_request(method.clone(), &retry_url, query, body, &creds)
                         .await?;
                 }
                 Err(refresh_err) => {
@@ -205,7 +214,7 @@ impl OfficialAppleMusicApi {
         let elapsed = start.elapsed();
 
         info!(
-            method = "GET",
+            method = %method,
             path = %path_or_url,
             status = %status.as_u16(),
             elapsed_ms = %elapsed.as_millis(),
@@ -213,21 +222,27 @@ impl OfficialAppleMusicApi {
         );
 
         if status.is_success() {
-            let body = resp.text().await.map_err(|e| {
+            if status == reqwest::StatusCode::NO_CONTENT {
+                return Ok(Value::Null);
+            }
+            let body_str = resp.text().await.map_err(|e| {
                 AppleApiError::Network(format!("Failed to read response body: {e}"))
             })?;
-            serde_json::from_str::<Value>(&body)
+            if body_str.trim().is_empty() {
+                return Ok(Value::Null);
+            }
+            serde_json::from_str::<Value>(&body_str)
                 .map_err(|e| AppleApiError::Parse(format!("Failed to parse response JSON: {e}")))
         } else if status == reqwest::StatusCode::UNAUTHORIZED {
             Err(AppleApiError::AuthRequired(
                 "Apple Music session expired or unauthorized".to_string(),
             ))
         } else if status == reqwest::StatusCode::FORBIDDEN {
-            let body = resp.text().await.unwrap_or_default();
-            Err(AppleApiError::Forbidden(body))
+            let body_str = resp.text().await.unwrap_or_default();
+            Err(AppleApiError::Forbidden(body_str))
         } else if status == reqwest::StatusCode::NOT_FOUND {
-            let body = resp.text().await.unwrap_or_default();
-            Err(AppleApiError::NotFound(body))
+            let body_str = resp.text().await.unwrap_or_default();
+            Err(AppleApiError::NotFound(body_str))
         } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
             let retry_after = resp
                 .headers()
@@ -237,19 +252,219 @@ impl OfficialAppleMusicApi {
                 .map(Duration::from_secs);
             Err(AppleApiError::RateLimited { retry_after })
         } else if status.is_server_error() {
-            let body = resp.text().await.unwrap_or_default();
+            let body_str = resp.text().await.unwrap_or_default();
             Err(AppleApiError::Server {
                 status: status.as_u16(),
-                message: body,
+                message: body_str,
             })
         } else {
-            let body = resp.text().await.unwrap_or_default();
+            let body_str = resp.text().await.unwrap_or_default();
             Err(AppleApiError::Other(format!(
                 "HTTP {}: {}",
                 status.as_u16(),
-                body
+                body_str
             )))
         }
+    }
+
+    /// Canonical GET request pipeline with 401 token refresh and retry.
+    pub async fn send_request(
+        &self,
+        path_or_url: &str,
+        query: &[(&str, &str)],
+    ) -> Result<Value, AppleApiError> {
+        self.send_request_with_method(reqwest::Method::GET, path_or_url, query, None)
+            .await
+    }
+
+    /// Helper to get Apple plural resource kind string from MediaRef.
+    pub fn media_kind_plural(reference: &MediaRef) -> Result<&'static str, AppleApiError> {
+        match reference {
+            MediaRef::Song(_) => Ok("songs"),
+            MediaRef::Album(_) => Ok("albums"),
+            MediaRef::Playlist(_) => Ok("playlists"),
+            MediaRef::Artist(_) => Ok("artists"),
+            MediaRef::Station(_) => Err(AppleApiError::Other(
+                "Stations do not support account mutations".to_string(),
+            )),
+        }
+    }
+
+    /// Fetch time-synced or unsynced lyrics for a catalog song.
+    pub async fn get_lyrics(&self, song_id: &str) -> Result<Lyrics, AppleApiError> {
+        let path = format!(
+            "https://amp-api.music.apple.com/v1/catalog/{{storefront}}/songs/{song_id}/lyrics"
+        );
+        match self.send_request(&path, &[]).await {
+            Ok(val) => {
+                if let Some(data) = val.get("data").and_then(|d| d.as_array())
+                    && let Some(first) = data.first()
+                    && let Some(ttml) = first
+                        .get("attributes")
+                        .and_then(|a| a.get("ttml"))
+                        .and_then(|t| t.as_str())
+                {
+                    return Ok(parse_ttml_lyrics(ttml));
+                }
+                Err(AppleApiError::NotFound(format!(
+                    "Lyrics unavailable for song {song_id}"
+                )))
+            }
+            Err(AppleApiError::NotFound(_)) => {
+                // Try syllable lyrics fallback
+                let syl_path = format!(
+                    "https://amp-api.music.apple.com/v1/catalog/{{storefront}}/songs/{song_id}/syllable-lyrics"
+                );
+                if let Ok(val) = self.send_request(&syl_path, &[]).await
+                    && let Some(data) = val.get("data").and_then(|d| d.as_array())
+                    && let Some(first) = data.first()
+                    && let Some(ttml) = first
+                        .get("attributes")
+                        .and_then(|a| a.get("ttml"))
+                        .and_then(|t| t.as_str())
+                {
+                    return Ok(parse_ttml_lyrics(ttml));
+                }
+                Err(AppleApiError::NotFound(format!(
+                    "Lyrics unavailable for song {song_id}"
+                )))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Fetch song credits for a catalog song.
+    pub async fn get_credits(&self, song_id: &str) -> Result<Credits, AppleApiError> {
+        let path = format!(
+            "https://amp-api.music.apple.com/v1/catalog/{{storefront}}/songs/{song_id}/credits"
+        );
+        let val = self.send_request(&path, &[]).await?;
+        let credits = parse_apple_credits(&val);
+        if credits.is_empty() {
+            return Err(AppleApiError::NotFound(format!(
+                "Credits unavailable for song {song_id}"
+            )));
+        }
+        Ok(credits)
+    }
+
+    /// Favorite an item (song, album, playlist).
+    pub async fn favorite(&self, reference: &MediaRef) -> Result<(), AppleApiError> {
+        let kind = Self::media_kind_plural(reference)?;
+        let path = format!("/v1/me/favorites?ids[{kind}]={}", reference.id());
+        self.send_request_with_method(reqwest::Method::POST, &path, &[], None)
+            .await?;
+        Ok(())
+    }
+
+    /// Unfavorite an item (song, album, playlist) using amp-api.
+    pub async fn unfavorite(&self, reference: &MediaRef) -> Result<(), AppleApiError> {
+        let kind = Self::media_kind_plural(reference)?;
+        let path = format!(
+            "https://amp-api.music.apple.com/v1/me/favorites?ids[{kind}]={}",
+            reference.id()
+        );
+        self.send_request_with_method(reqwest::Method::DELETE, &path, &[], None)
+            .await?;
+        Ok(())
+    }
+
+    /// Suggest less for an item (negative rating -1).
+    pub async fn suggest_less(&self, reference: &MediaRef) -> Result<(), AppleApiError> {
+        let kind = Self::media_kind_plural(reference)?;
+        let path = format!("/v1/me/ratings/{kind}/{}", reference.id());
+        let body = serde_json::json!({
+            "type": "rating",
+            "attributes": { "value": -1 }
+        });
+        self.send_request_with_method(reqwest::Method::PUT, &path, &[], Some(&body))
+            .await?;
+        Ok(())
+    }
+
+    /// Clear rating (set to neutral).
+    pub async fn clear_rating(&self, reference: &MediaRef) -> Result<(), AppleApiError> {
+        let kind = Self::media_kind_plural(reference)?;
+        let path = format!("/v1/me/ratings/{kind}/{}", reference.id());
+        self.send_request_with_method(reqwest::Method::DELETE, &path, &[], None)
+            .await?;
+        Ok(())
+    }
+
+    /// Add an item (song, album, playlist) to the user's library.
+    pub async fn add_to_library(&self, reference: &MediaRef) -> Result<(), AppleApiError> {
+        let kind = Self::media_kind_plural(reference)?;
+        let path = format!("/v1/me/library?ids[{kind}]={}", reference.id());
+        self.send_request_with_method(reqwest::Method::POST, &path, &[], None)
+            .await?;
+        Ok(())
+    }
+
+    /// Get current account state (in_library, rating) for a resource.
+    pub async fn get_account_media_state(
+        &self,
+        reference: &MediaRef,
+    ) -> Result<AccountMediaState, AppleApiError> {
+        let kind = match Self::media_kind_plural(reference) {
+            Ok(k) => k,
+            Err(_) => {
+                return Ok(AccountMediaState::new(
+                    reference.clone(),
+                    false,
+                    Rating::Neutral,
+                ));
+            }
+        };
+
+        // 1. Rating query
+        let rating_path = format!("/v1/me/ratings/{kind}/{}", reference.id());
+        let rating = match self.send_request(&rating_path, &[]).await {
+            Ok(val) => {
+                if let Some(data) = val.get("data").and_then(|d| d.as_array())
+                    && let Some(first) = data.first()
+                    && let Some(val_num) = first
+                        .get("attributes")
+                        .and_then(|a| a.get("value"))
+                        .and_then(|v| v.as_i64())
+                {
+                    if val_num == 1 {
+                        Rating::Favorite
+                    } else if val_num == -1 {
+                        Rating::SuggestLess
+                    } else {
+                        Rating::Neutral
+                    }
+                } else {
+                    Rating::Neutral
+                }
+            }
+            Err(AppleApiError::NotFound(_)) => Rating::Neutral,
+            Err(e) => return Err(e),
+        };
+
+        // 2. Library membership query via relate=library
+        let cat_path = format!("/v1/catalog/{{storefront}}/{kind}/{}", reference.id());
+        let in_library = match self.send_request(&cat_path, &[("relate", "library")]).await {
+            Ok(val) => {
+                if let Some(data) = val.get("data").and_then(|d| d.as_array())
+                    && let Some(first) = data.first()
+                    && let Some(lib) = first.get("relationships").and_then(|r| r.get("library"))
+                    && let Some(lib_data) = lib.get("data").and_then(|d| d.as_array())
+                {
+                    !lib_data.is_empty()
+                } else {
+                    false
+                }
+            }
+            Err(AppleApiError::NotFound(_)) => false,
+            Err(e) => return Err(e),
+        };
+
+        Ok(AccountMediaState::new(
+            reference.clone(),
+            in_library,
+            rating,
+        ))
     }
 
     /// Search the official Apple Music catalog.

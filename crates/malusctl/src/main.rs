@@ -73,6 +73,16 @@ enum LibraryCommands {
         #[arg(long)]
         json: bool,
     },
+
+    /// Add an item to user library (song, album, playlist)
+    Add {
+        #[arg(help = "Media ID to add (e.g. song:123456, album:7890, playlist:pl.abc)")]
+        media_id: String,
+
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -269,6 +279,67 @@ enum Commands {
     Library {
         #[command(subcommand)]
         action: LibraryCommands,
+    },
+
+    /// Fetch and display song lyrics
+    Lyrics {
+        #[arg(help = "Song media ID (e.g. song:123456)")]
+        media_id: String,
+
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Fetch and display song credits
+    Credits {
+        #[arg(help = "Song media ID (e.g. song:123456)")]
+        media_id: String,
+
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Favorite a media item
+    Favorite {
+        #[arg(help = "Media ID (e.g. song:123456, album:7890, playlist:pl.abc)")]
+        media_id: String,
+
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Unfavorite a media item
+    Unfavorite {
+        #[arg(help = "Media ID (e.g. song:123456, album:7890, playlist:pl.abc)")]
+        media_id: String,
+
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Suggest less for a media item
+    #[command(name = "suggest-less")]
+    SuggestLess {
+        #[arg(help = "Media ID (e.g. song:123456, album:7890, playlist:pl.abc)")]
+        media_id: String,
+
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Inspect account media state (in_library, rating)
+    State {
+        #[arg(help = "Media ID (e.g. song:123456, album:7890, playlist:pl.abc)")]
+        media_id: String,
+
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Stream live player events
@@ -776,7 +847,75 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await?;
                 display_library(&resp, json)?;
             }
+            LibraryCommands::Add { media_id, json } => {
+                let reference = MediaRef::parse(&media_id)?;
+                let state = client.add_to_library(&reference).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&state)?);
+                } else {
+                    println!("Added {reference} to library (in_library: true)");
+                }
+            }
         },
+        Commands::Lyrics { media_id, json } => {
+            let reference = MediaRef::parse(&media_id)?;
+            let lyrics = client.get_lyrics(&reference).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&lyrics)?);
+            } else {
+                display_lyrics(&lyrics);
+            }
+        }
+        Commands::Credits { media_id, json } => {
+            let reference = MediaRef::parse(&media_id)?;
+            let credits = client.get_credits(&reference).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&credits)?);
+            } else {
+                display_credits(&credits);
+            }
+        }
+        Commands::Favorite { media_id, json } => {
+            let reference = MediaRef::parse(&media_id)?;
+            let state = client.favorite(&reference).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&state)?);
+            } else {
+                println!("Favorited {reference} (rating: {:?})", state.rating);
+            }
+        }
+        Commands::Unfavorite { media_id, json } => {
+            let reference = MediaRef::parse(&media_id)?;
+            let state = client.unfavorite(&reference).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&state)?);
+            } else {
+                println!("Unfavorited {reference} (rating: {:?})", state.rating);
+            }
+        }
+        Commands::SuggestLess { media_id, json } => {
+            let reference = MediaRef::parse(&media_id)?;
+            let state = client.suggest_less(&reference).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&state)?);
+            } else {
+                println!(
+                    "Suggest less set for {reference} (rating: {:?})",
+                    state.rating
+                );
+            }
+        }
+        Commands::State { media_id, json } => {
+            let reference = MediaRef::parse(&media_id)?;
+            let state = client.get_media_state(&reference).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&state)?);
+            } else {
+                println!("Resource:   {reference}");
+                println!("In Library: {}", state.in_library);
+                println!("Rating:     {:?}", state.rating);
+            }
+        }
         Commands::Watch { json } => {
             if !json {
                 println!("Subscribing to live player events (Ctrl+C to stop)...");
@@ -814,6 +953,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             malus_ipc::client::ClientEvent::QueueChanged(q) => {
                                 println!("[Queue] {} tracks", q.items.len());
+                            }
+                            malus_ipc::client::ClientEvent::MediaStateChanged(state) => {
+                                println!(
+                                    "[State] {} in_library={} rating={:?}",
+                                    state.reference, state.in_library, state.rating
+                                );
                             }
                         }
                     }
@@ -1418,6 +1563,51 @@ fn display_library(resp: &ClientResponse, json: bool) -> Result<(), Box<dyn std:
     Ok(())
 }
 
+fn display_lyrics(lyrics: &malus_model::Lyrics) {
+    if lyrics.is_empty() {
+        println!("No lyrics available.");
+        return;
+    }
+
+    if lyrics.synced {
+        println!("Synced Lyrics:\n");
+        for line in &lyrics.lines {
+            if let Some(start_ms) = line.start_ms {
+                let mins = start_ms / 60_000;
+                let secs = (start_ms % 60_000) / 1000;
+                println!("[{:02}:{:02}] {}", mins, secs, line.text);
+            } else {
+                println!("        {}", line.text);
+            }
+        }
+    } else {
+        println!("Plain Lyrics:\n");
+        for line in &lyrics.lines {
+            println!("{}", line.text);
+        }
+    }
+}
+
+fn display_credits(credits: &malus_model::Credits) {
+    if credits.is_empty() {
+        println!("No credits available.");
+        return;
+    }
+
+    for cat in &credits.categories {
+        println!("\n{}", cat.title);
+        println!("{}", "-".repeat(cat.title.len().max(20)));
+        for item in &cat.items {
+            let roles = if item.roles.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", item.roles.join(", "))
+            };
+            println!("  • {}{}", item.name, roles);
+        }
+    }
+}
+
 async fn resolve_seek_target(
     client: &mut MalusClient,
     target: &str,
@@ -1489,6 +1679,14 @@ fn print_response(resp: &ClientResponse) {
         ClientResponse::Navigation(nav) => println!("{nav:?}"),
         ClientResponse::Page(page) => println!("{page:?}"),
         ClientResponse::PageContinued(cont) => println!("{cont:?}"),
+        ClientResponse::Lyrics(l) => display_lyrics(l),
+        ClientResponse::Credits(c) => display_credits(c),
+        ClientResponse::MediaState(s) => {
+            println!(
+                "MediaState: in_library={}, rating={:?}",
+                s.in_library, s.rating
+            );
+        }
     }
 }
 

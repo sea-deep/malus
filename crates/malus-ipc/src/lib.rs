@@ -308,4 +308,101 @@ mod tests {
         let decoded: client::ClientResponse = decode_message(&frame).unwrap();
         assert_eq!(act_res, decoded);
     }
+
+    #[test]
+    fn test_m5_experience_rpc_roundtrips() {
+        use malus_model::{
+            AccountMediaState, CreditCategory, CreditItem, Credits, LyricLine, LyricSyllable,
+            Lyrics, Rating,
+        };
+
+        // 1. GetLyrics request & response
+        let song_ref = MediaRef::parse("song:1440857781").unwrap();
+        let lyrics_req = client::ClientRequest::GetLyrics {
+            reference: song_ref.clone(),
+        };
+        let encoded = encode_message(&lyrics_req).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientRequest = decode_message(&frame).unwrap();
+        assert_eq!(lyrics_req, decoded);
+
+        let mut line = LyricLine::new("Like the legend of the phoenix").with_timing(1000, 5000);
+        line = line.with_syllables(vec![
+            LyricSyllable::new("Like ", Some(1000), Some(1500)),
+            LyricSyllable::new("the ", Some(1500), Some(2000)),
+        ]);
+        let lyrics = Lyrics::new(vec![line], true);
+        let lyrics_res = client::ClientResponse::Lyrics(lyrics);
+        let encoded = encode_message(&lyrics_res).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientResponse = decode_message(&frame).unwrap();
+        assert_eq!(lyrics_res, decoded);
+
+        // 2. GetCredits request & response
+        let credits_req = client::ClientRequest::GetCredits {
+            reference: song_ref.clone(),
+        };
+        let encoded = encode_message(&credits_req).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientRequest = decode_message(&frame).unwrap();
+        assert_eq!(credits_req, decoded);
+
+        let credits = Credits::new(vec![CreditCategory::new(
+            "PERFORMING ARTISTS",
+            "artists",
+            vec![CreditItem::new(
+                "Daft Punk",
+                vec!["Associated Performer".to_string()],
+            )],
+        )]);
+        let credits_res = client::ClientResponse::Credits(credits);
+        let encoded = encode_message(&credits_res).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientResponse = decode_message(&frame).unwrap();
+        assert_eq!(credits_res, decoded);
+
+        // 3. Media mutations & state request & response
+        let fav_req = client::ClientRequest::Favorite {
+            reference: song_ref.clone(),
+        };
+        let encoded = encode_message(&fav_req).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientRequest = decode_message(&frame).unwrap();
+        assert_eq!(fav_req, decoded);
+
+        let state = AccountMediaState::new(song_ref.clone(), true, Rating::Favorite);
+        let state_res = client::ClientResponse::MediaState(state.clone());
+        let encoded = encode_message(&state_res).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientResponse = decode_message(&frame).unwrap();
+        assert_eq!(state_res, decoded);
+
+        // 4. ClientEvent::MediaStateChanged
+        let event = client::ClientEvent::MediaStateChanged(state);
+        let encoded = encode_message(&event).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: client::ClientEvent = decode_message(&frame).unwrap();
+        assert_eq!(event, decoded);
+    }
 }

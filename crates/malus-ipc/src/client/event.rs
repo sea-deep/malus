@@ -1,6 +1,6 @@
 //! Client broadcast event types streamed by `malusd` to connected frontends.
 
-use crate::wire::{AuthStatusWire, PlayerStatus, Queue, Track};
+use crate::wire::{AccountMediaState, AuthStatusWire, PlayerStatus, Queue, Track};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -10,4 +10,5 @@ pub enum ClientEvent {
     QueueChanged(Queue),
     TrackChanged(Option<Track>),
     AuthChanged(AuthStatusWire),
+    MediaStateChanged(AccountMediaState),
 }

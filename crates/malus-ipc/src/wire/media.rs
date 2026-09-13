@@ -4,8 +4,9 @@
 //! wire transport containers (pagination, search results, auth status).
 
 pub use malus_model::{
-    Album, AlbumRef, Artist, ArtistRef, Artwork, MediaRef, MediaRefError, PlaybackState,
-    PlayerStatus, Playlist, Queue, RepeatMode, Track,
+    AccountMediaState, Album, AlbumRef, Artist, ArtistRef, Artwork, CreditCategory, CreditItem,
+    Credits, LyricLine, LyricSyllable, Lyrics, MediaRef, MediaRefError, PlaybackState,
+    PlayerStatus, Playlist, Queue, Rating, RepeatMode, Track,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;

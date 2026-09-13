@@ -217,6 +217,50 @@ impl Engine {
                         }
                     }
                 }
+                PageActionWire::Favorite(reference) => {
+                    match self.apple.favorite(&reference).await {
+                        Ok(state) => {
+                            self.emit(ClientEvent::MediaStateChanged(state));
+                            ClientResponse::ActionResult(ActionResultWire::success())
+                        }
+                        Err(e) => {
+                            ClientResponse::ActionResult(ActionResultWire::failed(e.to_string()))
+                        }
+                    }
+                }
+                PageActionWire::Unfavorite(reference) => {
+                    match self.apple.unfavorite(&reference).await {
+                        Ok(state) => {
+                            self.emit(ClientEvent::MediaStateChanged(state));
+                            ClientResponse::ActionResult(ActionResultWire::success())
+                        }
+                        Err(e) => {
+                            ClientResponse::ActionResult(ActionResultWire::failed(e.to_string()))
+                        }
+                    }
+                }
+                PageActionWire::SuggestLess(reference) => {
+                    match self.apple.suggest_less(&reference).await {
+                        Ok(state) => {
+                            self.emit(ClientEvent::MediaStateChanged(state));
+                            ClientResponse::ActionResult(ActionResultWire::success())
+                        }
+                        Err(e) => {
+                            ClientResponse::ActionResult(ActionResultWire::failed(e.to_string()))
+                        }
+                    }
+                }
+                PageActionWire::AddToLibrary(reference) => {
+                    match self.apple.add_to_library(&reference).await {
+                        Ok(state) => {
+                            self.emit(ClientEvent::MediaStateChanged(state));
+                            ClientResponse::ActionResult(ActionResultWire::success())
+                        }
+                        Err(e) => {
+                            ClientResponse::ActionResult(ActionResultWire::failed(e.to_string()))
+                        }
+                    }
+                }
             },
 
             ClientRequest::Search {
@@ -510,6 +554,75 @@ impl Engine {
                 }
                 Err(e) => ClientResponse::err("QUEUE_CLEAR_UPCOMING_FAILED", e.to_string()),
             },
+
+            ClientRequest::GetLyrics { reference } => {
+                match self.apple.get_lyrics(&reference).await {
+                    Ok(lyrics) => ClientResponse::Lyrics(lyrics),
+                    Err(e) => ClientResponse::err("LYRICS_FAILED", e.to_string()),
+                }
+            }
+
+            ClientRequest::GetCredits { reference } => {
+                match self.apple.get_credits(&reference).await {
+                    Ok(credits) => ClientResponse::Credits(credits),
+                    Err(e) => ClientResponse::err("CREDITS_FAILED", e.to_string()),
+                }
+            }
+
+            ClientRequest::GetMediaState { reference } => {
+                match self.apple.get_account_media_state(&reference).await {
+                    Ok(state) => ClientResponse::MediaState(state),
+                    Err(e) => ClientResponse::err("GET_MEDIA_STATE_FAILED", e.to_string()),
+                }
+            }
+
+            ClientRequest::Favorite { reference } => match self.apple.favorite(&reference).await {
+                Ok(state) => {
+                    self.emit(ClientEvent::MediaStateChanged(state.clone()));
+                    ClientResponse::MediaState(state)
+                }
+                Err(e) => ClientResponse::err("FAVORITE_FAILED", e.to_string()),
+            },
+
+            ClientRequest::Unfavorite { reference } => {
+                match self.apple.unfavorite(&reference).await {
+                    Ok(state) => {
+                        self.emit(ClientEvent::MediaStateChanged(state.clone()));
+                        ClientResponse::MediaState(state)
+                    }
+                    Err(e) => ClientResponse::err("UNFAVORITE_FAILED", e.to_string()),
+                }
+            }
+
+            ClientRequest::SuggestLess { reference } => {
+                match self.apple.suggest_less(&reference).await {
+                    Ok(state) => {
+                        self.emit(ClientEvent::MediaStateChanged(state.clone()));
+                        ClientResponse::MediaState(state)
+                    }
+                    Err(e) => ClientResponse::err("SUGGEST_LESS_FAILED", e.to_string()),
+                }
+            }
+
+            ClientRequest::ClearRating { reference } => {
+                match self.apple.clear_rating(&reference).await {
+                    Ok(state) => {
+                        self.emit(ClientEvent::MediaStateChanged(state.clone()));
+                        ClientResponse::MediaState(state)
+                    }
+                    Err(e) => ClientResponse::err("CLEAR_RATING_FAILED", e.to_string()),
+                }
+            }
+
+            ClientRequest::AddToLibrary { reference } => {
+                match self.apple.add_to_library(&reference).await {
+                    Ok(state) => {
+                        self.emit(ClientEvent::MediaStateChanged(state.clone()));
+                        ClientResponse::MediaState(state)
+                    }
+                    Err(e) => ClientResponse::err("ADD_TO_LIBRARY_FAILED", e.to_string()),
+                }
+            }
 
             ClientRequest::SubscribeEvents => ClientResponse::Ok,
         }

@@ -11,7 +11,9 @@ use malus_ipc::wire::{
     PageContinuationWire, PageCursorWire, PageWire, PagedListWire, SearchKindWire,
     SearchResultsWire,
 };
-use malus_model::{MediaRef, PageRoute, PlayerStatus, Queue, Track};
+use malus_model::{
+    AccountMediaState, Credits, Lyrics, MediaRef, PageRoute, PlayerStatus, Queue, Track,
+};
 use tokio::sync::{Mutex, mpsc};
 use tracing::info;
 
@@ -303,5 +305,113 @@ impl AppleService {
         cursor: &PageCursorWire,
     ) -> Result<PageContinuationWire, AppleError> {
         pages::continue_apple_page(&self.api, route, cursor).await
+    }
+
+    /// Fetch time-synced or unsynced lyrics for a song.
+    pub async fn get_lyrics(&self, reference: &MediaRef) -> Result<Lyrics, AppleError> {
+        match reference {
+            MediaRef::Song(id) => self.api.get_lyrics(id).await.map_err(AppleError::from),
+            _ => Err(AppleError::Internal(
+                "Lyrics are only available for songs".to_string(),
+            )),
+        }
+    }
+
+    /// Fetch song credits.
+    pub async fn get_credits(&self, reference: &MediaRef) -> Result<Credits, AppleError> {
+        match reference {
+            MediaRef::Song(id) => self.api.get_credits(id).await.map_err(AppleError::from),
+            _ => Err(AppleError::Internal(
+                "Credits are only available for songs".to_string(),
+            )),
+        }
+    }
+
+    /// Favorite an item (song, album, playlist).
+    pub async fn favorite(&self, reference: &MediaRef) -> Result<AccountMediaState, AppleError> {
+        self.api
+            .favorite(reference)
+            .await
+            .map_err(AppleError::from)?;
+        self.api
+            .get_account_media_state(reference)
+            .await
+            .map_err(AppleError::from)
+    }
+
+    /// Unfavorite an item (song, album, playlist).
+    pub async fn unfavorite(&self, reference: &MediaRef) -> Result<AccountMediaState, AppleError> {
+        self.api
+            .unfavorite(reference)
+            .await
+            .map_err(AppleError::from)?;
+        self.api
+            .get_account_media_state(reference)
+            .await
+            .map_err(AppleError::from)
+    }
+
+    /// Suggest less for an item (song, album, playlist).
+    pub async fn suggest_less(
+        &self,
+        reference: &MediaRef,
+    ) -> Result<AccountMediaState, AppleError> {
+        self.api
+            .suggest_less(reference)
+            .await
+            .map_err(AppleError::from)?;
+        self.api
+            .get_account_media_state(reference)
+            .await
+            .map_err(AppleError::from)
+    }
+
+    /// Clear rating (neutral).
+    pub async fn clear_rating(
+        &self,
+        reference: &MediaRef,
+    ) -> Result<AccountMediaState, AppleError> {
+        self.api
+            .clear_rating(reference)
+            .await
+            .map_err(AppleError::from)?;
+        self.api
+            .get_account_media_state(reference)
+            .await
+            .map_err(AppleError::from)
+    }
+
+    /// Add an item (song, album, playlist) to library.
+    pub async fn add_to_library(
+        &self,
+        reference: &MediaRef,
+    ) -> Result<AccountMediaState, AppleError> {
+        self.api
+            .add_to_library(reference)
+            .await
+            .map_err(AppleError::from)?;
+        self.api
+            .get_account_media_state(reference)
+            .await
+            .map_err(AppleError::from)
+    }
+
+    /// Get current account media state (in_library, rating).
+    pub async fn get_account_media_state(
+        &self,
+        reference: &MediaRef,
+    ) -> Result<AccountMediaState, AppleError> {
+        self.api
+            .get_account_media_state(reference)
+            .await
+            .map_err(AppleError::from)
+    }
+
+    /// Alias for get_account_media_state.
+    pub async fn get_media_state(
+        &self,
+        reference: &MediaRef,
+    ) -> Result<AccountMediaState, AppleError> {
+        self.get_account_media_state(reference).await
     }
 }

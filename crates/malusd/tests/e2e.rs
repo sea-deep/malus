@@ -16,6 +16,7 @@ use tokio::time::sleep;
 
 struct TestServer {
     sock_path: PathBuf,
+    engine: Arc<Engine>,
     handle: tokio::task::JoinHandle<()>,
 }
 
@@ -31,7 +32,7 @@ impl TestServer {
         ));
 
         let engine = Arc::new(Engine::new());
-        let server = Server::new(&sock_path, engine);
+        let server = Server::new(&sock_path, engine.clone());
         let srv_handle = tokio::spawn(async move {
             let _ = server.run().await;
         });
@@ -46,8 +47,13 @@ impl TestServer {
 
         Self {
             sock_path,
+            engine,
             handle: srv_handle,
         }
+    }
+
+    fn broadcast_event(&self, event: malus_ipc::client::ClientEvent) {
+        self.engine.emit(event);
     }
 }
 
@@ -181,4 +187,33 @@ async fn test_daemon_multi_client_consistency_and_lifetime() {
     assert_eq!(status_c.state, PlaybackState::Stopped);
     let queue_c = client_c.get_queue().await.unwrap();
     assert_eq!(queue_c.items.len(), 0);
+}
+
+#[tokio::test]
+async fn test_daemon_media_state_events() {
+    use malus_ipc::client::ClientEvent;
+    use malus_model::{AccountMediaState, Rating};
+
+    let server = TestServer::start().await;
+    let client = MalusClient::connect(&server.sock_path).await.unwrap();
+    let (mut rx, mut status_rx) = client.subscribe_events();
+    let _ = status_rx
+        .wait_for(|s| *s == malus_client::ConnectionStatus::Connected)
+        .await;
+
+    // Broadcast a media state change event
+    let song_ref = MediaRef::Song("1440857781".to_string());
+    let state = AccountMediaState::new(song_ref, true, Rating::Favorite);
+    server.broadcast_event(ClientEvent::MediaStateChanged(state.clone()));
+
+    // Wait for the event on subscriber
+    let received = tokio::time::timeout(Duration::from_millis(1000), rx.recv()).await;
+    match received {
+        Ok(Ok(ClientEvent::MediaStateChanged(ev_state))) => {
+            assert_eq!(ev_state, state);
+            assert!(ev_state.is_favorite());
+            assert!(ev_state.in_library);
+        }
+        other => panic!("Expected MediaStateChanged event, got {other:?}"),
+    }
 }

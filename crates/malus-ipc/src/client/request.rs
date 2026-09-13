@@ -90,5 +90,29 @@ pub enum ClientRequest {
     InvokeAction {
         action: PageActionWire,
     },
+    GetLyrics {
+        reference: MediaRef,
+    },
+    GetCredits {
+        reference: MediaRef,
+    },
+    GetMediaState {
+        reference: MediaRef,
+    },
+    Favorite {
+        reference: MediaRef,
+    },
+    Unfavorite {
+        reference: MediaRef,
+    },
+    SuggestLess {
+        reference: MediaRef,
+    },
+    ClearRating {
+        reference: MediaRef,
+    },
+    AddToLibrary {
+        reference: MediaRef,
+    },
     SubscribeEvents,
 }

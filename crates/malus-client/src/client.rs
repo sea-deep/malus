@@ -9,7 +9,9 @@ use malus_ipc::{
         PagedListWire, SearchKindWire, SearchResultsWire,
     },
 };
-use malus_model::{MediaRef, PageRoute, PlayerStatus, Queue, RepeatMode, Track};
+use malus_model::{
+    AccountMediaState, Credits, Lyrics, MediaRef, PageRoute, PlayerStatus, Queue, RepeatMode, Track,
+};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::net::UnixStream;
@@ -497,6 +499,114 @@ impl MalusClient {
     ) -> Result<ActionResultWire, ClientError> {
         match self.send(&ClientRequest::InvokeAction { action }).await? {
             ClientResponse::ActionResult(res) => Ok(res),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn get_lyrics(&self, reference: &MediaRef) -> Result<Lyrics, ClientError> {
+        match self
+            .send(&ClientRequest::GetLyrics {
+                reference: reference.clone(),
+            })
+            .await?
+        {
+            ClientResponse::Lyrics(lyrics) => Ok(lyrics),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn get_credits(&self, reference: &MediaRef) -> Result<Credits, ClientError> {
+        match self
+            .send(&ClientRequest::GetCredits {
+                reference: reference.clone(),
+            })
+            .await?
+        {
+            ClientResponse::Credits(credits) => Ok(credits),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn get_media_state(
+        &self,
+        reference: &MediaRef,
+    ) -> Result<AccountMediaState, ClientError> {
+        match self
+            .send(&ClientRequest::GetMediaState {
+                reference: reference.clone(),
+            })
+            .await?
+        {
+            ClientResponse::MediaState(state) => Ok(state),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn favorite(&self, reference: &MediaRef) -> Result<AccountMediaState, ClientError> {
+        match self
+            .send(&ClientRequest::Favorite {
+                reference: reference.clone(),
+            })
+            .await?
+        {
+            ClientResponse::MediaState(state) => Ok(state),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn unfavorite(&self, reference: &MediaRef) -> Result<AccountMediaState, ClientError> {
+        match self
+            .send(&ClientRequest::Unfavorite {
+                reference: reference.clone(),
+            })
+            .await?
+        {
+            ClientResponse::MediaState(state) => Ok(state),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn suggest_less(
+        &self,
+        reference: &MediaRef,
+    ) -> Result<AccountMediaState, ClientError> {
+        match self
+            .send(&ClientRequest::SuggestLess {
+                reference: reference.clone(),
+            })
+            .await?
+        {
+            ClientResponse::MediaState(state) => Ok(state),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn clear_rating(
+        &self,
+        reference: &MediaRef,
+    ) -> Result<AccountMediaState, ClientError> {
+        match self
+            .send(&ClientRequest::ClearRating {
+                reference: reference.clone(),
+            })
+            .await?
+        {
+            ClientResponse::MediaState(state) => Ok(state),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn add_to_library(
+        &self,
+        reference: &MediaRef,
+    ) -> Result<AccountMediaState, ClientError> {
+        match self
+            .send(&ClientRequest::AddToLibrary {
+                reference: reference.clone(),
+            })
+            .await?
+        {
+            ClientResponse::MediaState(state) => Ok(state),
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
         }
     }

@@ -236,13 +236,17 @@ impl PageBadgeWire {
     }
 }
 
-/// Typed actions for playback and queue operations.
+/// Typed actions for playback, queue, and account operations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", content = "target")]
 pub enum PageActionWire {
     Play(MediaRef),
     PlayNext(MediaRef),
     PlayLater(MediaRef),
+    Favorite(MediaRef),
+    Unfavorite(MediaRef),
+    SuggestLess(MediaRef),
+    AddToLibrary(MediaRef),
 }
 
 /// Pagination cursor for continuing a page or section.
