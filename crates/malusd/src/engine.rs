@@ -4,10 +4,10 @@
 //! native client applications (CLI, TUI, GUI) over Unix domain socket IPC.
 
 use malus_ipc::{
-    PlaybackStateWire,
     client::{ClientEvent, ClientRequest, ClientResponse},
-    wire::{ActionResultWire, PageActionWire, PlayerStatusWire, QueueWire, RepeatModeWire},
+    wire::{ActionResultWire, PageActionWire},
 };
+use malus_model::{PlaybackState, PlayerStatus, Queue, RepeatMode};
 use malus_service::AppleService;
 use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast, mpsc};
@@ -15,21 +15,21 @@ use tracing::info;
 
 #[derive(Debug, Clone)]
 pub struct MirroredPlayerState {
-    pub status: PlayerStatusWire,
+    pub status: PlayerStatus,
     pub received_at: std::time::Instant,
 }
 
 impl MirroredPlayerState {
-    pub fn new(status: PlayerStatusWire) -> Self {
+    pub fn new(status: PlayerStatus) -> Self {
         Self {
             status,
             received_at: std::time::Instant::now(),
         }
     }
 
-    pub fn extrapolated_status(&self) -> PlayerStatusWire {
+    pub fn extrapolated_status(&self) -> PlayerStatus {
         let mut s = self.status.clone();
-        if s.state == PlaybackStateWire::Playing {
+        if s.state == PlaybackState::Playing {
             let elapsed_ms = self.received_at.elapsed().as_millis() as u64;
             let mut pos = s.position_ms + elapsed_ms;
             if s.duration_ms > 0 && pos > s.duration_ms {
@@ -95,7 +95,7 @@ impl Engine {
         &self.apple
     }
 
-    pub async fn update_mirrored_status(&self, status: PlayerStatusWire) {
+    pub async fn update_mirrored_status(&self, status: PlayerStatus) {
         let mut guard = self.mirrored_player.write().await;
         *guard = Some(MirroredPlayerState::new(status));
     }
@@ -151,7 +151,7 @@ impl Engine {
             }
 
             ClientRequest::InvokeAction { action } => match action {
-                PageActionWire::PlaySong(id) => match self.apple.play(&id).await {
+                PageActionWire::Play(reference) => match self.apple.play(&reference).await {
                     Ok(()) => {
                         if let Ok(status) = self.apple.get_status().await {
                             self.update_mirrored_status(status.clone()).await;
@@ -181,22 +181,22 @@ impl Engine {
                 }
             }
 
-            ClientRequest::GetCatalogItem { media_id } => {
-                match self.apple.get_catalog_item(&media_id).await {
+            ClientRequest::GetCatalogItem { reference } => {
+                match self.apple.get_catalog_item(&reference).await {
                     Ok(item) => ClientResponse::CatalogItem(item),
                     Err(e) => ClientResponse::err("CATALOG_FAILED", e.to_string()),
                 }
             }
 
             ClientRequest::GetCollectionItems {
-                media_id,
+                reference,
                 limit,
                 cursor,
             } => {
                 let limit = limit.unwrap_or(50);
                 match self
                     .apple
-                    .get_collection_items(&media_id, limit, cursor.as_deref())
+                    .get_collection_items(&reference, limit, cursor.as_deref())
                     .await
                 {
                     Ok(items) => ClientResponse::CollectionItems(items),
@@ -227,7 +227,7 @@ impl Engine {
                 Err(e) => ClientResponse::err("PLAY_FAILED", e.to_string()),
             },
 
-            ClientRequest::PlayTrack { media_id } => match self.apple.play(&media_id).await {
+            ClientRequest::PlayMedia { reference } => match self.apple.play(&reference).await {
                 Ok(()) => {
                     if let Ok(status) = self.apple.get_status().await {
                         self.update_mirrored_status(status.clone()).await;
@@ -255,10 +255,10 @@ impl Engine {
                     guard
                         .as_ref()
                         .map(|m| m.status.state)
-                        .unwrap_or(PlaybackStateWire::Stopped)
+                        .unwrap_or(PlaybackState::Stopped)
                 };
 
-                let res = if current_state == PlaybackStateWire::Playing {
+                let res = if current_state == PlaybackState::Playing {
                     self.apple.pause().await
                 } else {
                     self.apple.resume().await
@@ -304,7 +304,6 @@ impl Engine {
             ClientRequest::SetVolume { volume: _ } => ClientResponse::Ok,
             ClientRequest::SetShuffle { .. } => ClientResponse::Ok,
             ClientRequest::SetRepeat { .. } => ClientResponse::Ok,
-            ClientRequest::ClearQueue => ClientResponse::Ok,
 
             ClientRequest::GetStatus => {
                 let cached = {
@@ -321,26 +320,25 @@ impl Engine {
                             *guard = Some(MirroredPlayerState::new(status.clone()));
                             ClientResponse::Status(status)
                         }
-                        Err(_) => ClientResponse::Status(PlayerStatusWire {
-                            state: PlaybackStateWire::Stopped,
+                        Err(_) => ClientResponse::Status(PlayerStatus {
+                            state: PlaybackState::Stopped,
                             current_track: None,
                             position_ms: 0,
                             duration_ms: 0,
                             volume: 100,
                             muted: false,
                             shuffle: false,
-                            repeat: RepeatModeWire::Off,
+                            repeat: RepeatMode::Off,
                         }),
                     }
                 }
             }
 
-            ClientRequest::GetQueue => ClientResponse::Queue(QueueWire {
+            ClientRequest::GetQueue => ClientResponse::Queue(Queue {
                 items: Vec::new(),
                 current_index: None,
             }),
 
-            ClientRequest::Enqueue { track: _ } => ClientResponse::Ok,
             ClientRequest::SubscribeEvents => ClientResponse::Ok,
         }
     }

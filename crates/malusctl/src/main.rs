@@ -6,9 +6,10 @@ use malus_ipc::{
     client::{ClientRequest, ClientResponse},
     wire::{
         CatalogItemWire, LibraryKindWire, LibraryPageWire, NavigationWire, PageWire,
-        SearchKindWire, SearchResultsWire, TrackWire,
+        SearchKindWire, SearchResultsWire,
     },
 };
+use malus_model::{MediaRef, PageRoute};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -145,9 +146,6 @@ enum Commands {
     /// Display the current playback queue
     Queue,
 
-    /// Clear all tracks from the queue
-    Clear,
-
     /// Search Apple Music audio catalog
     Search {
         #[arg(help = "Search query string")]
@@ -230,16 +228,6 @@ enum Commands {
     Library {
         #[command(subcommand)]
         action: LibraryCommands,
-    },
-
-    /// Enqueue a track
-    Enqueue {
-        #[arg(help = "Track ID (e.g. song:1440857781)")]
-        id: String,
-        #[arg(short, long, help = "Track title")]
-        title: Option<String>,
-        #[arg(short, long, help = "Track artist")]
-        artist: Option<String>,
     },
 
     /// Stream live player events
@@ -326,7 +314,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Page { route, json } => {
-            let resp = client.send(&ClientRequest::GetPage { route }).await?;
+            let parsed_route = match route.parse::<PageRoute>() {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Invalid route '{route}': {e}");
+                    return Ok(());
+                }
+            };
+            let resp = client
+                .send(&ClientRequest::GetPage {
+                    route: parsed_route,
+                })
+                .await?;
             match resp {
                 ClientResponse::Page(page) => {
                     display_page(&page, json)?;
@@ -377,7 +376,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Play { media_id } => {
             let req = match media_id {
-                Some(id) => ClientRequest::PlayTrack { media_id: id },
+                Some(id) => match MediaRef::parse(&id) {
+                    Ok(reference) => ClientRequest::PlayMedia { reference },
+                    Err(e) => {
+                        eprintln!("Invalid media reference '{id}': {e}");
+                        return Ok(());
+                    }
+                },
                 None => ClientRequest::Play,
             };
             let resp = client.send(&req).await?;
@@ -465,10 +470,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 other => print_response(&other),
             }
         }
-        Commands::Clear => {
-            let resp = client.send(&ClientRequest::ClearQueue).await?;
-            print_response(&resp);
-        }
         Commands::Search {
             query,
             r#type,
@@ -510,8 +511,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Track { media_id, json } => {
+            let reference = match MediaRef::parse(&media_id) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Invalid media reference '{media_id}': {e}");
+                    return Ok(());
+                }
+            };
             let resp = client
-                .send(&ClientRequest::GetCatalogItem { media_id })
+                .send(&ClientRequest::GetCatalogItem { reference })
                 .await?;
             match resp {
                 ClientResponse::CatalogItem(item) => {
@@ -529,14 +537,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             cursor,
             json,
         } => {
+            let reference = match MediaRef::parse(&media_id) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Invalid media reference '{media_id}': {e}");
+                    return Ok(());
+                }
+            };
             let item_resp = client
                 .send(&ClientRequest::GetCatalogItem {
-                    media_id: media_id.clone(),
+                    reference: reference.clone(),
                 })
                 .await?;
             let tracks_resp = client
                 .send(&ClientRequest::GetCollectionItems {
-                    media_id,
+                    reference,
                     limit,
                     cursor,
                 })
@@ -544,8 +559,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             display_album(&item_resp, &tracks_resp, json)?;
         }
         Commands::Artist { media_id, json } => {
+            let reference = match MediaRef::parse(&media_id) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Invalid media reference '{media_id}': {e}");
+                    return Ok(());
+                }
+            };
             let resp = client
-                .send(&ClientRequest::GetCatalogItem { media_id })
+                .send(&ClientRequest::GetCatalogItem { reference })
                 .await?;
             match resp {
                 ClientResponse::CatalogItem(item) => {
@@ -563,14 +585,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             cursor,
             json,
         } => {
+            let reference = match MediaRef::parse(&media_id) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Invalid media reference '{media_id}': {e}");
+                    return Ok(());
+                }
+            };
             let item_resp = client
                 .send(&ClientRequest::GetCatalogItem {
-                    media_id: media_id.clone(),
+                    reference: reference.clone(),
                 })
                 .await?;
             let tracks_resp = client
                 .send(&ClientRequest::GetCollectionItems {
-                    media_id,
+                    reference,
                     limit,
                     cursor,
                 })
@@ -621,15 +650,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 display_library(&resp, json)?;
             }
         },
-        Commands::Enqueue { id, title, artist } => {
-            let track = TrackWire::new(
-                id,
-                title.unwrap_or_else(|| "Unknown Track".into()),
-                artist.unwrap_or_else(|| "Unknown Artist".into()),
-            );
-            let resp = client.send(&ClientRequest::Enqueue { track }).await?;
-            print_response(&resp);
-        }
         Commands::Watch { json } => {
             if !json {
                 println!("Subscribing to live player events (Ctrl+C to stop)...");
@@ -758,7 +778,7 @@ fn display_page(page: &PageWire, json: bool) -> Result<(), Box<dyn std::error::E
                 let sub = item.subtitle.as_deref().unwrap_or("-");
                 let dest = item
                     .open_route
-                    .as_deref()
+                    .as_ref()
                     .map(|r| format!(" -> {r}"))
                     .unwrap_or_default();
                 let badges = if !item.badges.is_empty() {

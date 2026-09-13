@@ -9,9 +9,10 @@ use std::{
 };
 
 use malus_ipc::wire::{
-    AlbumWire, ArtistWire, CatalogItemWire, LibraryKindWire, LibraryPageWire, MediaRefWire,
-    PagedListWire, PlaylistWire, SearchKindWire, SearchResultsWire, TrackWire,
+    CatalogItemWire, LibraryKindWire, LibraryPageWire, PagedListWire, SearchKindWire,
+    SearchResultsWire,
 };
+use malus_model::{Album, Artist, MediaRef, Playlist, Track};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
 use serde_json::Value;
 use tracing::{info, warn};
@@ -297,7 +298,7 @@ impl OfficialAppleMusicApi {
         let results = res.get("results").unwrap_or(&res);
 
         let tracks = results.get("songs").map(|sec| {
-            let items: Vec<TrackWire> = sec
+            let items: Vec<Track> = sec
                 .get("data")
                 .and_then(|d| d.as_array())
                 .map(|arr| arr.iter().filter_map(parse_apple_track).collect())
@@ -307,7 +308,7 @@ impl OfficialAppleMusicApi {
         });
 
         let albums = results.get("albums").map(|sec| {
-            let items: Vec<AlbumWire> = sec
+            let items: Vec<Album> = sec
                 .get("data")
                 .and_then(|d| d.as_array())
                 .map(|arr| arr.iter().filter_map(parse_apple_album).collect())
@@ -317,7 +318,7 @@ impl OfficialAppleMusicApi {
         });
 
         let artists = results.get("artists").map(|sec| {
-            let items: Vec<ArtistWire> = sec
+            let items: Vec<Artist> = sec
                 .get("data")
                 .and_then(|d| d.as_array())
                 .map(|arr| arr.iter().filter_map(parse_apple_artist).collect())
@@ -327,7 +328,7 @@ impl OfficialAppleMusicApi {
         });
 
         let playlists = results.get("playlists").map(|sec| {
-            let items: Vec<PlaylistWire> = sec
+            let items: Vec<Playlist> = sec
                 .get("data")
                 .and_then(|d| d.as_array())
                 .map(|arr| arr.iter().filter_map(parse_apple_playlist).collect())
@@ -345,12 +346,12 @@ impl OfficialAppleMusicApi {
     }
 
     /// Fetch a single catalog or library item by MediaRef.
-    pub async fn get_catalog_item(&self, media_id: &str) -> Result<CatalogItemWire, AppleApiError> {
-        let mid = MediaRefWire::parse(media_id)
-            .map_err(|e| AppleApiError::Other(format!("Invalid MediaRef '{media_id}': {e}")))?;
-
-        let raw_id = mid.id();
-        let kind = mid.kind();
+    pub async fn get_catalog_item(
+        &self,
+        reference: &MediaRef,
+    ) -> Result<CatalogItemWire, AppleApiError> {
+        let raw_id = reference.id();
+        let kind = reference.kind();
 
         let is_library = raw_id.starts_with("i.")
             || raw_id.starts_with("l.")
@@ -386,35 +387,35 @@ impl OfficialAppleMusicApi {
             .get("data")
             .and_then(|d| d.as_array())
             .and_then(|arr| arr.first())
-            .ok_or_else(|| AppleApiError::NotFound(format!("Item '{media_id}' not found")))?;
+            .ok_or_else(|| AppleApiError::NotFound(format!("Item '{reference}' not found")))?;
 
         match kind {
             "song" | "track" => {
                 let mut track = parse_apple_track(item).ok_or_else(|| {
-                    AppleApiError::Parse(format!("Failed to parse track '{media_id}'"))
+                    AppleApiError::Parse(format!("Failed to parse track '{reference}'"))
                 })?;
-                track.id = media_id.to_string();
+                track.id = reference.clone();
                 Ok(CatalogItemWire::Track(track))
             }
             "album" => {
                 let mut album = parse_apple_album(item).ok_or_else(|| {
-                    AppleApiError::Parse(format!("Failed to parse album '{media_id}'"))
+                    AppleApiError::Parse(format!("Failed to parse album '{reference}'"))
                 })?;
-                album.id = media_id.to_string();
+                album.id = reference.clone();
                 Ok(CatalogItemWire::Album(album))
             }
             "artist" => {
                 let mut artist = parse_apple_artist(item).ok_or_else(|| {
-                    AppleApiError::Parse(format!("Failed to parse artist '{media_id}'"))
+                    AppleApiError::Parse(format!("Failed to parse artist '{reference}'"))
                 })?;
-                artist.id = media_id.to_string();
+                artist.id = reference.clone();
                 Ok(CatalogItemWire::Artist(artist))
             }
             "playlist" => {
                 let mut playlist = parse_apple_playlist(item).ok_or_else(|| {
-                    AppleApiError::Parse(format!("Failed to parse playlist '{media_id}'"))
+                    AppleApiError::Parse(format!("Failed to parse playlist '{reference}'"))
                 })?;
-                playlist.id = media_id.to_string();
+                playlist.id = reference.clone();
                 Ok(CatalogItemWire::Playlist(playlist))
             }
             other => Err(AppleApiError::NotFound(format!(
@@ -426,15 +427,12 @@ impl OfficialAppleMusicApi {
     /// Fetch collection tracks (album or playlist) with pagination.
     pub async fn get_collection_items(
         &self,
-        media_id: &str,
+        reference: &MediaRef,
         limit: usize,
         cursor: Option<&str>,
-    ) -> Result<PagedListWire<TrackWire>, AppleApiError> {
-        let mid = MediaRefWire::parse(media_id)
-            .map_err(|e| AppleApiError::Other(format!("Invalid MediaRef '{media_id}': {e}")))?;
-
-        let raw_id = mid.id();
-        let kind = mid.kind();
+    ) -> Result<PagedListWire<Track>, AppleApiError> {
+        let raw_id = reference.id();
+        let kind = reference.kind();
 
         let res = if let Some(c) = cursor
             && (c.starts_with("/v1/") || c.starts_with("http://") || c.starts_with("https://"))
@@ -466,7 +464,7 @@ impl OfficialAppleMusicApi {
             self.send_request(&path, &query_params).await?
         };
 
-        let items: Vec<TrackWire> = res
+        let items: Vec<Track> = res
             .get("data")
             .and_then(|d| d.as_array())
             .map(|arr| arr.iter().filter_map(parse_apple_track).collect())
@@ -507,19 +505,19 @@ impl OfficialAppleMusicApi {
 
         match kind {
             LibraryKindWire::Tracks => {
-                let items: Vec<TrackWire> = data
+                let items: Vec<Track> = data
                     .map(|arr| arr.iter().filter_map(parse_apple_track).collect())
                     .unwrap_or_default();
                 Ok(LibraryPageWire::Tracks(PagedListWire::new(items, next)))
             }
             LibraryKindWire::Albums => {
-                let items: Vec<AlbumWire> = data
+                let items: Vec<Album> = data
                     .map(|arr| arr.iter().filter_map(parse_apple_album).collect())
                     .unwrap_or_default();
                 Ok(LibraryPageWire::Albums(PagedListWire::new(items, next)))
             }
             LibraryKindWire::Playlists => {
-                let items: Vec<PlaylistWire> = data
+                let items: Vec<Playlist> = data
                     .map(|arr| arr.iter().filter_map(parse_apple_playlist).collect())
                     .unwrap_or_default();
                 Ok(LibraryPageWire::Playlists(PagedListWire::new(items, next)))

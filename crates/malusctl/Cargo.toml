@@ -11,6 +11,7 @@ name = "malusctl"
 path = "src/main.rs"
 
 [dependencies]
+malus-model = { path = "../malus-model" }
 malus-client = { path = "../malus-client" }
 malus-ipc = { path = "../malus-ipc" }
 malus-wpe = { path = "../malus-wpe" }

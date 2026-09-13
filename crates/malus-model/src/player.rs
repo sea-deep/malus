@@ -1,15 +1,16 @@
-//! Pure domain player model representing audio state and active queue.
+//! Pure domain player status model representing audio playback state.
 
 use crate::{
     media::Track,
     playback::{PlaybackState, RepeatMode},
-    queue::Queue,
 };
+use serde::{Deserialize, Serialize};
 
-/// High-level player model.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Player {
+/// High-level authoritative player status snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlayerStatus {
     pub state: PlaybackState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_track: Option<Track>,
     pub position_ms: u64,
     pub duration_ms: u64,
@@ -17,10 +18,9 @@ pub struct Player {
     pub muted: bool,
     pub shuffle: bool,
     pub repeat: RepeatMode,
-    pub queue: Queue,
 }
 
-impl Default for Player {
+impl Default for PlayerStatus {
     fn default() -> Self {
         Self {
             state: PlaybackState::Stopped,
@@ -31,12 +31,11 @@ impl Default for Player {
             muted: false,
             shuffle: false,
             repeat: RepeatMode::Off,
-            queue: Queue::new(),
         }
     }
 }
 
-impl Player {
+impl PlayerStatus {
     pub fn new() -> Self {
         Self::default()
     }

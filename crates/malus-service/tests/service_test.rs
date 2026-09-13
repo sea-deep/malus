@@ -1,10 +1,8 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use malus_ipc::{
-    PlaybackStateWire, PlayerStatusWire, RepeatModeWire,
-    wire::{AuthStateWire, CatalogItemWire, LibraryKindWire, LibraryPageWire, TrackWire},
-};
+use malus_ipc::wire::{AuthStateWire, CatalogItemWire, LibraryKindWire, LibraryPageWire};
+use malus_model::{MediaRef, PageRoute, PlaybackState, PlayerStatus, RepeatMode, Track};
 use malus_service::{
     AppleCredentials, AppleError, AppleService, AppleWebSession, AuthState, OfficialAppleMusicApi,
     StaticTokenProvider, parse_apple_album, parse_apple_artist, parse_apple_artwork,
@@ -76,7 +74,7 @@ struct MockAppleWebSession {
     is_paused: Mutex<bool>,
     is_stopped: Mutex<bool>,
     last_seek_ms: Mutex<Option<u64>>,
-    event_sink: Mutex<Option<mpsc::UnboundedSender<PlayerStatusWire>>>,
+    event_sink: Mutex<Option<mpsc::UnboundedSender<PlayerStatus>>>,
 }
 
 impl MockAppleWebSession {
@@ -136,10 +134,10 @@ impl AppleWebSession for MockAppleWebSession {
 
         let guard = self.event_sink.lock().await;
         if let Some(ref sink) = *guard {
-            let _ = sink.send(PlayerStatusWire {
-                state: PlaybackStateWire::Playing,
-                current_track: Some(TrackWire::new(
-                    format!("song:{catalog_id}"),
+            let _ = sink.send(PlayerStatus {
+                state: PlaybackState::Playing,
+                current_track: Some(Track::new(
+                    MediaRef::Song(catalog_id.to_string()),
                     "Mock Apple Song",
                     "Mock Artist",
                 )),
@@ -148,7 +146,7 @@ impl AppleWebSession for MockAppleWebSession {
                 volume: 100,
                 muted: false,
                 shuffle: false,
-                repeat: RepeatModeWire::Off,
+                repeat: RepeatMode::Off,
             });
         }
         Ok(())
@@ -175,23 +173,23 @@ impl AppleWebSession for MockAppleWebSession {
         Ok(())
     }
 
-    async fn get_status(&self) -> Result<PlayerStatusWire, AppleError> {
+    async fn get_status(&self) -> Result<PlayerStatus, AppleError> {
         let paused = *self.is_paused.lock().await;
         let stopped = *self.is_stopped.lock().await;
         let track_id = self.last_played_track.lock().await.clone();
 
         let state = if stopped {
-            PlaybackStateWire::Stopped
+            PlaybackState::Stopped
         } else if paused {
-            PlaybackStateWire::Paused
+            PlaybackState::Paused
         } else {
-            PlaybackStateWire::Playing
+            PlaybackState::Playing
         };
 
-        let current_track = track_id
-            .map(|id| TrackWire::new(format!("song:{id}"), "Mock Apple Song", "Mock Artist"));
+        let current_track =
+            track_id.map(|id| Track::new(MediaRef::Song(id), "Mock Apple Song", "Mock Artist"));
 
-        Ok(PlayerStatusWire {
+        Ok(PlayerStatus {
             state,
             current_track,
             position_ms: self.last_seek_ms.lock().await.unwrap_or(0),
@@ -199,11 +197,11 @@ impl AppleWebSession for MockAppleWebSession {
             volume: 100,
             muted: false,
             shuffle: false,
-            repeat: RepeatModeWire::Off,
+            repeat: RepeatMode::Off,
         })
     }
 
-    fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlayerStatusWire>) {
+    fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlayerStatus>) {
         if let Ok(mut guard) = self.event_sink.try_lock() {
             *guard = Some(sink);
         }
@@ -311,17 +309,20 @@ async fn test_playback_play_valid_media_id() {
     let mock = Arc::new(MockAppleWebSession::new());
     let service = AppleService::with_session(mock.clone());
 
-    service.play("song:1440857781").await.expect("play track");
+    service
+        .play(&MediaRef::Song("1440857781".to_string()))
+        .await
+        .expect("play track");
     assert_eq!(
         mock.last_played_track.lock().await.as_deref(),
         Some("1440857781")
     );
 
     let status = service.get_status().await.expect("get status");
-    assert_eq!(status.state, PlaybackStateWire::Playing);
+    assert_eq!(status.state, PlaybackState::Playing);
     assert_eq!(
-        status.current_track.as_ref().map(|t| t.id.as_str()),
-        Some("song:1440857781")
+        status.current_track.as_ref().map(|t| &t.id),
+        Some(&MediaRef::Song("1440857781".to_string()))
     );
 }
 
@@ -331,11 +332,11 @@ async fn test_playback_play_invalid_kind() {
     let service = AppleService::with_session(mock);
 
     // Wrong kind
-    let err = service.play("album:12345").await.expect_err("wrong kind");
-    assert!(
-        err.to_string()
-            .contains("Expected item kind 'song' or 'track'")
-    );
+    let err = service
+        .play(&MediaRef::Album("12345".to_string()))
+        .await
+        .expect_err("wrong kind");
+    assert!(err.to_string().contains("Expected item kind 'song'"));
 }
 
 #[tokio::test]
@@ -343,7 +344,10 @@ async fn test_playback_controls_forwarding() {
     let mock = Arc::new(MockAppleWebSession::new());
     let service = AppleService::with_session(mock.clone());
 
-    service.play("song:123").await.unwrap();
+    service
+        .play(&MediaRef::Song("123".to_string()))
+        .await
+        .unwrap();
     assert!(!*mock.is_paused.lock().await);
 
     service.pause().await.unwrap();
@@ -417,21 +421,21 @@ async fn test_apple_search_and_catalog() {
         .expect("search");
     let tracks = search_res.tracks.expect("tracks");
     assert_eq!(tracks.items.len(), 1);
-    assert_eq!(tracks.items[0].id, "song:123");
+    assert_eq!(tracks.items[0].id, MediaRef::Song("123".to_string()));
     assert_eq!(tracks.items[0].title, "Daft Punk Song");
 
     let albums = search_res.albums.expect("albums");
     assert_eq!(albums.items.len(), 1);
-    assert_eq!(albums.items[0].id, "album:456");
+    assert_eq!(albums.items[0].id, MediaRef::Album("456".to_string()));
 
     // 2. Get Catalog Item (track)
     let item = service
-        .get_catalog_item("song:123")
+        .get_catalog_item(&MediaRef::Song("123".to_string()))
         .await
         .expect("track item");
     match item {
         CatalogItemWire::Track(t) => {
-            assert_eq!(t.id, "song:123");
+            assert_eq!(t.id, MediaRef::Song("123".to_string()));
             assert_eq!(t.title, "Mock Track");
         }
         _ => panic!("Expected Track"),
@@ -439,12 +443,12 @@ async fn test_apple_search_and_catalog() {
 
     // 3. Get Catalog Item (album)
     let item = service
-        .get_catalog_item("album:456")
+        .get_catalog_item(&MediaRef::Album("456".to_string()))
         .await
         .expect("album item");
     match item {
         CatalogItemWire::Album(a) => {
-            assert_eq!(a.id, "album:456");
+            assert_eq!(a.id, MediaRef::Album("456".to_string()));
             assert_eq!(a.title, "Mock Album");
             assert_eq!(a.track_count, Some(12));
         }
@@ -453,12 +457,12 @@ async fn test_apple_search_and_catalog() {
 
     // 4. Get Catalog Item (artist)
     let item = service
-        .get_catalog_item("artist:789")
+        .get_catalog_item(&MediaRef::Artist("789".to_string()))
         .await
         .expect("artist item");
     match item {
         CatalogItemWire::Artist(a) => {
-            assert_eq!(a.id, "artist:789");
+            assert_eq!(a.id, MediaRef::Artist("789".to_string()));
             assert_eq!(a.name, "Mock Artist");
         }
         _ => panic!("Expected Artist"),
@@ -466,12 +470,12 @@ async fn test_apple_search_and_catalog() {
 
     // 5. Get Catalog Item (playlist)
     let item = service
-        .get_catalog_item("playlist:pl.abc")
+        .get_catalog_item(&MediaRef::Playlist("pl.abc".to_string()))
         .await
         .expect("playlist item");
     match item {
         CatalogItemWire::Playlist(p) => {
-            assert_eq!(p.id, "playlist:pl.abc");
+            assert_eq!(p.id, MediaRef::Playlist("pl.abc".to_string()));
             assert_eq!(p.title, "Mock Playlist");
         }
         _ => panic!("Expected Playlist"),
@@ -517,12 +521,12 @@ async fn test_apple_collection_and_library() {
 
     // 1. Collection items
     let page = service
-        .get_collection_items("album:456", 20, None)
+        .get_collection_items(&MediaRef::Album("456".to_string()), 20, None)
         .await
         .expect("collection items");
     assert_eq!(page.items.len(), 2);
-    assert_eq!(page.items[0].id, "song:101");
-    assert_eq!(page.items[1].id, "song:102");
+    assert_eq!(page.items[0].id, MediaRef::Song("101".to_string()));
+    assert_eq!(page.items[1].id, MediaRef::Song("102".to_string()));
 
     // 2. Library tracks
     let lib_tracks = service
@@ -532,7 +536,7 @@ async fn test_apple_collection_and_library() {
     match lib_tracks {
         LibraryPageWire::Tracks(page) => {
             assert_eq!(page.items.len(), 1);
-            assert_eq!(page.items[0].id, "song:i.123");
+            assert_eq!(page.items[0].id, MediaRef::Song("i.123".to_string()));
         }
         _ => panic!("Expected LibraryPageWire::Tracks"),
     }
@@ -545,7 +549,7 @@ async fn test_apple_collection_and_library() {
     match lib_albums {
         LibraryPageWire::Albums(page) => {
             assert_eq!(page.items.len(), 1);
-            assert_eq!(page.items[0].id, "album:l.456");
+            assert_eq!(page.items[0].id, MediaRef::Album("l.456".to_string()));
         }
         _ => panic!("Expected LibraryPageWire::Albums"),
     }
@@ -558,7 +562,7 @@ async fn test_apple_collection_and_library() {
     match lib_playlists {
         LibraryPageWire::Playlists(page) => {
             assert_eq!(page.items.len(), 1);
-            assert_eq!(page.items[0].id, "playlist:p.789");
+            assert_eq!(page.items[0].id, MediaRef::Playlist("p.789".to_string()));
         }
         _ => panic!("Expected LibraryPageWire::Playlists"),
     }
@@ -598,14 +602,17 @@ fn test_apple_json_normalization_fixtures() {
     });
 
     let track = parse_apple_track(&track_json).expect("parse track");
-    assert_eq!(track.id, "song:1440857781");
+    assert_eq!(track.id, MediaRef::Song("1440857781".to_string()));
     assert_eq!(track.title, "Get Lucky");
     assert_eq!(track.artists.len(), 1);
-    assert_eq!(track.artists[0].id.as_deref(), Some("artist:5468295"));
+    assert_eq!(
+        track.artists[0].id,
+        Some(MediaRef::Artist("5468295".to_string()))
+    );
     assert_eq!(track.artists[0].name, "Daft Punk");
     assert_eq!(
-        track.album.as_ref().and_then(|a| a.id.as_deref()),
-        Some("album:1440857780")
+        track.album.as_ref().and_then(|a| a.id.clone()),
+        Some(MediaRef::Album("1440857780".to_string()))
     );
     assert_eq!(
         track.album.as_ref().map(|a| a.title.as_str()),
@@ -630,7 +637,7 @@ fn test_apple_json_normalization_fixtures() {
     });
 
     let album = parse_apple_album(&album_json).expect("parse album");
-    assert_eq!(album.id, "album:1440857780");
+    assert_eq!(album.id, MediaRef::Album("1440857780".to_string()));
     assert_eq!(album.title, "Random Access Memories");
     assert_eq!(album.track_count, Some(13));
     assert_eq!(album.release_date.as_deref(), Some("2013-05-17"));
@@ -645,7 +652,7 @@ fn test_apple_json_normalization_fixtures() {
     });
 
     let artist = parse_apple_artist(&artist_json).expect("parse artist");
-    assert_eq!(artist.id, "artist:5468295");
+    assert_eq!(artist.id, MediaRef::Artist("5468295".to_string()));
     assert_eq!(artist.name, "Daft Punk");
 
     let playlist_json = serde_json::json!({
@@ -659,7 +666,7 @@ fn test_apple_json_normalization_fixtures() {
     });
 
     let playlist = parse_apple_playlist(&playlist_json).expect("parse playlist");
-    assert_eq!(playlist.id, "playlist:pl.u-xyz");
+    assert_eq!(playlist.id, MediaRef::Playlist("pl.u-xyz".to_string()));
     assert_eq!(playlist.title, "Summer Vibes");
     assert_eq!(playlist.curator.as_deref(), Some("Apple Music Electronic"));
     assert_eq!(playlist.track_count, Some(42));
@@ -690,24 +697,27 @@ async fn test_apple_pages_navigation_manifest() {
     let service = AppleService::with_session(mock);
 
     let nav = service.get_navigation();
-    assert_eq!(nav.default_route, "home");
+    assert_eq!(nav.default_route, PageRoute::Home);
     assert_eq!(nav.groups.len(), 3);
 
     // Discover group
     assert_eq!(nav.groups[0].id, "discover");
     assert_eq!(nav.groups[0].entries.len(), 3);
-    assert_eq!(nav.groups[0].entries[0].route, "home");
-    assert_eq!(nav.groups[0].entries[1].route, "new");
-    assert_eq!(nav.groups[0].entries[2].route, "radio");
+    assert_eq!(nav.groups[0].entries[0].route, PageRoute::Home);
+    assert_eq!(nav.groups[0].entries[1].route, PageRoute::New);
+    assert_eq!(nav.groups[0].entries[2].route, PageRoute::Radio);
 
     // Library group
     assert_eq!(nav.groups[1].id, "library");
     assert_eq!(nav.groups[1].entries.len(), 5);
-    assert_eq!(nav.groups[1].entries[0].route, "library:recently-added");
-    assert_eq!(nav.groups[1].entries[1].route, "library:artists");
-    assert_eq!(nav.groups[1].entries[2].route, "library:albums");
-    assert_eq!(nav.groups[1].entries[3].route, "library:songs");
-    assert_eq!(nav.groups[1].entries[4].route, "library:playlists");
+    assert_eq!(
+        nav.groups[1].entries[0].route,
+        PageRoute::LibraryRecentlyAdded
+    );
+    assert_eq!(nav.groups[1].entries[1].route, PageRoute::LibraryArtists);
+    assert_eq!(nav.groups[1].entries[2].route, PageRoute::LibraryAlbums);
+    assert_eq!(nav.groups[1].entries[3].route, PageRoute::LibrarySongs);
+    assert_eq!(nav.groups[1].entries[4].route, PageRoute::LibraryPlaylists);
 
     // Replay group
     assert_eq!(nav.groups[2].id, "replay");
@@ -791,7 +801,7 @@ async fn test_apple_pages_home_generation() {
     let api = Arc::new(OfficialAppleMusicApi::with_base_url(token_provider, url));
     let service = AppleService::with_session_and_api(mock, api);
 
-    let page = service.get_page("home").await.expect("home page");
+    let page = service.get_page(&PageRoute::Home).await.expect("home page");
     assert_eq!(page.id, "home");
     assert_eq!(page.title, "Listen Now");
     assert_eq!(page.sections.len(), 3);
@@ -802,11 +812,11 @@ async fn test_apple_pages_home_generation() {
     assert_eq!(page.sections[0].items[0].id, "pl.fav");
     assert_eq!(
         page.sections[0].items[0].entity,
-        Some(malus_ipc::wire::MediaRefWire::parse("playlist:pl.fav").unwrap())
+        Some(MediaRef::Playlist("pl.fav".to_string()))
     );
     assert_eq!(
-        page.sections[0].items[0].open_route.as_deref(),
-        Some("playlist:pl.fav")
+        page.sections[0].items[0].open_route,
+        Some(PageRoute::Playlist("pl.fav".to_string()))
     );
 
     // Section 2: Recently Played
@@ -815,7 +825,7 @@ async fn test_apple_pages_home_generation() {
     assert_eq!(page.sections[1].items[0].id, "1440857781");
     assert_eq!(
         page.sections[1].items[0].entity,
-        Some(malus_ipc::wire::MediaRefWire::parse("song:1440857781").unwrap())
+        Some(MediaRef::Song("1440857781".to_string()))
     );
 
     // Section 3: Heavy Rotation
@@ -824,7 +834,7 @@ async fn test_apple_pages_home_generation() {
     assert_eq!(page.sections[2].items[0].id, "1440857780");
     assert_eq!(
         page.sections[2].items[0].entity,
-        Some(malus_ipc::wire::MediaRefWire::parse("album:1440857780").unwrap())
+        Some(MediaRef::Album("1440857780".to_string()))
     );
 
     // Page continuation
@@ -910,7 +920,7 @@ async fn test_apple_pages_detail_generation() {
 
     // Album detail
     let album_page = service
-        .get_page("album:1440857780")
+        .get_page(&PageRoute::Album("1440857780".to_string()))
         .await
         .expect("album page");
     assert_eq!(album_page.id, "album:1440857780");
@@ -921,12 +931,12 @@ async fn test_apple_pages_detail_generation() {
     assert_eq!(album_page.sections[0].items[0].id, "1440857781");
     assert_eq!(
         album_page.sections[0].items[0].entity,
-        Some(malus_ipc::wire::MediaRefWire::parse("song:1440857781").unwrap())
+        Some(MediaRef::Song("1440857781".to_string()))
     );
 
     // Playlist detail
     let playlist_page = service
-        .get_page("playlist:pl.123")
+        .get_page(&PageRoute::Playlist("pl.123".to_string()))
         .await
         .expect("playlist page");
     assert_eq!(playlist_page.id, "playlist:pl.123");
@@ -937,6 +947,6 @@ async fn test_apple_pages_detail_generation() {
     assert_eq!(playlist_page.sections[0].items[0].id, "1440857781");
     assert_eq!(
         playlist_page.sections[0].items[0].entity,
-        Some(malus_ipc::wire::MediaRefWire::parse("song:1440857781").unwrap())
+        Some(MediaRef::Song("1440857781".to_string()))
     );
 }

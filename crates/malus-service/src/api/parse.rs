@@ -1,33 +1,28 @@
 //! Canonical response parsers and normalizers for Apple Music API data.
 
-use malus_ipc::wire::{
-    AlbumRefWire, AlbumWire, ArtistRefWire, ArtistWire, ArtworkWire, PlaylistWire, TrackWire,
-};
+use malus_model::{Album, AlbumRef, Artist, ArtistRef, Artwork, MediaRef, Playlist, Track};
 use serde_json::Value;
 
-/// Parse Apple artwork JSON into normalized ArtworkWire.
+/// Parse Apple artwork JSON into normalized Artwork.
 ///
 /// Expands `{w}x{h}` placeholders to `600x600`.
-pub fn parse_apple_artwork(art: &Value) -> Option<ArtworkWire> {
+pub fn parse_apple_artwork(art: &Value) -> Option<Artwork> {
     let raw_url = art["url"].as_str()?;
     let width = art["width"].as_u64().map(|w| w as u32);
     let height = art["height"].as_u64().map(|h| h as u32);
     let url = raw_url.replace("{w}", "600").replace("{h}", "600");
-    Some(ArtworkWire { url, width, height })
+    Some(Artwork { url, width, height })
 }
 
-/// Parse Apple track (song) JSON into normalized TrackWire with `song:{id}` MediaRef.
-pub fn parse_apple_track(item: &Value) -> Option<TrackWire> {
+/// Parse Apple track (song) JSON into normalized Track with `song:{id}` MediaRef.
+pub fn parse_apple_track(item: &Value) -> Option<Track> {
     let attrs = item.get("attributes").unwrap_or(item);
     let id_str = item["id"]
         .as_str()
         .or_else(|| attrs["playParams"]["id"].as_str())?;
 
-    let media_id = if id_str.starts_with("song:") {
-        id_str.to_string()
-    } else {
-        format!("song:{id_str}")
-    };
+    let raw_id = id_str.strip_prefix("song:").unwrap_or(id_str);
+    let media_ref = MediaRef::Song(raw_id.to_string());
 
     let title = attrs["name"]
         .as_str()
@@ -43,8 +38,8 @@ pub fn parse_apple_track(item: &Value) -> Option<TrackWire> {
                 .or_else(|| a["name"].as_str())
                 .unwrap_or("");
             if !name.is_empty() {
-                let id = a["id"].as_str().map(|i| format!("artist:{i}"));
-                artists.push(ArtistRefWire::new(id, name));
+                let id = a["id"].as_str().map(|i| MediaRef::Artist(i.to_string()));
+                artists.push(ArtistRef::new(id, name));
             }
         }
     }
@@ -54,7 +49,7 @@ pub fn parse_apple_track(item: &Value) -> Option<TrackWire> {
             .or_else(|| item["artist"].as_str())
         && !name.is_empty()
     {
-        artists.push(ArtistRefWire::named(name));
+        artists.push(ArtistRef::named(name));
     }
 
     let album = if let Some(alb_arr) = item["relationships"]["albums"]["data"].as_array()
@@ -64,14 +59,16 @@ pub fn parse_apple_track(item: &Value) -> Option<TrackWire> {
             .as_str()
             .or_else(|| attrs["albumName"].as_str())
             .unwrap_or("");
-        let id = first_alb["id"].as_str().map(|i| format!("album:{i}"));
-        Some(AlbumRefWire::new(id, title))
+        let id = first_alb["id"]
+            .as_str()
+            .map(|i| MediaRef::Album(i.to_string()));
+        Some(AlbumRef::new(id, title))
     } else if let Some(title) = attrs["albumName"]
         .as_str()
         .or_else(|| item["album"].as_str())
     {
         if !title.is_empty() {
-            Some(AlbumRefWire::titled(title))
+            Some(AlbumRef::titled(title))
         } else {
             None
         }
@@ -97,8 +94,8 @@ pub fn parse_apple_track(item: &Value) -> Option<TrackWire> {
         .or_else(|| item["url"].as_str())
         .map(str::to_string);
 
-    Some(TrackWire {
-        id: media_id,
+    Some(Track {
+        id: media_ref,
         title,
         artists,
         album,
@@ -111,15 +108,12 @@ pub fn parse_apple_track(item: &Value) -> Option<TrackWire> {
     })
 }
 
-/// Parse Apple album JSON into normalized AlbumWire with `album:{id}` MediaRef.
-pub fn parse_apple_album(item: &Value) -> Option<AlbumWire> {
+/// Parse Apple album JSON into normalized Album with `album:{id}` MediaRef.
+pub fn parse_apple_album(item: &Value) -> Option<Album> {
     let attrs = item.get("attributes").unwrap_or(item);
     let id_str = item["id"].as_str()?;
-    let media_id = if id_str.starts_with("album:") {
-        id_str.to_string()
-    } else {
-        format!("album:{id_str}")
-    };
+    let raw_id = id_str.strip_prefix("album:").unwrap_or(id_str);
+    let media_ref = MediaRef::Album(raw_id.to_string());
 
     let title = attrs["name"]
         .as_str()
@@ -134,8 +128,8 @@ pub fn parse_apple_album(item: &Value) -> Option<AlbumWire> {
                 .or_else(|| a["name"].as_str())
                 .unwrap_or("");
             if !name.is_empty() {
-                let id = a["id"].as_str().map(|i| format!("artist:{i}"));
-                artists.push(ArtistRefWire::new(id, name));
+                let id = a["id"].as_str().map(|i| MediaRef::Artist(i.to_string()));
+                artists.push(ArtistRef::new(id, name));
             }
         }
     }
@@ -143,15 +137,15 @@ pub fn parse_apple_album(item: &Value) -> Option<AlbumWire> {
         && let Some(name) = attrs["artistName"].as_str()
         && !name.is_empty()
     {
-        artists.push(ArtistRefWire::named(name));
+        artists.push(ArtistRef::named(name));
     }
 
     let track_count = attrs["trackCount"].as_u64().map(|n| n as u32);
     let release_date = attrs["releaseDate"].as_str().map(str::to_string);
     let artwork = attrs.get("artwork").and_then(parse_apple_artwork);
 
-    Some(AlbumWire {
-        id: media_id,
+    Some(Album {
+        id: media_ref,
         title,
         artists,
         release_date,
@@ -160,15 +154,12 @@ pub fn parse_apple_album(item: &Value) -> Option<AlbumWire> {
     })
 }
 
-/// Parse Apple artist JSON into normalized ArtistWire with `artist:{id}` MediaRef.
-pub fn parse_apple_artist(item: &Value) -> Option<ArtistWire> {
+/// Parse Apple artist JSON into normalized Artist with `artist:{id}` MediaRef.
+pub fn parse_apple_artist(item: &Value) -> Option<Artist> {
     let attrs = item.get("attributes").unwrap_or(item);
     let id_str = item["id"].as_str()?;
-    let media_id = if id_str.starts_with("artist:") {
-        id_str.to_string()
-    } else {
-        format!("artist:{id_str}")
-    };
+    let raw_id = id_str.strip_prefix("artist:").unwrap_or(id_str);
+    let media_ref = MediaRef::Artist(raw_id.to_string());
 
     let name = attrs["name"]
         .as_str()
@@ -176,22 +167,19 @@ pub fn parse_apple_artist(item: &Value) -> Option<ArtistWire> {
         .to_string();
     let artwork = attrs.get("artwork").and_then(parse_apple_artwork);
 
-    Some(ArtistWire {
-        id: media_id,
+    Some(Artist {
+        id: media_ref,
         name,
         artwork,
     })
 }
 
-/// Parse Apple playlist JSON into normalized PlaylistWire with `playlist:{id}` MediaRef.
-pub fn parse_apple_playlist(item: &Value) -> Option<PlaylistWire> {
+/// Parse Apple playlist JSON into normalized Playlist with `playlist:{id}` MediaRef.
+pub fn parse_apple_playlist(item: &Value) -> Option<Playlist> {
     let attrs = item.get("attributes").unwrap_or(item);
     let id_str = item["id"].as_str()?;
-    let media_id = if id_str.starts_with("playlist:") {
-        id_str.to_string()
-    } else {
-        format!("playlist:{id_str}")
-    };
+    let raw_id = id_str.strip_prefix("playlist:").unwrap_or(id_str);
+    let media_ref = MediaRef::Playlist(raw_id.to_string());
 
     let title = attrs["name"]
         .as_str()
@@ -205,8 +193,8 @@ pub fn parse_apple_playlist(item: &Value) -> Option<PlaylistWire> {
     let track_count = attrs["trackCount"].as_u64().map(|n| n as u32);
     let artwork = attrs.get("artwork").and_then(parse_apple_artwork);
 
-    Some(PlaylistWire {
-        id: media_id,
+    Some(Playlist {
+        id: media_ref,
         title,
         curator,
         description,

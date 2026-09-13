@@ -8,10 +8,8 @@
 //! - Event streaming delivers live updates to subscribed clients.
 
 use malus_client::MalusClient;
-use malus_ipc::{
-    PlaybackStateWire,
-    client::{ClientRequest, ClientResponse},
-};
+use malus_ipc::client::{ClientRequest, ClientResponse};
+use malus_model::{MediaRef, PageRoute, PlaybackState};
 use malusd::{Engine, Server};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::time::sleep;
@@ -71,7 +69,7 @@ async fn test_daemon_client_ipc_ping_and_status() {
 
     // 2. Initial status
     let status = client.get_status().await.unwrap();
-    assert_eq!(status.state, PlaybackStateWire::Stopped);
+    assert_eq!(status.state, PlaybackState::Stopped);
     assert_eq!(status.volume, 100);
 }
 
@@ -83,7 +81,7 @@ async fn test_daemon_navigation_and_pages_over_ipc() {
     // 1. GetNavigation
     let resp = client.send(&ClientRequest::GetNavigation).await.unwrap();
     if let ClientResponse::Navigation(nav) = resp {
-        assert_eq!(nav.default_route, "home");
+        assert_eq!(nav.default_route, PageRoute::Home);
         assert_eq!(nav.groups.len(), 3);
         assert_eq!(nav.groups[0].id, "discover");
         assert_eq!(nav.groups[1].id, "library");
@@ -93,7 +91,7 @@ async fn test_daemon_navigation_and_pages_over_ipc() {
     }
 
     // 2. GetPage with client helper
-    let page = client.get_page("home").await.unwrap();
+    let page = client.get_page(&PageRoute::Home).await.unwrap();
     assert_eq!(page.id, "home");
     assert_eq!(page.title, "Listen Now");
 }
@@ -105,8 +103,8 @@ async fn test_daemon_playback_control_lifecycle() {
 
     // 1. Play track
     let resp = client
-        .send(&ClientRequest::PlayTrack {
-            media_id: "song:617154362".to_string(),
+        .send(&ClientRequest::PlayMedia {
+            reference: MediaRef::parse("song:617154362").unwrap(),
         })
         .await
         .unwrap();

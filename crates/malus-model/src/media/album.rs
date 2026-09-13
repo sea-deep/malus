@@ -3,9 +3,12 @@
 use super::{artist::ArtistRef, artwork::Artwork};
 use crate::media_ref::MediaRef;
 
+use serde::{Deserialize, Serialize};
+
 /// A lightweight reference to an album without embedding nested tracks.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AlbumRef {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<MediaRef>,
     pub title: String,
 }
@@ -29,13 +32,17 @@ impl AlbumRef {
 /// An album metadata resource.
 ///
 /// Track listings are fetched separately through paginated collection requests.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Album {
     pub id: MediaRef,
     pub title: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artists: Vec<ArtistRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub release_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub track_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub artwork: Option<Artwork>,
 }
 

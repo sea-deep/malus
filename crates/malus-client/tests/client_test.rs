@@ -3,8 +3,8 @@ use malus_ipc::{
     DEFAULT_MAX_PAYLOAD_BYTES,
     client::{ClientEvent, ClientRequest, ClientResponse},
     codec::{decode_message, read_frame, write_message},
-    wire::{PlaybackStateWire, PlayerStatusWire, RepeatModeWire},
 };
+use malus_model::{PlaybackState, PlayerStatus, RepeatMode};
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::tempdir;
@@ -28,15 +28,15 @@ async fn test_client_ping_and_get_status() {
                     let req: ClientRequest = decode_message(&frame).unwrap();
                     let resp = match req {
                         ClientRequest::Ping => ClientResponse::Pong,
-                        ClientRequest::GetStatus => ClientResponse::Status(PlayerStatusWire {
-                            state: PlaybackStateWire::Paused,
+                        ClientRequest::GetStatus => ClientResponse::Status(PlayerStatus {
+                            state: PlaybackState::Paused,
                             current_track: None,
                             position_ms: 12000,
                             duration_ms: 60000,
                             volume: 75,
                             muted: false,
                             shuffle: false,
-                            repeat: RepeatModeWire::Off,
+                            repeat: RepeatMode::Off,
                         }),
                         _ => ClientResponse::Ok,
                     };
@@ -50,7 +50,7 @@ async fn test_client_ping_and_get_status() {
     client.ping().await.unwrap();
 
     let status = client.get_status().await.unwrap();
-    assert_eq!(status.state, PlaybackStateWire::Paused);
+    assert_eq!(status.state, PlaybackState::Paused);
     assert_eq!(status.position_ms, 12000);
     assert_eq!(status.volume, 75);
 
@@ -280,15 +280,15 @@ async fn test_event_subscription_and_reconnect() {
     assert_eq!(*status_rx.borrow(), ConnectionStatus::Connected);
 
     // Send an event from daemon
-    let status_wire = PlayerStatusWire {
-        state: PlaybackStateWire::Playing,
+    let status_wire = PlayerStatus {
+        state: PlaybackState::Playing,
         current_track: None,
         position_ms: 5000,
         duration_ms: 180000,
         volume: 100,
         muted: false,
         shuffle: false,
-        repeat: RepeatModeWire::Off,
+        repeat: RepeatMode::Off,
     };
     event_sender_tx
         .send(ClientEvent::StatusChanged(status_wire.clone()))

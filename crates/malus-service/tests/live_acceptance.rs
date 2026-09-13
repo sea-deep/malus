@@ -6,6 +6,7 @@
 use std::{sync::Arc, time::Duration};
 
 use malus_ipc::wire::{CatalogItemWire, LibraryKindWire, LibraryPageWire, SearchKindWire};
+use malus_model::PlaybackState;
 use malus_service::{
     AppleCredentials, AppleService, AppleWebSession, OfficialAppleMusicApi,
     ProductionAppleWebSession, ProfileTokenProvider,
@@ -175,7 +176,7 @@ async fn test_live_apple_provider_acceptance() {
             "  Current status: state={:?}, pos={:?}, dur={:?}",
             status.state, status.position_ms, status.duration_ms
         );
-        if status.state == malus_ipc::PlaybackStateWire::Playing {
+        if status.state == PlaybackState::Playing {
             playing = true;
             break;
         }
@@ -188,7 +189,7 @@ async fn test_live_apple_provider_acceptance() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     let status = provider.get_status().await.expect("get status");
     println!("  Status after pause: state={:?}", status.state);
-    assert_eq!(status.state, malus_ipc::PlaybackStateWire::Paused);
+    assert_eq!(status.state, PlaybackState::Paused);
 
     // Resume
     println!("  Resuming...");
@@ -196,7 +197,7 @@ async fn test_live_apple_provider_acceptance() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     let status = provider.get_status().await.expect("get status");
     println!("  Status after resume: state={:?}", status.state);
-    assert_eq!(status.state, malus_ipc::PlaybackStateWire::Playing);
+    assert_eq!(status.state, PlaybackState::Playing);
 
     // Seek
     println!("  Seeking to 15s...");
@@ -211,7 +212,7 @@ async fn test_live_apple_provider_acceptance() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     let status = provider.get_status().await.expect("get status");
     println!("  Status after stop: state={:?}", status.state);
-    assert_eq!(status.state, malus_ipc::PlaybackStateWire::Stopped);
+    assert_eq!(status.state, PlaybackState::Stopped);
 
     // Shutdown session
     let _ = session.shutdown().await;

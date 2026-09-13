@@ -3,18 +3,28 @@
 use super::{album::AlbumRef, artist::ArtistRef, artwork::Artwork};
 use crate::media_ref::MediaRef;
 
+use serde::{Deserialize, Serialize};
+
 /// An immutable identity and metadata snapshot of an audio track.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Track {
     pub id: MediaRef,
     pub title: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artists: Vec<ArtistRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub album: Option<AlbumRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub track_number: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub disc_number: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub explicit: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub artwork: Option<Artwork>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub uri: Option<String>,
 }
 
@@ -62,6 +72,10 @@ impl Track {
                 .collect::<Vec<_>>()
                 .join(", ")
         }
+    }
+
+    pub fn album_title(&self) -> Option<&str> {
+        self.album.as_ref().map(|a| a.title.as_str())
     }
 
     pub fn with_album(mut self, album: impl Into<String>) -> Self {

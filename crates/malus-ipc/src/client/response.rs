@@ -2,8 +2,7 @@
 
 use crate::wire::{
     ActionResultWire, AuthStatusWire, CatalogItemWire, LibraryPageWire, NavigationWire,
-    PageContinuationWire, PageWire, PagedListWire, PlayerStatusWire, QueueWire, SearchResultsWire,
-    TrackWire,
+    PageContinuationWire, PageWire, PagedListWire, PlayerStatus, Queue, SearchResultsWire, Track,
 };
 use serde::{Deserialize, Serialize};
 
@@ -11,12 +10,12 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", content = "data")]
 pub enum ClientResponse {
     Pong,
-    Status(PlayerStatusWire),
+    Status(PlayerStatus),
     SearchResults(SearchResultsWire),
     CatalogItem(CatalogItemWire),
-    CollectionItems(PagedListWire<TrackWire>),
+    CollectionItems(PagedListWire<Track>),
     LibraryPage(LibraryPageWire),
-    Queue(QueueWire),
+    Queue(Queue),
     Navigation(NavigationWire),
     Page(PageWire),
     PageContinued(PageContinuationWire),

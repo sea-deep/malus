@@ -1,7 +1,8 @@
 //! Client RPC request types sent by CLI / TUI / GUI frontends to `malusd` over IPC.
 
 use crate::wire::{
-    LibraryKindWire, PageActionWire, PageCursorWire, RepeatModeWire, SearchKindWire, TrackWire,
+    LibraryKindWire, MediaRef, PageActionWire, PageCursorWire, PageRoute, RepeatMode,
+    SearchKindWire,
 };
 use serde::{Deserialize, Serialize};
 
@@ -11,8 +12,8 @@ pub enum ClientRequest {
     Ping,
     GetStatus,
     Play,
-    PlayTrack {
-        media_id: String,
+    PlayMedia {
+        reference: MediaRef,
     },
     Pause,
     TogglePlay,
@@ -29,7 +30,7 @@ pub enum ClientRequest {
         shuffle: bool,
     },
     SetRepeat {
-        repeat: RepeatModeWire,
+        repeat: RepeatMode,
     },
     Search {
         query: String,
@@ -41,10 +42,10 @@ pub enum ClientRequest {
         cursor: Option<String>,
     },
     GetCatalogItem {
-        media_id: String,
+        reference: MediaRef,
     },
     GetCollectionItems {
-        media_id: String,
+        reference: MediaRef,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         limit: Option<usize>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -57,20 +58,16 @@ pub enum ClientRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cursor: Option<String>,
     },
-    Enqueue {
-        track: TrackWire,
-    },
     GetQueue,
-    ClearQueue,
     GetAuthStatus,
     AuthBegin,
     AuthLogout,
     GetNavigation,
     GetPage {
-        route: String,
+        route: PageRoute,
     },
     ContinuePage {
-        route: String,
+        route: PageRoute,
         cursor: PageCursorWire,
     },
     InvokeAction {

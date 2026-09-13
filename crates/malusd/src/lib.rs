@@ -30,7 +30,7 @@ mod tests {
         // Status
         let status = engine.handle_request(ClientRequest::GetStatus).await;
         if let ClientResponse::Status(s) = status {
-            assert_eq!(s.state, malus_ipc::PlaybackStateWire::Stopped);
+            assert_eq!(s.state, malus_model::PlaybackState::Stopped);
         } else {
             panic!("Expected Status response");
         }

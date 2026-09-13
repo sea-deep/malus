@@ -3,16 +3,22 @@
 use super::artwork::Artwork;
 use crate::media_ref::MediaRef;
 
+use serde::{Deserialize, Serialize};
+
 /// A playlist metadata resource.
 ///
 /// Track listings are fetched separately through paginated collection requests.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Playlist {
     pub id: MediaRef,
     pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub curator: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub track_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub artwork: Option<Artwork>,
 }
 

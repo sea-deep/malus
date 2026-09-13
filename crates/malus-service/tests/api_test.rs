@@ -9,6 +9,7 @@ use std::{
 };
 
 use malus_ipc::wire::{CatalogItemWire, LibraryKindWire, LibraryPageWire, SearchKindWire};
+use malus_model::MediaRef;
 use malus_service::{
     AppleApiError, AppleCredentials, OfficialAppleMusicApi, StaticTokenProvider, parse_apple_album,
     parse_apple_artist, parse_apple_artwork, parse_apple_playlist, parse_apple_track,
@@ -245,7 +246,7 @@ async fn test_request_headers_and_path_construction() {
     // Verify parsed search result
     let tracks = results.tracks.expect("tracks should be present");
     assert_eq!(tracks.items.len(), 1);
-    assert_eq!(tracks.items[0].id, "song:12345");
+    assert_eq!(tracks.items[0].id, MediaRef::Song("12345".to_string()));
     assert_eq!(tracks.items[0].title, "Instant Crush");
     assert_eq!(tracks.items[0].artists[0].name, "Daft Punk");
 }
@@ -297,13 +298,13 @@ async fn test_auth_retry_on_401_success() {
     ));
 
     let item = api
-        .get_catalog_item("album:1440857780")
+        .get_catalog_item(&MediaRef::Album("1440857780".to_string()))
         .await
         .expect("should succeed after 401 refresh");
 
     match item {
         CatalogItemWire::Album(alb) => {
-            assert_eq!(alb.id, "album:1440857780");
+            assert_eq!(alb.id, MediaRef::Album("1440857780".to_string()));
             assert_eq!(alb.title, "Random Access Memories");
         }
         _ => panic!("Expected album"),
@@ -341,7 +342,10 @@ async fn test_persistent_401_returns_auth_required() {
     let token_provider = Arc::new(StaticTokenProvider::new(creds));
     let api = OfficialAppleMusicApi::with_base_url(token_provider, server.url());
 
-    let err = api.get_catalog_item("song:123").await.unwrap_err();
+    let err = api
+        .get_catalog_item(&MediaRef::Song("123".to_string()))
+        .await
+        .unwrap_err();
 
     match err {
         AppleApiError::AuthRequired(_) => {}
@@ -368,7 +372,10 @@ async fn test_error_status_mappings() {
             ))),
             server.url(),
         );
-        let err = api.get_catalog_item("song:1").await.unwrap_err();
+        let err = api
+            .get_catalog_item(&MediaRef::Song("1".to_string()))
+            .await
+            .unwrap_err();
         assert!(matches!(err, AppleApiError::Forbidden(_)));
     }
 
@@ -386,7 +393,10 @@ async fn test_error_status_mappings() {
             ))),
             server.url(),
         );
-        let err = api.get_catalog_item("song:nonexistent").await.unwrap_err();
+        let err = api
+            .get_catalog_item(&MediaRef::Song("nonexistent".to_string()))
+            .await
+            .unwrap_err();
         assert!(matches!(err, AppleApiError::NotFound(_)));
     }
 
@@ -404,7 +414,10 @@ async fn test_error_status_mappings() {
             ))),
             server.url(),
         );
-        let err = api.get_catalog_item("song:1").await.unwrap_err();
+        let err = api
+            .get_catalog_item(&MediaRef::Song("1".to_string()))
+            .await
+            .unwrap_err();
         match err {
             AppleApiError::RateLimited { retry_after } => {
                 assert_eq!(retry_after, Some(Duration::from_secs(30)));
@@ -427,7 +440,10 @@ async fn test_error_status_mappings() {
             ))),
             server.url(),
         );
-        let err = api.get_catalog_item("song:1").await.unwrap_err();
+        let err = api
+            .get_catalog_item(&MediaRef::Song("1".to_string()))
+            .await
+            .unwrap_err();
         match err {
             AppleApiError::Server { status, .. } => assert_eq!(status, 500),
             other => panic!("Expected Server error, got: {other:?}"),
@@ -448,7 +464,10 @@ async fn test_error_status_mappings() {
             ))),
             server.url(),
         );
-        let err = api.get_catalog_item("song:1").await.unwrap_err();
+        let err = api
+            .get_catalog_item(&MediaRef::Song("1".to_string()))
+            .await
+            .unwrap_err();
         assert!(matches!(err, AppleApiError::Parse(_)));
     }
 }
@@ -495,14 +514,14 @@ async fn test_collection_and_library_calls() {
         );
 
         let page = api
-            .get_collection_items("album:1440857780", 2, None)
+            .get_collection_items(&MediaRef::Album("1440857780".to_string()), 2, None)
             .await
             .expect("collection items");
 
         assert_eq!(page.items.len(), 2);
-        assert_eq!(page.items[0].id, "song:1001");
+        assert_eq!(page.items[0].id, MediaRef::Song("1001".to_string()));
         assert_eq!(page.items[0].title, "Give Life Back to Music");
-        assert_eq!(page.items[1].id, "song:1002");
+        assert_eq!(page.items[1].id, MediaRef::Song("1002".to_string()));
         assert_eq!(
             page.next_cursor.as_deref(),
             Some("/v1/catalog/us/albums/1440857780/tracks?offset=2")
@@ -545,7 +564,7 @@ async fn test_collection_and_library_calls() {
         match page {
             LibraryPageWire::Tracks(p) => {
                 assert_eq!(p.items.len(), 1);
-                assert_eq!(p.items[0].id, "song:i.123456");
+                assert_eq!(p.items[0].id, MediaRef::Song("i.123456".to_string()));
                 assert_eq!(p.items[0].title, "My Library Song");
             }
             _ => panic!("Expected Tracks"),
@@ -584,7 +603,7 @@ fn test_canonical_parsers() {
         }
     });
     let track = parse_apple_track(&track_json).expect("track");
-    assert_eq!(track.id, "song:1440857781");
+    assert_eq!(track.id, MediaRef::Song("1440857781".to_string()));
     assert_eq!(track.title, "Get Lucky");
     assert_eq!(track.duration_ms, Some(369626));
     assert_eq!(track.explicit, Some(true));
@@ -600,7 +619,7 @@ fn test_canonical_parsers() {
         }
     });
     let album = parse_apple_album(&album_json).expect("album");
-    assert_eq!(album.id, "album:1440857780");
+    assert_eq!(album.id, MediaRef::Album("1440857780".to_string()));
     assert_eq!(album.title, "Random Access Memories");
     assert_eq!(album.track_count, Some(13));
 
@@ -610,7 +629,7 @@ fn test_canonical_parsers() {
         "attributes": { "name": "Daft Punk" }
     });
     let artist = parse_apple_artist(&artist_json).expect("artist");
-    assert_eq!(artist.id, "artist:5468295");
+    assert_eq!(artist.id, MediaRef::Artist("5468295".to_string()));
     assert_eq!(artist.name, "Daft Punk");
 
     let playlist_json = serde_json::json!({
@@ -623,7 +642,7 @@ fn test_canonical_parsers() {
         }
     });
     let playlist = parse_apple_playlist(&playlist_json).expect("playlist");
-    assert_eq!(playlist.id, "playlist:pl.u-1234");
+    assert_eq!(playlist.id, MediaRef::Playlist("pl.u-1234".to_string()));
     assert_eq!(playlist.title, "Electronic Hits");
     assert_eq!(playlist.curator.as_deref(), Some("Apple Music"));
 }

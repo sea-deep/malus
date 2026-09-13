@@ -1,17 +1,19 @@
 //! `malus-model`: Pure domain logic for Malus.
 //!
-//! Free of I/O, tokio, serde, UI frameworks, provider-specific details, or external transports.
+//! Free of I/O, tokio, UI frameworks, provider-specific details, or external transports.
 
 pub mod media;
 pub mod media_ref;
+pub mod page_route;
 pub mod playback;
 pub mod player;
 pub mod queue;
 
 pub use media::{Album, AlbumRef, Artist, ArtistRef, Artwork, Playlist, Track};
 pub use media_ref::{MediaRef, MediaRefError};
+pub use page_route::{PageRoute, ParseRouteError};
 pub use playback::{PlaybackState, RepeatMode};
-pub use player::Player;
+pub use player::PlayerStatus;
 pub use queue::Queue;
 
 #[cfg(test)]
@@ -91,42 +93,29 @@ mod tests {
     }
 
     #[test]
-    fn test_queue_lifecycle() {
-        let mut q = Queue::new();
-        assert!(q.is_empty());
-        q.enqueue(Track::new(
-            MediaRef::parse("song:1").unwrap(),
-            "Song 1",
-            "Artist",
-        ));
-        q.enqueue(Track::new(
-            MediaRef::parse("song:2").unwrap(),
-            "Song 2",
-            "Artist",
-        ));
-        q.enqueue(Track::new(
-            MediaRef::parse("song:3").unwrap(),
-            "Song 3",
-            "Artist",
-        ));
-        assert_eq!(q.len(), 3);
+    fn test_queue_snapshot_and_serde() {
+        let q = Queue::with_items(
+            vec![
+                Track::new(MediaRef::parse("song:1").unwrap(), "Song 1", "Artist"),
+                Track::new(MediaRef::parse("song:2").unwrap(), "Song 2", "Artist"),
+            ],
+            Some(0),
+        );
+        assert_eq!(q.len(), 2);
         assert_eq!(q.current_index(), Some(0));
+        assert_eq!(
+            q.current_track().map(|t| t.id.format()),
+            Some("song:1".to_string())
+        );
 
-        let next = q.next();
-        assert_eq!(next.map(|t| t.id.format()), Some("song:2".to_string()));
-        assert_eq!(q.current_index(), Some(1));
-
-        let prev = q.previous();
-        assert_eq!(prev.map(|t| t.id.format()), Some("song:1".to_string()));
-        assert_eq!(q.current_index(), Some(0));
-
-        q.move_item(2, 0);
-        assert_eq!(q.items()[0].id.format(), "song:3");
+        let json = serde_json::to_string(&q).unwrap();
+        let decoded: Queue = serde_json::from_str(&json).unwrap();
+        assert_eq!(q, decoded);
     }
 
     #[test]
     fn test_player_volume_clamping() {
-        let mut p = Player::new();
+        let mut p = PlayerStatus::new();
         p.set_volume(150);
         assert_eq!(p.volume, 100);
         p.set_volume(45);

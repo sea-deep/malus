@@ -11,6 +11,10 @@ pub use client::{ConnectionStatus, MalusClient};
 pub use error::ClientError;
 pub use socket::default_socket_path;
 
-// Re-export protocol types for convenience
+// Re-export protocol and model types for convenience
 pub use malus_ipc::client::{ClientEvent, ClientRequest, ClientResponse};
 pub use malus_ipc::wire::*;
+pub use malus_model::{
+    Album, AlbumRef, Artist, ArtistRef, Artwork, MediaRef, PageRoute, PlaybackState, PlayerStatus,
+    Playlist, Queue, RepeatMode, Track,
+};

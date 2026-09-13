@@ -3,9 +3,12 @@
 use super::artwork::Artwork;
 use crate::media_ref::MediaRef;
 
+use serde::{Deserialize, Serialize};
+
 /// A lightweight reference to an artist without circular entity graphs.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ArtistRef {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<MediaRef>,
     pub name: String,
 }
@@ -27,10 +30,11 @@ impl ArtistRef {
 }
 
 /// An artist resource.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Artist {
     pub id: MediaRef,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub artwork: Option<Artwork>,
 }
 

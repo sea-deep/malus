@@ -1189,6 +1189,7 @@ name = "malus-client"
 version = "0.1.0"
 dependencies = [
  "malus-ipc",
+ "malus-model",
  "tempfile",
  "thiserror",
  "tokio",
@@ -1223,6 +1224,10 @@ dependencies = [
 [[package]]
 name = "malus-model"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "malus-service"
@@ -1232,6 +1237,7 @@ dependencies = [
  "base64",
  "directories",
  "malus-ipc",
+ "malus-model",
  "malus-wpe",
  "reqwest",
  "serde",
@@ -1272,6 +1278,7 @@ dependencies = [
  "clap",
  "malus-client",
  "malus-ipc",
+ "malus-model",
  "malus-wpe",
  "serde_json",
  "thiserror",

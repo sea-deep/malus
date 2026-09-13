@@ -12,24 +12,20 @@
 
 pub mod manifest;
 pub mod mapper;
-pub mod routes;
 
 use malus_ipc::wire::{
     PageBadgeWire, PageContinuationWire, PageCursorWire, PageHeaderWire, PageSectionWire, PageWire,
 };
+use malus_model::PageRoute;
 use serde_json::Value;
 
 use crate::{api::OfficialAppleMusicApi, error::AppleError};
-use routes::PageRoute;
 
-/// Resolve a page route or route string to a PageWire response.
+/// Resolve a page route to a PageWire response.
 pub async fn get_apple_page(
     api: &OfficialAppleMusicApi,
-    route_or_id: &str,
+    route: &PageRoute,
 ) -> Result<PageWire, AppleError> {
-    let route = PageRoute::parse(route_or_id)
-        .ok_or_else(|| AppleError::NotFound(format!("Unknown page route: {route_or_id}")))?;
-
     match route {
         PageRoute::Home => build_home(api).await,
         PageRoute::New => build_new(api).await,
@@ -39,22 +35,19 @@ pub async fn get_apple_page(
         PageRoute::LibraryAlbums => build_library_albums(api).await,
         PageRoute::LibraryArtists => build_library_artists(api).await,
         PageRoute::LibraryPlaylists => build_library_playlists(api).await,
-        PageRoute::Album(id) => build_album_detail(api, &id).await,
-        PageRoute::Artist(id) => build_artist_detail(api, &id).await,
-        PageRoute::Playlist(id) => build_playlist_detail(api, &id).await,
-        PageRoute::Replay(year) => build_replay(api, year).await,
+        PageRoute::Album(id) => build_album_detail(api, id).await,
+        PageRoute::Artist(id) => build_artist_detail(api, id).await,
+        PageRoute::Playlist(id) => build_playlist_detail(api, id).await,
+        PageRoute::Replay(year) => build_replay(api, *year).await,
     }
 }
 
 /// Continue pagination for an Apple page.
 pub async fn continue_apple_page(
     api: &OfficialAppleMusicApi,
-    route_or_id: &str,
+    _route: &PageRoute,
     cursor: &PageCursorWire,
 ) -> Result<PageContinuationWire, AppleError> {
-    let _route = PageRoute::parse(route_or_id)
-        .ok_or_else(|| AppleError::NotFound(format!("Unknown page route: {route_or_id}")))?;
-
     let next_url = decode_cursor(&cursor.token)?;
     let resp = api.send_request(&next_url, &[]).await?;
 

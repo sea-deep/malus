@@ -6,10 +6,7 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use malus_ipc::{
-    PlaybackStateWire, PlayerStatusWire, RepeatModeWire,
-    wire::{AlbumRefWire, TrackWire},
-};
+use malus_model::{MediaRef, PlaybackState, PlayerStatus, RepeatMode, Track};
 use malus_wpe::{LaunchMode, ProfileManager, RuntimeOptions, WebPage, WebRuntime};
 use serde_json::Value;
 use tokio::sync::{Mutex, mpsc};
@@ -56,10 +53,10 @@ pub trait AppleWebSession: Send + Sync {
     async fn seek(&self, position_ms: u64) -> Result<(), AppleError>;
 
     /// Query current playback status directly from MusicKit.
-    async fn get_status(&self) -> Result<PlayerStatusWire, AppleError>;
+    async fn get_status(&self) -> Result<PlayerStatus, AppleError>;
 
     /// Register a sink for streaming unsolicited player events.
-    fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlayerStatusWire>);
+    fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlayerStatus>);
 }
 
 struct ActiveSession {
@@ -70,7 +67,7 @@ struct ActiveSession {
 pub struct ProductionAppleWebSession {
     profile_lock: Arc<Mutex<()>>,
     active_session: Arc<Mutex<Option<ActiveSession>>>,
-    event_sink: Arc<Mutex<Option<mpsc::UnboundedSender<PlayerStatusWire>>>>,
+    event_sink: Arc<Mutex<Option<mpsc::UnboundedSender<PlayerStatus>>>>,
 }
 
 impl Default for ProductionAppleWebSession {
@@ -627,7 +624,7 @@ impl ProductionAppleWebSession {
     }
 }
 
-fn parse_player_status(payload: &Value) -> Option<PlayerStatusWire> {
+fn parse_player_status(payload: &Value) -> Option<PlayerStatus> {
     let payload_parsed: Value;
     let payload = if let Some(s) = payload.as_str() {
         if let Ok(p) = serde_json::from_str::<Value>(s) {
@@ -647,22 +644,22 @@ fn parse_player_status(payload: &Value) -> Option<PlayerStatusWire> {
     let muted = payload["muted"].as_bool().unwrap_or(false);
     let shuffle = payload["shuffle"].as_bool().unwrap_or(false);
     let repeat = match payload["repeat"].as_i64().unwrap_or(0) {
-        1 => RepeatModeWire::Track,
-        2 => RepeatModeWire::All,
-        _ => RepeatModeWire::Off,
+        1 => RepeatMode::Track,
+        2 => RepeatMode::All,
+        _ => RepeatMode::Off,
     };
 
     let state = if is_playing {
-        PlaybackStateWire::Playing
+        PlaybackState::Playing
     } else {
         match raw_state {
-            3 => PlaybackStateWire::Paused,
-            0 | 4 | 5 => PlaybackStateWire::Stopped,
+            3 => PlaybackState::Paused,
+            0 | 4 | 5 => PlaybackState::Stopped,
             _ => {
                 if position_ms > 0 {
-                    PlaybackStateWire::Paused
+                    PlaybackState::Paused
                 } else {
-                    PlaybackStateWire::Stopped
+                    PlaybackState::Stopped
                 }
             }
         }
@@ -676,28 +673,25 @@ fn parse_player_status(payload: &Value) -> Option<PlayerStatusWire> {
         if raw_id.is_empty() {
             return None;
         }
-        let media_id = if raw_id.starts_with("song:") {
-            raw_id.to_string()
-        } else {
-            format!("song:{raw_id}")
-        };
-        let mut track = TrackWire::new(
-            media_id,
+        let id_clean = raw_id.strip_prefix("song:").unwrap_or(raw_id);
+        let mref = MediaRef::Song(id_clean.to_string());
+        let mut track = Track::new(
+            mref,
             t["title"].as_str().unwrap_or_default(),
             t["artist"].as_str().unwrap_or_default(),
         );
         if let Some(alb) = t["album"].as_str()
             && !alb.is_empty()
         {
-            track.album = Some(AlbumRefWire::titled(alb));
+            track = track.with_album(alb);
         }
         if duration_ms > 0 {
-            track.duration_ms = Some(duration_ms);
+            track = track.with_duration_ms(duration_ms);
         }
         Some(track)
     });
 
-    Some(PlayerStatusWire {
+    Some(PlayerStatus {
         state,
         current_track,
         position_ms,
@@ -1226,7 +1220,7 @@ impl AppleWebSession for ProductionAppleWebSession {
         Ok(())
     }
 
-    async fn get_status(&self) -> Result<PlayerStatusWire, AppleError> {
+    async fn get_status(&self) -> Result<PlayerStatus, AppleError> {
         let session_guard = self.active_session.lock().await;
         let page = match *session_guard {
             Some(ref s) => {
@@ -1235,28 +1229,28 @@ impl AppleWebSession for ProductionAppleWebSession {
                 {
                     s.runtime.page_handle()
                 } else {
-                    return Ok(PlayerStatusWire {
-                        state: PlaybackStateWire::Stopped,
+                    return Ok(PlayerStatus {
+                        state: PlaybackState::Stopped,
                         current_track: None,
                         position_ms: 0,
                         duration_ms: 0,
                         volume: 100,
                         muted: false,
                         shuffle: false,
-                        repeat: RepeatModeWire::Off,
+                        repeat: RepeatMode::Off,
                     });
                 }
             }
             None => {
-                return Ok(PlayerStatusWire {
-                    state: PlaybackStateWire::Stopped,
+                return Ok(PlayerStatus {
+                    state: PlaybackState::Stopped,
                     current_track: None,
                     position_ms: 0,
                     duration_ms: 0,
                     volume: 100,
                     muted: false,
                     shuffle: false,
-                    repeat: RepeatModeWire::Off,
+                    repeat: RepeatMode::Off,
                 });
             }
         };
@@ -1291,7 +1285,7 @@ impl AppleWebSession for ProductionAppleWebSession {
         })
     }
 
-    fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlayerStatusWire>) {
+    fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlayerStatus>) {
         let sink_lock = self.event_sink.clone();
         tokio::spawn(async move {
             *sink_lock.lock().await = Some(sink);

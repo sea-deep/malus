@@ -4,6 +4,7 @@
 //! `<kind>:<id>` (e.g. `song:617154362`, `album:1440833098`, `artist:5468295`,
 //! `playlist:pl.u-...`, `station:ra.978194965`).
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{fmt, str::FromStr};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,7 +56,7 @@ impl MediaRef {
         }
 
         match kind {
-            "song" | "track" => Ok(Self::Song(id.to_string())),
+            "song" => Ok(Self::Song(id.to_string())),
             "album" => Ok(Self::Album(id.to_string())),
             "artist" => Ok(Self::Artist(id.to_string())),
             "playlist" => Ok(Self::Playlist(id.to_string())),
@@ -106,6 +107,25 @@ impl FromStr for MediaRef {
     }
 }
 
+impl Serialize for MediaRef {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.format())
+    }
+}
+
+impl<'de> Deserialize<'de> for MediaRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Self::parse(&s).map_err(serde::de::Error::custom)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,6 +160,31 @@ mod tests {
         assert!(MediaRef::parse("invalid").is_err());
         assert!(MediaRef::parse("song:").is_err());
         assert!(MediaRef::parse("unknown:123").is_err());
+        assert!(MediaRef::parse("track:123").is_err());
         assert!(MediaRef::parse("apple:song:123").is_err());
+        assert!(MediaRef::parse("apple:track:123").is_err());
+    }
+
+    #[test]
+    fn test_media_ref_serde_roundtrip() {
+        let refs = vec![
+            MediaRef::Song("617154362".to_string()),
+            MediaRef::Album("1440833098".to_string()),
+            MediaRef::Artist("5468295".to_string()),
+            MediaRef::Playlist("pl.u-12345".to_string()),
+            MediaRef::Station("ra.978194965".to_string()),
+        ];
+
+        for r in refs {
+            let json = serde_json::to_string(&r).unwrap();
+            assert_eq!(json, format!("\"{}\"", r.format()));
+            let decoded: MediaRef = serde_json::from_str(&json).unwrap();
+            assert_eq!(r, decoded);
+        }
+
+        // Serde deserialization rejects invalid forms
+        assert!(serde_json::from_str::<MediaRef>("\"track:123\"").is_err());
+        assert!(serde_json::from_str::<MediaRef>("\"apple:song:123\"").is_err());
+        assert!(serde_json::from_str::<MediaRef>("\"invalid\"").is_err());
     }
 }

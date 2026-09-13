@@ -6,14 +6,12 @@
 
 use std::{sync::Arc, time::Duration};
 
-use malus_ipc::{
-    PlayerStatusWire,
-    wire::{
-        AuthStatusWire, CatalogItemWire, LibraryKindWire, LibraryPageWire, MediaRefWire,
-        NavigationWire, PageContinuationWire, PageCursorWire, PageWire, PagedListWire,
-        SearchKindWire, SearchResultsWire, TrackWire,
-    },
+use malus_ipc::wire::{
+    AuthStatusWire, CatalogItemWire, LibraryKindWire, LibraryPageWire, NavigationWire,
+    PageContinuationWire, PageCursorWire, PageWire, PagedListWire, SearchKindWire,
+    SearchResultsWire,
 };
+use malus_model::{MediaRef, PageRoute, PlayerStatus, Track};
 use tokio::sync::{Mutex, mpsc};
 use tracing::info;
 
@@ -89,7 +87,7 @@ impl AppleService {
     }
 
     /// Register a sink for playback status changes from MusicKit runtime.
-    pub fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlayerStatusWire>) {
+    pub fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlayerStatus>) {
         self.session.set_event_sink(sink);
     }
 
@@ -153,22 +151,16 @@ impl AppleService {
         Ok(())
     }
 
-    /// Play a track by MediaRef (e.g. `song:617154362` or raw catalog ID).
-    pub async fn play(&self, media_id: &str) -> Result<(), AppleError> {
-        info!("Apple Music play: {media_id}");
-        let catalog_id = if let Ok(mref) = MediaRefWire::parse(media_id) {
-            if mref.kind() != "song" && mref.kind() != "track" {
-                return Err(AppleError::Internal(format!(
-                    "Expected item kind 'song' or 'track', got '{}'",
-                    mref.kind()
-                )));
-            }
-            mref.id().to_string()
-        } else {
-            media_id.to_string()
-        };
-
-        self.session.play_track(&catalog_id).await
+    /// Play a track by MediaRef (e.g. `song:617154362`).
+    pub async fn play(&self, reference: &MediaRef) -> Result<(), AppleError> {
+        info!("Apple Music play: {reference}");
+        if reference.kind() != "song" {
+            return Err(AppleError::Internal(format!(
+                "Expected item kind 'song', got '{}'",
+                reference.kind()
+            )));
+        }
+        self.session.play_track(reference.id()).await
     }
 
     /// Resume playback.
@@ -192,7 +184,7 @@ impl AppleService {
     }
 
     /// Get current player status from MusicKit runtime.
-    pub async fn get_status(&self) -> Result<PlayerStatusWire, AppleError> {
+    pub async fn get_status(&self) -> Result<PlayerStatus, AppleError> {
         self.session.get_status().await
     }
 
@@ -211,9 +203,12 @@ impl AppleService {
     }
 
     /// Single catalog item lookup over native HTTP.
-    pub async fn get_catalog_item(&self, media_id: &str) -> Result<CatalogItemWire, AppleError> {
+    pub async fn get_catalog_item(
+        &self,
+        reference: &MediaRef,
+    ) -> Result<CatalogItemWire, AppleError> {
         self.api
-            .get_catalog_item(media_id)
+            .get_catalog_item(reference)
             .await
             .map_err(AppleError::from)
     }
@@ -221,12 +216,12 @@ impl AppleService {
     /// Collection (album/playlist) tracks lookup over native HTTP.
     pub async fn get_collection_items(
         &self,
-        media_id: &str,
+        reference: &MediaRef,
         limit: usize,
         cursor: Option<&str>,
-    ) -> Result<PagedListWire<TrackWire>, AppleError> {
+    ) -> Result<PagedListWire<Track>, AppleError> {
         self.api
-            .get_collection_items(media_id, limit, cursor)
+            .get_collection_items(reference, limit, cursor)
             .await
             .map_err(AppleError::from)
     }
@@ -250,16 +245,16 @@ impl AppleService {
     }
 
     /// Return a structured Apple page (Home, New, Radio, Library, Album/Artist/Playlist detail, Replay).
-    pub async fn get_page(&self, route_or_id: &str) -> Result<PageWire, AppleError> {
-        pages::get_apple_page(&self.api, route_or_id).await
+    pub async fn get_page(&self, route: &PageRoute) -> Result<PageWire, AppleError> {
+        pages::get_apple_page(&self.api, route).await
     }
 
     /// Continue pagination for an Apple page or section.
     pub async fn continue_page(
         &self,
-        route_or_id: &str,
+        route: &PageRoute,
         cursor: &PageCursorWire,
     ) -> Result<PageContinuationWire, AppleError> {
-        pages::continue_apple_page(&self.api, route_or_id, cursor).await
+        pages::continue_apple_page(&self.api, route, cursor).await
     }
 }

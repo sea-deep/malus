@@ -1,7 +1,9 @@
 //! Pure domain playback state enums.
 
+use serde::{Deserialize, Serialize};
+
 /// High-level playback status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, Serialize, Deserialize)]
 pub enum PlaybackState {
     #[default]
     Stopped,
@@ -16,7 +18,7 @@ impl PlaybackState {
 }
 
 /// Loop / repeat options.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, Serialize, Deserialize)]
 pub enum RepeatMode {
     #[default]
     Off,

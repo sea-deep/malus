@@ -6,10 +6,10 @@ use malus_ipc::{
     wire::{
         ActionResultWire, AuthStatusWire, CatalogItemWire, LibraryKindWire, LibraryPageWire,
         NavigationWire, PageActionWire, PageContinuationWire, PageCursorWire, PageWire,
-        PagedListWire, PlayerStatusWire, QueueWire, RepeatModeWire, SearchKindWire,
-        SearchResultsWire, TrackWire,
+        PagedListWire, SearchKindWire, SearchResultsWire,
     },
 };
+use malus_model::{MediaRef, PageRoute, PlayerStatus, Queue, RepeatMode, Track};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::net::UnixStream;
@@ -212,7 +212,7 @@ impl MalusClient {
         }
     }
 
-    pub async fn get_status(&self) -> Result<PlayerStatusWire, ClientError> {
+    pub async fn get_status(&self) -> Result<PlayerStatus, ClientError> {
         match self.send(&ClientRequest::GetStatus).await? {
             ClientResponse::Status(s) => Ok(s),
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
@@ -226,10 +226,10 @@ impl MalusClient {
         }
     }
 
-    pub async fn play_track(&self, media_id: &str) -> Result<(), ClientError> {
+    pub async fn play_media(&self, reference: &MediaRef) -> Result<(), ClientError> {
         match self
-            .send(&ClientRequest::PlayTrack {
-                media_id: media_id.to_string(),
+            .send(&ClientRequest::PlayMedia {
+                reference: reference.clone(),
             })
             .await?
         {
@@ -294,7 +294,7 @@ impl MalusClient {
         }
     }
 
-    pub async fn set_repeat(&self, repeat: RepeatModeWire) -> Result<(), ClientError> {
+    pub async fn set_repeat(&self, repeat: RepeatMode) -> Result<(), ClientError> {
         match self.send(&ClientRequest::SetRepeat { repeat }).await? {
             ClientResponse::Ok => Ok(()),
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
@@ -343,10 +343,13 @@ impl MalusClient {
         }
     }
 
-    pub async fn get_catalog_item(&self, media_id: &str) -> Result<CatalogItemWire, ClientError> {
+    pub async fn get_catalog_item(
+        &self,
+        reference: &MediaRef,
+    ) -> Result<CatalogItemWire, ClientError> {
         match self
             .send(&ClientRequest::GetCatalogItem {
-                media_id: media_id.to_string(),
+                reference: reference.clone(),
             })
             .await?
         {
@@ -357,13 +360,13 @@ impl MalusClient {
 
     pub async fn get_collection_items(
         &self,
-        media_id: &str,
+        reference: &MediaRef,
         limit: Option<usize>,
         cursor: Option<String>,
-    ) -> Result<PagedListWire<TrackWire>, ClientError> {
+    ) -> Result<PagedListWire<Track>, ClientError> {
         match self
             .send(&ClientRequest::GetCollectionItems {
-                media_id: media_id.to_string(),
+                reference: reference.clone(),
                 limit,
                 cursor,
             })
@@ -393,23 +396,9 @@ impl MalusClient {
         }
     }
 
-    pub async fn get_queue(&self) -> Result<QueueWire, ClientError> {
+    pub async fn get_queue(&self) -> Result<Queue, ClientError> {
         match self.send(&ClientRequest::GetQueue).await? {
             ClientResponse::Queue(q) => Ok(q),
-            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
-        }
-    }
-
-    pub async fn clear_queue(&self) -> Result<(), ClientError> {
-        match self.send(&ClientRequest::ClearQueue).await? {
-            ClientResponse::Ok => Ok(()),
-            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
-        }
-    }
-
-    pub async fn enqueue(&self, track: TrackWire) -> Result<(), ClientError> {
-        match self.send(&ClientRequest::Enqueue { track }).await? {
-            ClientResponse::Ok => Ok(()),
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
         }
     }
@@ -421,10 +410,10 @@ impl MalusClient {
         }
     }
 
-    pub async fn get_page(&self, route: &str) -> Result<PageWire, ClientError> {
+    pub async fn get_page(&self, route: &PageRoute) -> Result<PageWire, ClientError> {
         match self
             .send(&ClientRequest::GetPage {
-                route: route.to_string(),
+                route: route.clone(),
             })
             .await?
         {
@@ -435,12 +424,12 @@ impl MalusClient {
 
     pub async fn continue_page(
         &self,
-        route: &str,
+        route: &PageRoute,
         cursor: PageCursorWire,
     ) -> Result<PageContinuationWire, ClientError> {
         match self
             .send(&ClientRequest::ContinuePage {
-                route: route.to_string(),
+                route: route.clone(),
                 cursor,
             })
             .await?

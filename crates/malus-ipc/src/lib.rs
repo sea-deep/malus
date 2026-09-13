@@ -16,8 +16,8 @@ mod tests {
 
     #[test]
     fn test_client_request_roundtrip() {
-        let req = ClientRequest::Enqueue {
-            track: TrackWire::new("song:123", "Test Title", "Test Artist"),
+        let req = ClientRequest::PlayMedia {
+            reference: MediaRef::parse("song:123").unwrap(),
         };
         let encoded = encode_message(&req).unwrap();
         let mut buf = encoded;
@@ -30,15 +30,19 @@ mod tests {
 
     #[test]
     fn test_client_response_roundtrip() {
-        let res = ClientResponse::Status(PlayerStatusWire {
-            state: PlaybackStateWire::Playing,
-            current_track: Some(TrackWire::new("song:1", "Song", "Artist")),
+        let res = ClientResponse::Status(PlayerStatus {
+            state: PlaybackState::Playing,
+            current_track: Some(Track::new(
+                MediaRef::parse("song:1").unwrap(),
+                "Song",
+                "Artist",
+            )),
             position_ms: 10_000,
             duration_ms: 200_000,
             volume: 80,
             muted: false,
             shuffle: false,
-            repeat: RepeatModeWire::Off,
+            repeat: RepeatMode::Off,
         });
         let encoded = encode_message(&res).unwrap();
         let mut buf = encoded;
@@ -97,11 +101,15 @@ mod tests {
 
         let search_res = client::ClientResponse::SearchResults(SearchResultsWire {
             tracks: Some(PagedListWire::new(
-                vec![TrackWire::new("song:1", "One More Time", "Daft Punk")],
+                vec![Track::new(
+                    MediaRef::parse("song:1").unwrap(),
+                    "One More Time",
+                    "Daft Punk",
+                )],
                 Some("cursor-2".to_string()),
             )),
             albums: Some(PagedListWire::new(
-                vec![AlbumWire::new("album:1", "Discovery")],
+                vec![Album::new(MediaRef::parse("album:1").unwrap(), "Discovery")],
                 None,
             )),
             artists: None,
@@ -117,7 +125,7 @@ mod tests {
 
         // 2. Catalog item request & response
         let cat_req = client::ClientRequest::GetCatalogItem {
-            media_id: "album:697194953".to_string(),
+            reference: MediaRef::parse("album:697194953").unwrap(),
         };
         let encoded = encode_message(&cat_req).unwrap();
         let mut buf = encoded;
@@ -127,8 +135,8 @@ mod tests {
         let decoded: client::ClientRequest = decode_message(&frame).unwrap();
         assert_eq!(cat_req, decoded);
 
-        let cat_res = client::ClientResponse::CatalogItem(CatalogItemWire::Album(AlbumWire::new(
-            "album:697194953",
+        let cat_res = client::ClientResponse::CatalogItem(CatalogItemWire::Album(Album::new(
+            MediaRef::parse("album:697194953").unwrap(),
             "Discovery",
         )));
         let encoded = encode_message(&cat_res).unwrap();
@@ -141,7 +149,7 @@ mod tests {
 
         // 3. Collection items request & response
         let coll_req = client::ClientRequest::GetCollectionItems {
-            media_id: "album:697194953".to_string(),
+            reference: MediaRef::parse("album:697194953").unwrap(),
             limit: Some(25),
             cursor: None,
         };
@@ -153,8 +161,12 @@ mod tests {
         let decoded: client::ClientRequest = decode_message(&frame).unwrap();
         assert_eq!(coll_req, decoded);
 
-        let coll_res = client::ClientResponse::CollectionItems(wire::PagedListWire::new(
-            vec![TrackWire::new("song:1", "Track 1", "Artist 1")],
+        let coll_res = client::ClientResponse::CollectionItems(PagedListWire::new(
+            vec![Track::new(
+                MediaRef::parse("song:1").unwrap(),
+                "Track 1",
+                "Artist 1",
+            )],
             None,
         ));
         let encoded = encode_message(&coll_res).unwrap();
@@ -179,9 +191,14 @@ mod tests {
         let decoded: client::ClientRequest = decode_message(&frame).unwrap();
         assert_eq!(lib_req, decoded);
 
-        let lib_res = client::ClientResponse::LibraryPage(LibraryPageWire::Albums(
-            PagedListWire::new(vec![AlbumWire::new("album:l.1", "Saved Album")], None),
-        ));
+        let lib_res =
+            client::ClientResponse::LibraryPage(LibraryPageWire::Albums(PagedListWire::new(
+                vec![Album::new(
+                    MediaRef::parse("album:l.1").unwrap(),
+                    "Saved Album",
+                )],
+                None,
+            )));
         let encoded = encode_message(&lib_res).unwrap();
         let mut buf = encoded;
         let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
@@ -204,11 +221,11 @@ mod tests {
         assert_eq!(nav_req, decoded);
 
         let nav = NavigationWire::new(
-            "home",
+            PageRoute::Home,
             vec![NavGroupWire::new(
                 "main",
                 Some("Main".to_string()),
-                vec![NavEntryWire::with_icon("home", "Home", "house")],
+                vec![NavEntryWire::with_icon(PageRoute::Home, "Home", "house")],
             )],
         );
         let nav_res = client::ClientResponse::Navigation(nav.clone());
@@ -222,7 +239,7 @@ mod tests {
 
         // 2. Get page request and response
         let page_req = client::ClientRequest::GetPage {
-            route: "home".to_string(),
+            route: PageRoute::Home,
         };
         let encoded = encode_message(&page_req).unwrap();
         let mut buf = encoded;
@@ -244,7 +261,7 @@ mod tests {
 
         // 3. Continue page request and response
         let cont_req = client::ClientRequest::ContinuePage {
-            route: "home".to_string(),
+            route: PageRoute::Home,
             cursor: PageCursorWire::section("sec-1", "cursor-xyz"),
         };
         let encoded = encode_message(&cont_req).unwrap();
@@ -270,7 +287,7 @@ mod tests {
 
         // 4. Invoke action request and response
         let act_req = client::ClientRequest::InvokeAction {
-            action: PageActionWire::PlaySong("song:123".to_string()),
+            action: PageActionWire::Play(MediaRef::parse("song:123").unwrap()),
         };
         let encoded = encode_message(&act_req).unwrap();
         let mut buf = encoded;

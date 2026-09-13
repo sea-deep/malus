@@ -1,12 +1,13 @@
 //! Response mapper converting Apple Music API JSON into typed PageItemWire structures.
 //!
 //! Enforces the Apple-first architectural model:
-//! - Directly maps Apple entities (song, album, artist, playlist, station) to `MediaRefWire`.
-//! - Attaches typed `PageActionWire` actions (PlaySong, PlayAlbum, PlayPlaylist, PlayStation).
-//! - Sets `open_route` for navigational drill-down (album detail, artist detail, playlist detail).
+//! - Directly maps Apple entities (song, album, artist, playlist, station) to `MediaRef`.
+//! - Attaches typed `PageActionWire` actions (`Play`).
+//! - Sets `open_route` for navigational drill-down (`PageRoute`).
 //! - Normalizes artwork, durations, badges, and presentation hints.
 
-use malus_ipc::wire::{MediaRefWire, PageActionWire, PageBadgeWire, PageItemWire, PageSectionWire};
+use malus_ipc::wire::{PageActionWire, PageBadgeWire, PageItemWire, PageSectionWire};
+use malus_model::{MediaRef, PageRoute};
 use serde_json::Value;
 
 use crate::api::parse::parse_apple_artwork;
@@ -30,8 +31,9 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
                 .and_then(|a| a.as_str())
                 .map(str::to_string);
             page_item.artwork = attrs.get("artwork").and_then(parse_apple_artwork);
-            page_item.entity = MediaRefWire::new("song", id).ok();
-            page_item.actions = vec![PageActionWire::PlaySong(id.to_string())];
+            let mref = MediaRef::Song(id.to_string());
+            page_item.entity = Some(mref.clone());
+            page_item.actions = vec![PageActionWire::Play(mref)];
             page_item.presentation_hint = Some("track-row".to_string());
 
             if let Some(dur) = attrs
@@ -67,9 +69,10 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
                 .and_then(|r| r.as_str())
                 .map(|r| r.split('-').next().unwrap_or(r).to_string());
             page_item.artwork = attrs.get("artwork").and_then(parse_apple_artwork);
-            page_item.entity = MediaRefWire::new("album", id).ok();
-            page_item.open_route = Some(format!("album:{id}"));
-            page_item.actions = vec![PageActionWire::PlayAlbum(id.to_string())];
+            let mref = MediaRef::Album(id.to_string());
+            page_item.entity = Some(mref.clone());
+            page_item.open_route = Some(PageRoute::Album(id.to_string()));
+            page_item.actions = vec![PageActionWire::Play(mref)];
             page_item.presentation_hint = Some("card".to_string());
 
             if attrs.get("contentRating").and_then(|r| r.as_str()) == Some("explicit") {
@@ -99,8 +102,8 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
                 }
             }
             page_item.artwork = attrs.get("artwork").and_then(parse_apple_artwork);
-            page_item.entity = MediaRefWire::new("artist", id).ok();
-            page_item.open_route = Some(format!("artist:{id}"));
+            page_item.entity = Some(MediaRef::Artist(id.to_string()));
+            page_item.open_route = Some(PageRoute::Artist(id.to_string()));
             page_item.presentation_hint = Some("circle-card".to_string());
 
             Some(page_item)
@@ -117,9 +120,10 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
                 .and_then(|c| c.as_str())
                 .map(str::to_string);
             page_item.artwork = attrs.get("artwork").and_then(parse_apple_artwork);
-            page_item.entity = MediaRefWire::new("playlist", id).ok();
-            page_item.open_route = Some(format!("playlist:{id}"));
-            page_item.actions = vec![PageActionWire::PlayPlaylist(id.to_string())];
+            let mref = MediaRef::Playlist(id.to_string());
+            page_item.entity = Some(mref.clone());
+            page_item.open_route = Some(PageRoute::Playlist(id.to_string()));
+            page_item.actions = vec![PageActionWire::Play(mref)];
             page_item.presentation_hint = Some("card".to_string());
 
             Some(page_item)
@@ -136,8 +140,9 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
                 .and_then(|p| p.as_str())
                 .map(str::to_string);
             page_item.artwork = attrs.get("artwork").and_then(parse_apple_artwork);
-            page_item.entity = MediaRefWire::new("station", id).ok();
-            page_item.actions = vec![PageActionWire::PlayStation(id.to_string())];
+            let mref = MediaRef::Station(id.to_string());
+            page_item.entity = Some(mref.clone());
+            page_item.actions = vec![PageActionWire::Play(mref)];
             page_item.presentation_hint = Some("card".to_string());
 
             if attrs
@@ -273,13 +278,12 @@ mod tests {
             item.tertiary_text.as_deref(),
             Some("Random Access Memories")
         );
-        assert_eq!(
-            item.entity,
-            Some(MediaRefWire::parse("song:1440857781").unwrap())
-        );
+        assert_eq!(item.entity, Some(MediaRef::Song("1440857781".to_string())));
         assert_eq!(
             item.actions,
-            vec![PageActionWire::PlaySong("1440857781".to_string())]
+            vec![PageActionWire::Play(MediaRef::Song(
+                "1440857781".to_string()
+            ))]
         );
         assert_eq!(item.badges.len(), 1);
         assert_eq!(item.badges[0].label, "E");
@@ -306,14 +310,16 @@ mod tests {
         let item = map_apple_resource_to_item(&album).expect("mapped album");
         assert_eq!(item.id, "1440857780");
         assert_eq!(item.title, "Random Access Memories");
+        assert_eq!(item.entity, Some(MediaRef::Album("1440857780".to_string())));
         assert_eq!(
-            item.entity,
-            Some(MediaRefWire::parse("album:1440857780").unwrap())
+            item.open_route,
+            Some(PageRoute::Album("1440857780".to_string()))
         );
-        assert_eq!(item.open_route.as_deref(), Some("album:1440857780"));
         assert_eq!(
             item.actions,
-            vec![PageActionWire::PlayAlbum("1440857780".to_string())]
+            vec![PageActionWire::Play(MediaRef::Album(
+                "1440857780".to_string()
+            ))]
         );
     }
 }
