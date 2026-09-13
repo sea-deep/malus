@@ -153,10 +153,11 @@ mod tests {
     #[test]
     fn test_account_media_state_model() {
         let reference = MediaRef::Song("123".to_string());
-        let state = AccountMediaState::new(reference.clone(), true, Rating::Favorite);
+        let state = AccountMediaState::new(reference.clone(), true, true, Rating::Neutral);
         assert!(state.in_library);
-        assert_eq!(state.rating, Rating::Favorite);
+        assert_eq!(state.rating, Rating::Neutral);
         assert!(state.is_favorite());
+        assert!(!state.is_suggest_less());
 
         let json = serde_json::to_string(&state).unwrap();
         let decoded: AccountMediaState = serde_json::from_str(&json).unwrap();

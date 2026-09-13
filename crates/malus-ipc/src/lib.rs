@@ -385,7 +385,7 @@ mod tests {
         let decoded: client::ClientRequest = decode_message(&frame).unwrap();
         assert_eq!(fav_req, decoded);
 
-        let state = AccountMediaState::new(song_ref.clone(), true, Rating::Favorite);
+        let state = AccountMediaState::new(song_ref.clone(), true, true, Rating::Neutral);
         let state_res = client::ClientResponse::MediaState(state.clone());
         let encoded = encode_message(&state_res).unwrap();
         let mut buf = encoded;

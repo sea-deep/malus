@@ -26,6 +26,7 @@ use crate::{
 };
 
 /// First-class in-process Apple Music service.
+#[derive(Clone)]
 pub struct AppleService {
     session: Arc<dyn AppleWebSession>,
     api: Arc<OfficialAppleMusicApi>,

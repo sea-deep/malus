@@ -393,14 +393,24 @@ impl OfficialAppleMusicApi {
 
     /// Add an item (song, album, playlist) to the user's library.
     pub async fn add_to_library(&self, reference: &MediaRef) -> Result<(), AppleApiError> {
-        let kind = Self::media_kind_plural(reference)?;
+        let kind = match reference {
+            MediaRef::Song(_) => "songs",
+            MediaRef::Album(_) => "albums",
+            MediaRef::Playlist(_) => "playlists",
+            _ => {
+                return Err(AppleApiError::Other(format!(
+                    "Library add not supported for {}",
+                    reference.kind()
+                )));
+            }
+        };
         let path = format!("/v1/me/library?ids[{kind}]={}", reference.id());
         self.send_request_with_method(reqwest::Method::POST, &path, &[], None)
             .await?;
         Ok(())
     }
 
-    /// Get current account state (in_library, rating) for a resource.
+    /// Get current account state (in_library, favorite, rating) for a resource.
     pub async fn get_account_media_state(
         &self,
         reference: &MediaRef,
@@ -411,58 +421,72 @@ impl OfficialAppleMusicApi {
                 return Ok(AccountMediaState::new(
                     reference.clone(),
                     false,
+                    false,
                     Rating::Neutral,
                 ));
             }
         };
 
-        // 1. Rating query
-        let rating_path = format!("/v1/me/ratings/{kind}/{}", reference.id());
-        let rating = match self.send_request(&rating_path, &[]).await {
-            Ok(val) => {
-                if let Some(data) = val.get("data").and_then(|d| d.as_array())
-                    && let Some(first) = data.first()
-                    && let Some(val_num) = first
-                        .get("attributes")
-                        .and_then(|a| a.get("value"))
-                        .and_then(|v| v.as_i64())
-                {
-                    if val_num == 1 {
-                        Rating::Favorite
-                    } else if val_num == -1 {
-                        Rating::SuggestLess
-                    } else {
-                        Rating::Neutral
-                    }
-                } else {
-                    Rating::Neutral
-                }
-            }
-            Err(AppleApiError::NotFound(_)) => Rating::Neutral,
-            Err(e) => return Err(e),
-        };
+        let cat_path = format!(
+            "https://amp-api.music.apple.com/v1/catalog/{{storefront}}/{kind}/{}",
+            reference.id()
+        );
+        let fields_param = format!("fields[{kind}]");
+        let cat_query = [
+            ("relate", "library"),
+            (&fields_param, "inLibrary,personalRating"),
+        ];
 
-        // 2. Library membership query via relate=library
-        let cat_path = format!("/v1/catalog/{{storefront}}/{kind}/{}", reference.id());
-        let in_library = match self.send_request(&cat_path, &[("relate", "library")]).await {
-            Ok(val) => {
-                if let Some(data) = val.get("data").and_then(|d| d.as_array())
-                    && let Some(first) = data.first()
-                    && let Some(lib) = first.get("relationships").and_then(|r| r.get("library"))
-                    && let Some(lib_data) = lib.get("data").and_then(|d| d.as_array())
-                {
-                    !lib_data.is_empty()
-                } else {
-                    false
-                }
+        let mut in_library = false;
+        let mut personal_rating: Option<i64> = None;
+
+        if let Ok(val) = self.send_request(&cat_path, &cat_query).await
+            && let Some(data) = val.get("data").and_then(|d| d.as_array())
+            && let Some(first) = data.first()
+        {
+            if let Some(in_lib) = first
+                .get("attributes")
+                .and_then(|a| a.get("inLibrary"))
+                .and_then(|v| v.as_bool())
+            {
+                in_library = in_lib;
+            } else if let Some(lib) = first.get("relationships").and_then(|r| r.get("library"))
+                && let Some(lib_data) = lib.get("data").and_then(|d| d.as_array())
+            {
+                in_library = !lib_data.is_empty();
             }
-            Err(AppleApiError::NotFound(_)) => false,
-            Err(e) => return Err(e),
+
+            personal_rating = first
+                .get("attributes")
+                .and_then(|a| a.get("personalRating"))
+                .and_then(|v| v.as_i64());
+        }
+
+        // If personalRating was not available from catalog, consult the ratings endpoint
+        if personal_rating.is_none() {
+            let rating_path = format!("/v1/me/ratings/{kind}/{}", reference.id());
+            if let Ok(val) = self.send_request(&rating_path, &[]).await
+                && let Some(data) = val.get("data").and_then(|d| d.as_array())
+                && let Some(first) = data.first()
+            {
+                personal_rating = first
+                    .get("attributes")
+                    .and_then(|a| a.get("value"))
+                    .and_then(|v| v.as_i64());
+            }
+        }
+
+        let favorite = personal_rating == Some(1);
+        let rating = if personal_rating == Some(-1) {
+            Rating::SuggestLess
+        } else {
+            Rating::Neutral
         };
 
         Ok(AccountMediaState::new(
             reference.clone(),
             in_library,
+            favorite,
             rating,
         ))
     }

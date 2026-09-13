@@ -9,7 +9,7 @@ use malus_ipc::{
         SearchKindWire, SearchResultsWire,
     },
 };
-use malus_model::{MediaRef, PageRoute, Queue};
+use malus_model::{MediaRef, PageRoute, Queue, Rating};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -912,8 +912,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&state)?);
             } else {
                 println!("Resource:   {reference}");
-                println!("In Library: {}", state.in_library);
-                println!("Rating:     {:?}", state.rating);
+                println!(
+                    "In Library: {}",
+                    if state.in_library { "yes" } else { "no" }
+                );
+                println!("Favorite:   {}", if state.favorite { "yes" } else { "no" });
+                println!(
+                    "Rating:     {}",
+                    match state.rating {
+                        Rating::Neutral => "neutral",
+                        Rating::SuggestLess => "suggest-less",
+                    }
+                );
             }
         }
         Commands::Watch { json } => {
@@ -956,8 +966,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             malus_ipc::client::ClientEvent::MediaStateChanged(state) => {
                                 println!(
-                                    "[State] {} in_library={} rating={:?}",
-                                    state.reference, state.in_library, state.rating
+                                    "[State] {} in_library={} favorite={} rating={:?}",
+                                    state.reference, state.in_library, state.favorite, state.rating
                                 );
                             }
                         }
@@ -1683,8 +1693,8 @@ fn print_response(resp: &ClientResponse) {
         ClientResponse::Credits(c) => display_credits(c),
         ClientResponse::MediaState(s) => {
             println!(
-                "MediaState: in_library={}, rating={:?}",
-                s.in_library, s.rating
+                "MediaState: in_library={}, favorite={}, rating={:?}",
+                s.in_library, s.favorite, s.rating
             );
         }
     }

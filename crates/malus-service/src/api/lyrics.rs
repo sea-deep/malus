@@ -1,6 +1,8 @@
-//! TTML lyrics parsing for Apple Music.
+//! TTML lyrics parsing for Apple Music using quick-xml.
 
 use malus_model::{LyricLine, LyricSyllable, Lyrics};
+use quick_xml::events::Event;
+use quick_xml::reader::Reader;
 
 /// Parse a time string in format `[HH:]MM:SS[.mmm]` or `SS[.mmm]` into milliseconds.
 pub fn parse_ttml_time(s: &str) -> Option<u64> {
@@ -31,31 +33,6 @@ pub fn parse_ttml_time(s: &str) -> Option<u64> {
     }
 }
 
-/// Decode basic XML entities.
-fn decode_xml_entities(s: &str) -> String {
-    s.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-}
-
-/// Strip XML tags from a string and decode entities.
-fn strip_tags_and_decode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut in_tag = false;
-    for c in s.chars() {
-        if c == '<' {
-            in_tag = true;
-        } else if c == '>' {
-            in_tag = false;
-        } else if !in_tag {
-            out.push(c);
-        }
-    }
-    decode_xml_entities(&out)
-}
-
 /// Collapse multiple whitespace characters into single spaces and trim.
 fn collapse_whitespace(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
@@ -74,120 +51,142 @@ fn collapse_whitespace(s: &str) -> String {
     result.trim().to_string()
 }
 
-/// Extract attribute value by name from a tag's attribute string.
-fn extract_attr(tag_header: &str, attr_name: &str) -> Option<String> {
-    let pattern = format!("{}=\"", attr_name);
-    if let Some(start) = tag_header.find(&pattern) {
-        let val_start = start + pattern.len();
-        if let Some(val_end) = tag_header[val_start..].find('"') {
-            return Some(tag_header[val_start..val_start + val_end].to_string());
-        }
-    }
-    // Also try single quote
-    let pattern_sq = format!("{}='", attr_name);
-    if let Some(start) = tag_header.find(&pattern_sq) {
-        let val_start = start + pattern_sq.len();
-        if let Some(val_end) = tag_header[val_start..].find('\'') {
-            return Some(tag_header[val_start..val_start + val_end].to_string());
-        }
-    }
-    None
-}
-
-/// Parse Apple TTML XML into normalized `Lyrics`.
+/// Parse Apple TTML XML into normalized `Lyrics` using quick-xml.
 pub fn parse_ttml_lyrics(ttml: &str) -> Lyrics {
     if ttml.trim().is_empty() {
         return Lyrics::empty();
     }
 
+    let mut reader = Reader::from_str(ttml);
+    reader.config_mut().trim_text(false);
+
+    let mut buf = Vec::new();
     let mut lines = Vec::new();
     let mut synced = false;
 
-    let mut rest = ttml;
-    while let Some(p_start) = rest.find("<p") {
-        rest = &rest[p_start..];
-        let tag_close = match rest.find('>') {
-            Some(idx) => idx,
-            None => break,
-        };
+    let mut in_p = false;
+    let mut p_start_ms: Option<u64> = None;
+    let mut p_end_ms: Option<u64> = None;
+    let mut p_text = String::new();
+    let mut p_syllables: Vec<LyricSyllable> = Vec::new();
 
-        let tag_header = &rest[2..tag_close];
-        let is_self_closing = tag_header.trim_end().ends_with('/');
+    let mut in_span = false;
+    let mut span_start_ms: Option<u64> = None;
+    let mut span_end_ms: Option<u64> = None;
+    let mut span_text = String::new();
 
-        let line_start_ms = extract_attr(tag_header, "begin").and_then(|s| parse_ttml_time(&s));
-        let line_end_ms = extract_attr(tag_header, "end").and_then(|s| parse_ttml_time(&s));
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => {
+                let local_name = e.local_name();
+                if local_name.as_ref() == "p" {
+                    in_p = true;
+                    p_start_ms = None;
+                    p_end_ms = None;
+                    p_text.clear();
+                    p_syllables.clear();
 
-        if is_self_closing {
-            rest = &rest[tag_close + 1..];
-            continue;
-        }
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == "begin" {
+                            p_start_ms = parse_ttml_time(attr.value.as_ref());
+                        } else if attr.key.as_ref() == "end" {
+                            p_end_ms = parse_ttml_time(attr.value.as_ref());
+                        }
+                    }
+                } else if in_p && local_name.as_ref() == "span" {
+                    in_span = true;
+                    span_start_ms = None;
+                    span_end_ms = None;
+                    span_text.clear();
 
-        let content_start = tag_close + 1;
-        let p_end = match rest[content_start..].find("</p>") {
-            Some(idx) => content_start + idx,
-            None => break,
-        };
-
-        let inner = &rest[content_start..p_end];
-        rest = &rest[p_end + 4..];
-
-        // Check for syllable spans: <span ...>...</span>
-        let mut syllables = Vec::new();
-        let mut span_rest = inner;
-        while let Some(s_start) = span_rest.find("<span") {
-            span_rest = &span_rest[s_start..];
-            let s_tag_close = match span_rest.find('>') {
-                Some(idx) => idx,
-                None => break,
-            };
-            let s_header = &span_rest[5..s_tag_close];
-            let s_content_start = s_tag_close + 1;
-            let s_end = match span_rest[s_content_start..].find("</span>") {
-                Some(idx) => s_content_start + idx,
-                None => break,
-            };
-            let s_inner = &span_rest[s_content_start..s_end];
-            span_rest = &span_rest[s_end + 7..];
-
-            let s_begin = extract_attr(s_header, "begin").and_then(|s| parse_ttml_time(&s));
-            let s_end_ms = extract_attr(s_header, "end").and_then(|s| parse_ttml_time(&s));
-            let s_text = strip_tags_and_decode(s_inner);
-
-            if !s_text.is_empty() {
-                syllables.push(LyricSyllable::new(s_text, s_begin, s_end_ms));
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == "begin" {
+                            span_start_ms = parse_ttml_time(attr.value.as_ref());
+                        } else if attr.key.as_ref() == "end" {
+                            span_end_ms = parse_ttml_time(attr.value.as_ref());
+                        }
+                    }
+                }
             }
-        }
+            Ok(Event::Text(ref e)) => {
+                let text = e.as_ref();
+                if in_span {
+                    span_text.push_str(text);
+                } else if in_p {
+                    p_text.push_str(text);
+                }
+            }
+            Ok(Event::CData(ref e)) => {
+                let text = e.as_ref();
+                if in_span {
+                    span_text.push_str(text);
+                } else if in_p {
+                    p_text.push_str(text);
+                }
+            }
+            Ok(Event::GeneralRef(ref e)) => {
+                let text = if let Some(predefined) =
+                    quick_xml::escape::resolve_predefined_entity(e.as_ref())
+                {
+                    predefined.to_string()
+                } else if let Ok(Some(ch)) = e.resolve_char_ref() {
+                    ch.to_string()
+                } else {
+                    format!("&{};", e.as_ref())
+                };
 
-        let full_text = if !syllables.is_empty() {
-            syllables
-                .iter()
-                .map(|s| s.text.as_str())
-                .collect::<String>()
-                .trim()
-                .to_string()
-        } else {
-            collapse_whitespace(&strip_tags_and_decode(inner))
-        };
-        if full_text.is_empty() {
-            continue;
-        }
+                if in_span {
+                    span_text.push_str(&text);
+                } else if in_p {
+                    p_text.push_str(&text);
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                let local_name = e.local_name();
+                if in_span && local_name.as_ref() == "span" {
+                    if !span_text.is_empty() {
+                        p_syllables.push(LyricSyllable::new(
+                            span_text.clone(),
+                            span_start_ms,
+                            span_end_ms,
+                        ));
+                    }
+                    in_span = false;
+                } else if in_p && local_name.as_ref() == "p" {
+                    let full_text = if !p_syllables.is_empty() {
+                        p_syllables
+                            .iter()
+                            .map(|s| s.text.as_str())
+                            .collect::<String>()
+                            .trim()
+                            .to_string()
+                    } else {
+                        collapse_whitespace(&p_text)
+                    };
 
-        if line_start_ms.is_some() {
-            synced = true;
+                    if !full_text.is_empty() {
+                        if p_start_ms.is_some() {
+                            synced = true;
+                        }
+                        let mut line = LyricLine::new(full_text);
+                        if let (Some(s), Some(e)) = (p_start_ms, p_end_ms) {
+                            line = line.with_timing(s, e);
+                        } else if let Some(s) = p_start_ms {
+                            line.start_ms = Some(s);
+                        }
+                        if !p_syllables.is_empty() {
+                            line = line.with_syllables(p_syllables.clone());
+                        }
+                        lines.push(line);
+                    }
+                    in_p = false;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
         }
-
-        let mut line = LyricLine::new(full_text);
-        if let (Some(start), Some(end)) = (line_start_ms, line_end_ms) {
-            line = line.with_timing(start, end);
-        } else if let Some(start) = line_start_ms {
-            line.start_ms = Some(start);
-        }
-
-        if !syllables.is_empty() {
-            line = line.with_syllables(syllables);
-        }
-
-        lines.push(line);
+        buf.clear();
     }
 
     Lyrics::new(lines, synced)
@@ -280,8 +279,8 @@ mod tests {
         <tt>
             <body>
                 <div>
-                    <p>Unsynced first line</p>
-                    <p>Unsynced second line</p>
+                    <p>Unsynced line one</p>
+                    <p>Unsynced line two</p>
                 </div>
             </body>
         </tt>
@@ -290,17 +289,57 @@ mod tests {
         let lyrics = parse_ttml_lyrics(ttml);
         assert!(!lyrics.synced);
         assert_eq!(lyrics.lines.len(), 2);
-        assert_eq!(lyrics.lines[0].text, "Unsynced first line");
+        assert_eq!(lyrics.lines[0].text, "Unsynced line one");
         assert_eq!(lyrics.lines[0].start_ms, None);
-        assert_eq!(lyrics.lines[1].text, "Unsynced second line");
+        assert_eq!(lyrics.lines[1].text, "Unsynced line two");
         assert_eq!(lyrics.lines[1].start_ms, None);
     }
 
     #[test]
+    fn test_parse_xml_entities() {
+        let ttml = r#"
+        <tt>
+            <body>
+                <div>
+                    <p begin="1.0" end="2.0">Tom &amp; Jerry &lt;&quot;Special&quot;&gt; &apos;Edition&apos;</p>
+                </div>
+            </body>
+        </tt>
+        "#;
+        let lyrics = parse_ttml_lyrics(ttml);
+        assert_eq!(lyrics.lines.len(), 1);
+        assert_eq!(lyrics.lines[0].text, "Tom & Jerry <\"Special\"> 'Edition'");
+    }
+
+    #[test]
+    fn test_parse_multilingual_unicode() {
+        let ttml = r#"
+        <tt>
+            <body>
+                <div>
+                    <p begin="0.810" end="4.220">یا عَلی، یا عَلی، झूम</p>
+                    <p begin="4.220" end="7.770">ஹையா, ஏ ஹையா-ஹையா</p>
+                    <p begin="7.770" end="10.000">初音ミクの消失 🎵</p>
+                </div>
+            </body>
+        </tt>
+        "#;
+        let lyrics = parse_ttml_lyrics(ttml);
+        assert_eq!(lyrics.lines.len(), 3);
+        assert_eq!(lyrics.lines[0].text, "یا عَلی، یا عَلی، झूम");
+        assert_eq!(lyrics.lines[1].text, "ஹையா, ஏ ஹையா-ஹையா");
+        assert_eq!(lyrics.lines[2].text, "初音ミクの消失 🎵");
+    }
+
+    #[test]
     fn test_empty_or_malformed_lyrics() {
-        assert!(parse_ttml_lyrics("").is_empty());
-        assert!(parse_ttml_lyrics("   ").is_empty());
-        assert!(parse_ttml_lyrics("<tt></tt>").is_empty());
-        assert!(parse_ttml_lyrics("<malformed>xml").is_empty());
+        assert_eq!(parse_ttml_lyrics("").lines.len(), 0);
+        assert_eq!(parse_ttml_lyrics("   ").lines.len(), 0);
+        assert_eq!(parse_ttml_lyrics("<tt><body/></tt>").lines.len(), 0);
+        assert_eq!(parse_ttml_lyrics("not xml").lines.len(), 0);
+        // Truncated / malformed XML should recover cleanly
+        let broken = "<tt><body><div><p begin=\"1.0\" end=\"2.0\">Recovered line";
+        let lyrics = parse_ttml_lyrics(broken);
+        assert_eq!(lyrics.lines.len(), 0);
     }
 }

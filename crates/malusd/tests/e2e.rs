@@ -203,7 +203,7 @@ async fn test_daemon_media_state_events() {
 
     // Broadcast a media state change event
     let song_ref = MediaRef::Song("1440857781".to_string());
-    let state = AccountMediaState::new(song_ref, true, Rating::Favorite);
+    let state = AccountMediaState::new(song_ref, true, true, Rating::Neutral);
     server.broadcast_event(ClientEvent::MediaStateChanged(state.clone()));
 
     // Wait for the event on subscriber
@@ -212,6 +212,7 @@ async fn test_daemon_media_state_events() {
         Ok(Ok(ClientEvent::MediaStateChanged(ev_state))) => {
             assert_eq!(ev_state, state);
             assert!(ev_state.is_favorite());
+            assert!(!ev_state.is_suggest_less());
             assert!(ev_state.in_library);
         }
         other => panic!("Expected MediaStateChanged event, got {other:?}"),
