@@ -1,5 +1,5 @@
 use malus_client::{ClientError, ConnectionStatus, MalusClient};
-use malus_protocol::{
+use malus_ipc::{
     DEFAULT_MAX_PAYLOAD_BYTES,
     client::{ClientEvent, ClientRequest, ClientResponse},
     codec::{decode_message, read_frame, write_message},

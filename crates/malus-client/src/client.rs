@@ -1,14 +1,13 @@
 use crate::error::ClientError;
-use malus_protocol::{
+use malus_ipc::{
     DEFAULT_MAX_PAYLOAD_BYTES,
     client::{ClientEvent, ClientRequest, ClientResponse},
     codec::{decode_message, read_frame, write_message},
     wire::{
-        AppleNavigationWire, ApplePageWire, AuthStatusWire, CatalogItemWire, LibraryKindWire,
-        LibraryPageWire, PageContinuationWire, PageCursorWire, PageWire, PlayerStatusWire,
-        ProviderInfoWire, ProviderSurfaceManifestWire, QueueWire, RepeatModeWire, SearchKindWire,
-        SearchResultsWire, SurfaceActionResultWire, SurfaceContinuationWire, SurfaceCursorWire,
-        SurfaceWire, TrackWire,
+        ActionResultWire, AuthStatusWire, CatalogItemWire, LibraryKindWire, LibraryPageWire,
+        NavigationWire, PageActionWire, PageContinuationWire, PageCursorWire, PageWire,
+        PagedListWire, PlayerStatusWire, QueueWire, RepeatModeWire, SearchKindWire,
+        SearchResultsWire, TrackWire,
     },
 };
 use std::path::{Path, PathBuf};
@@ -302,44 +301,22 @@ impl MalusClient {
         }
     }
 
-    pub async fn list_providers(&self) -> Result<Vec<ProviderInfoWire>, ClientError> {
-        match self.send(&ClientRequest::ListProviders).await? {
-            ClientResponse::Providers(list) => Ok(list),
-            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
-        }
-    }
-
-    pub async fn get_auth_status(&self, provider: &str) -> Result<AuthStatusWire, ClientError> {
-        match self
-            .send(&ClientRequest::GetAuthStatus {
-                provider: provider.to_string(),
-            })
-            .await?
-        {
+    pub async fn get_auth_status(&self) -> Result<AuthStatusWire, ClientError> {
+        match self.send(&ClientRequest::GetAuthStatus).await? {
             ClientResponse::AuthStatus(s) => Ok(s),
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
         }
     }
 
-    pub async fn auth_begin(&self, provider: &str) -> Result<AuthStatusWire, ClientError> {
-        match self
-            .send(&ClientRequest::AuthBegin {
-                provider: provider.to_string(),
-            })
-            .await?
-        {
+    pub async fn auth_begin(&self) -> Result<AuthStatusWire, ClientError> {
+        match self.send(&ClientRequest::AuthBegin).await? {
             ClientResponse::AuthStatus(s) => Ok(s),
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
         }
     }
 
-    pub async fn auth_logout(&self, provider: &str) -> Result<AuthStatusWire, ClientError> {
-        match self
-            .send(&ClientRequest::AuthLogout {
-                provider: provider.to_string(),
-            })
-            .await?
-        {
+    pub async fn auth_logout(&self) -> Result<AuthStatusWire, ClientError> {
+        match self.send(&ClientRequest::AuthLogout).await? {
             ClientResponse::AuthStatus(s) => Ok(s),
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
         }
@@ -349,7 +326,6 @@ impl MalusClient {
         &self,
         query: &str,
         kinds: Vec<SearchKindWire>,
-        provider: Option<String>,
         limit: Option<usize>,
         cursor: Option<String>,
     ) -> Result<SearchResultsWire, ClientError> {
@@ -357,7 +333,6 @@ impl MalusClient {
             .send(&ClientRequest::Search {
                 query: query.to_string(),
                 kinds,
-                provider,
                 limit,
                 cursor,
             })
@@ -385,7 +360,7 @@ impl MalusClient {
         media_id: &str,
         limit: Option<usize>,
         cursor: Option<String>,
-    ) -> Result<PageWire<TrackWire>, ClientError> {
+    ) -> Result<PagedListWire<TrackWire>, ClientError> {
         match self
             .send(&ClientRequest::GetCollectionItems {
                 media_id: media_id.to_string(),
@@ -394,7 +369,7 @@ impl MalusClient {
             })
             .await?
         {
-            ClientResponse::CollectionItems(page) => Ok(page),
+            ClientResponse::CollectionItems(items) => Ok(items),
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
         }
     }
@@ -402,14 +377,12 @@ impl MalusClient {
     pub async fn get_library(
         &self,
         kind: LibraryKindWire,
-        provider: Option<String>,
         limit: Option<usize>,
         cursor: Option<String>,
     ) -> Result<LibraryPageWire, ClientError> {
         match self
             .send(&ClientRequest::GetLibrary {
                 kind,
-                provider,
                 limit,
                 cursor,
             })
@@ -441,23 +414,21 @@ impl MalusClient {
         }
     }
 
-    pub async fn get_navigation(&self) -> Result<AppleNavigationWire, ClientError> {
+    pub async fn get_navigation(&self) -> Result<NavigationWire, ClientError> {
         match self.send(&ClientRequest::GetNavigation).await? {
-            ClientResponse::Navigation(nav) | ClientResponse::ProviderSurfaceManifest(nav) => {
-                Ok(nav)
-            }
+            ClientResponse::Navigation(nav) => Ok(nav),
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
         }
     }
 
-    pub async fn get_page(&self, route: &str) -> Result<ApplePageWire, ClientError> {
+    pub async fn get_page(&self, route: &str) -> Result<PageWire, ClientError> {
         match self
             .send(&ClientRequest::GetPage {
                 route: route.to_string(),
             })
             .await?
         {
-            ClientResponse::Page(page) | ClientResponse::Surface(page) => Ok(page),
+            ClientResponse::Page(page) => Ok(page),
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
         }
     }
@@ -474,50 +445,17 @@ impl MalusClient {
             })
             .await?
         {
-            ClientResponse::PageContinued(cont) | ClientResponse::SurfaceContinued(cont) => {
-                Ok(cont)
-            }
+            ClientResponse::PageContinued(cont) => Ok(cont),
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
         }
     }
 
-    pub async fn get_provider_surface_manifest(
+    pub async fn invoke_action(
         &self,
-        _provider: &str,
-    ) -> Result<ProviderSurfaceManifestWire, ClientError> {
-        self.get_navigation().await
-    }
-
-    pub async fn get_surface(
-        &self,
-        _provider: &str,
-        surface_id: &str,
-    ) -> Result<SurfaceWire, ClientError> {
-        self.get_page(surface_id).await
-    }
-
-    pub async fn continue_surface(
-        &self,
-        _provider: &str,
-        surface_id: &str,
-        cursor: SurfaceCursorWire,
-    ) -> Result<SurfaceContinuationWire, ClientError> {
-        self.continue_page(surface_id, cursor).await
-    }
-
-    pub async fn invoke_surface_action(
-        &self,
-        provider: &str,
-        invocation_token: &str,
-    ) -> Result<SurfaceActionResultWire, ClientError> {
-        match self
-            .send(&ClientRequest::InvokeSurfaceAction {
-                provider: provider.to_string(),
-                invocation_token: invocation_token.to_string(),
-            })
-            .await?
-        {
-            ClientResponse::SurfaceActionResult(res) => Ok(res),
+        action: PageActionWire,
+    ) -> Result<ActionResultWire, ClientError> {
+        match self.send(&ClientRequest::InvokeAction { action }).await? {
+            ClientResponse::ActionResult(res) => Ok(res),
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
         }
     }

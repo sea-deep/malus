@@ -1,5 +1,5 @@
-use malus_protocol::client::ClientResponse;
-use malus_protocol::codec::FrameError;
+use malus_ipc::client::ClientResponse;
+use malus_ipc::codec::FrameError;
 use std::path::PathBuf;
 use std::time::Duration;
 use thiserror::Error;

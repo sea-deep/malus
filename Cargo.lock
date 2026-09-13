@@ -1185,14 +1185,54 @@ dependencies = [
 ]
 
 [[package]]
-name = "malus-apple"
+name = "malus-client"
+version = "0.1.0"
+dependencies = [
+ "malus-ipc",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "malus-gtk"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "libadwaita",
+ "malus-client",
+ "relm4",
+ "reqwest",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "malus-ipc"
+version = "0.1.0"
+dependencies = [
+ "malus-model",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "malus-model"
+version = "0.1.0"
+
+[[package]]
+name = "malus-service"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64",
  "directories",
- "malus-protocol",
- "malus-web-runtime",
+ "malus-ipc",
+ "malus-wpe",
  "reqwest",
  "serde",
  "serde_json",
@@ -1203,93 +1243,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "malus-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "malus-client",
- "malus-protocol",
- "malus-web-runtime",
- "serde_json",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "malus-client"
-version = "0.1.0"
-dependencies = [
- "malus-protocol",
- "tempfile",
- "thiserror",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "malus-core"
-version = "0.1.0"
-
-[[package]]
-name = "malus-daemon"
-version = "0.1.0"
-dependencies = [
- "libc",
- "malus-apple",
- "malus-cli",
- "malus-client",
- "malus-core",
- "malus-protocol",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "malus-gui"
-version = "0.1.0"
-dependencies = [
- "image",
- "libadwaita",
- "malus-client",
- "relm4",
- "reqwest",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "malus-gui-next"
-version = "0.1.0"
-dependencies = [
- "image",
- "libadwaita",
- "malus-client",
- "relm4",
- "reqwest",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "malus-protocol"
-version = "0.1.0"
-dependencies = [
- "malus-core",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "malus-web-runtime"
+name = "malus-wpe"
 version = "0.1.0"
 dependencies = [
  "ar",
@@ -1309,6 +1263,38 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "xz2",
+]
+
+[[package]]
+name = "malusctl"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "malus-client",
+ "malus-ipc",
+ "malus-wpe",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "malusd"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "malus-client",
+ "malus-ipc",
+ "malus-model",
+ "malus-service",
+ "malusctl",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

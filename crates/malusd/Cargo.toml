@@ -1,0 +1,28 @@
+[package]
+name = "malusd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "malusd"
+path = "src/main.rs"
+
+[dependencies]
+malus-model = { path = "../malus-model" }
+malus-ipc = { path = "../malus-ipc" }
+malus-service = { path = "../malus-service" }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+
+[dev-dependencies]
+malus-client = { path = "../malus-client" }
+malusctl = { path = "../malusctl" }
+tempfile = "3.17"

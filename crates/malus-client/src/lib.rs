@@ -12,5 +12,5 @@ pub use error::ClientError;
 pub use socket::default_socket_path;
 
 // Re-export protocol types for convenience
-pub use malus_protocol::client::{ClientEvent, ClientRequest, ClientResponse};
-pub use malus_protocol::wire::*;
+pub use malus_ipc::client::{ClientEvent, ClientRequest, ClientResponse};
+pub use malus_ipc::wire::*;

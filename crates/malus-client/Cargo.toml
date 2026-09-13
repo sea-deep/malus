@@ -7,7 +7,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-malus-protocol = { path = "../malus-protocol" }
+malus-ipc = { path = "../malus-ipc" }
 tokio = { version = "1", features = ["macros", "rt", "net", "io-util", "sync", "time"] }
 thiserror = "2"
 tracing = "0.1"

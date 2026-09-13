@@ -1,15 +1,14 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/malus-core",
-    "crates/malus-protocol",
+    "crates/malus-model",
+    "crates/malus-ipc",
     "crates/malus-client",
-    "crates/malus-daemon",
-    "crates/malus-apple",
-    "crates/malus-web-runtime",
-    "crates/malus-cli",
-    "apps/malus-gui",
-    "apps/malus-gui-next",
+    "crates/malusd",
+    "crates/malus-service",
+    "crates/malus-wpe",
+    "crates/malusctl",
+    "apps/malus-gtk",
 ]
 
 [workspace.package]
