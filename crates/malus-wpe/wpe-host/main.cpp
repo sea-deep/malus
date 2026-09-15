@@ -206,6 +206,8 @@ int main(int argc, char* argv[]) {
         "enable-webrtc", TRUE,
         "enable-encrypted-media", TRUE,
         "enable-write-console-messages-to-stdout", TRUE,
+        "media-playback-requires-user-gesture", FALSE,
+        "media-playback-allows-inline", TRUE,
         nullptr
     );
 

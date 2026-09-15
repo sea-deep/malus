@@ -13,6 +13,7 @@
 #include <mutex>
 #include <atomic>
 #include <chrono>
+#include <algorithm>
 
 // --- CDM Buffer and DecryptedBlock Implementations ---
 
@@ -109,6 +110,7 @@ struct OpenCDMSession : public cdm::Host_10 {
     OpenCDMSessionCallbacks callbacks{};
     void* userData{nullptr};
     cdm::ContentDecryptionModule_10* cdm{nullptr};
+    OpenCDMSystem* system{nullptr};
 
     std::mutex lock;
     std::map<std::vector<uint8_t>, KeyStatus> keys;
@@ -213,12 +215,21 @@ struct OpenCDMSession : public cdm::Host_10 {
             for (auto b : kid) fprintf(stderr, "%02x", b);
             fprintf(stderr, " -> Status: %d (%s)\n", (int)ks, ks == Usable ? "USABLE" : "OTHER");
 
-            if (callbacks.key_update_callback) {
-                callbacks.key_update_callback(this, userData, kid.data(), kid.size());
+            // Compatibility contract with WebKit WPE (CDMProxyThunder):
+            // The OpenCDM `key_update_callback` signature carries only (keyId, length) without
+            // key status. In WebKit, receiving `key_update_callback` adds the key ID to `m_keyStore`,
+            // which causes `CDMProxy::isKeyAvailableUnlocked(keyId)` to return true.
+            // If non-usable keys (Released, Expired, etc.) are forwarded, WebKit assumes the key
+            // is available, skips waiting for a replacement license, and permanently aborts decryption.
+            // Therefore, Malus must only publish Usable keys through `key_update_callback`.
+            if (ks == Usable) {
+                if (callbacks.key_update_callback) {
+                    callbacks.key_update_callback(this, userData, kid.data(), kid.size());
+                }
             }
         }
 
-        if (callbacks.keys_updated_callback) {
+        if (has_additional_usable_key && callbacks.keys_updated_callback) {
             callbacks.keys_updated_callback(this, userData);
         }
     }
@@ -329,17 +340,10 @@ EXTERNAL OpenCDMError opencdm_construct_session(
     fprintf(stderr, "[OpenCDM Shim] opencdm_construct_session: type='%s', len=%u\n",
             initDataType ? initDataType : "null", initDataLength);
 
-    if (initData && initDataLength > 0) {
-        FILE* f_id = fopen("/dev/shm/init52.bin", "wb");
-        if (f_id) {
-            fwrite(initData, 1, initDataLength, f_id);
-            fclose(f_id);
-        }
-    }
-
     if (!system || !session) return ERROR_INVALID_ARG;
 
     auto* s = new OpenCDMSession(system->keySystem, licenseType, callbacks, userData);
+    s->system = system;
 
     if (g_create_cdm) {
         const char* ks = "com.widevine.alpha";
@@ -382,10 +386,21 @@ EXTERNAL OpenCDMError opencdm_construct_session(
 
 EXTERNAL OpenCDMError opencdm_destruct_session(struct OpenCDMSession* session) {
     if (!session) return ERROR_NONE;
-    int rc = --session->refCount;
-    fprintf(stderr, "[OpenCDM Shim] opencdm_destruct_session (remaining refCount=%d)\n", rc);
-    if (rc <= 0) {
-        delete session;
+    if (session->system) {
+        std::lock_guard<std::mutex> lk(session->system->lock);
+        int rc = --session->refCount;
+        fprintf(stderr, "[OpenCDM Shim] opencdm_destruct_session (remaining refCount=%d)\n", rc);
+        if (rc <= 0) {
+            auto& v = session->system->sessions;
+            v.erase(std::remove(v.begin(), v.end(), session), v.end());
+            delete session;
+        }
+    } else {
+        int rc = --session->refCount;
+        fprintf(stderr, "[OpenCDM Shim] opencdm_destruct_session (remaining refCount=%d)\n", rc);
+        if (rc <= 0) {
+            delete session;
+        }
     }
     return ERROR_NONE;
 }
