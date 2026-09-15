@@ -636,7 +636,7 @@ pub fn validate_wpe_runtime(root: &Path) -> Result<WpeCandidate, WebError> {
 ///
 /// Priority:
 /// 1. `custom_dir` if provided (e.g. from RuntimeOptions)
-/// 2. `MALUS_WPE_RUNTIME_DIR` environment variable (or legacy `MALUS_WPE_DIR`)
+/// 2. `MALUS_WPE_RUNTIME_DIR` environment variable
 /// 3. Development runtime directory in workspace (`runtime/wpe`)
 pub fn discover_wpe(custom_dir: Option<&Path>) -> Option<WpeCandidate> {
     if let Some(dir) = custom_dir {
@@ -650,8 +650,6 @@ pub fn discover_wpe(custom_dir: Option<&Path>) -> Option<WpeCandidate> {
 
     if let Ok(env_dir) = env::var("MALUS_WPE_RUNTIME_DIR") {
         search_dirs.push(PathBuf::from(env_dir));
-    } else if let Ok(legacy_env) = env::var("MALUS_WPE_DIR") {
-        search_dirs.push(PathBuf::from(legacy_env));
     }
 
     // 1. Current working directory runtime/wpe

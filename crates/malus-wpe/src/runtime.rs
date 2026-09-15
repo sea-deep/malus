@@ -39,7 +39,7 @@ pub struct RuntimeOptions {
     pub extra_args: Vec<String>,
     /// Whether to disable background timer and occlusion throttling (defaults to true).
     pub disable_background_throttling: bool,
-    /// Optional explicit WPE directory (overrides MALUS_WPE_DIR).
+    /// Optional explicit WPE directory (overrides MALUS_WPE_RUNTIME_DIR).
     pub wpe_dir: Option<PathBuf>,
 }
 

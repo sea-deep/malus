@@ -39,7 +39,7 @@ fi
 source "${VERSIONS_FILE}"
 
 # Patch directory
-PATCH_DIR="${REPO_ROOT}/crates/malus-web-runtime/native/webkit/patches"
+PATCH_DIR="${REPO_ROOT}/crates/malus-wpe/native/webkit/patches"
 
 # Build root locations (under build/wpe, gitignored)
 BUILD_ROOT="${REPO_ROOT}/build/wpe"
@@ -317,22 +317,22 @@ EOF
 fi
 
 # Install Malus OpenCDM headers into prefix (only if different to preserve timestamps)
-for h in "${REPO_ROOT}/crates/malus-web-runtime/native/opencdm/include/opencdm/"*.h; do
+for h in "${REPO_ROOT}/crates/malus-wpe/native/opencdm/include/opencdm/"*.h; do
     install_if_different "$h" "${PREFIX_DIR}/include/opencdm/$(basename "$h")"
 done
 
 # Build OpenCDM shim inside prefix only if source or headers are newer
 OPENCDM_SRCS=(
-    "${REPO_ROOT}/crates/malus-web-runtime/native/opencdm/src/opencdm_shim.cpp"
-    "${REPO_ROOT}/crates/malus-web-runtime/native/opencdm/include/opencdm/"*.h
+    "${REPO_ROOT}/crates/malus-wpe/native/opencdm/src/opencdm_shim.cpp"
+    "${REPO_ROOT}/crates/malus-wpe/native/opencdm/include/opencdm/"*.h
 )
 if needs_rebuild "${PREFIX_DIR}/lib/libocdm.so" "${OPENCDM_SRCS[@]}"; then
     echo "  Compiling libocdm.so inside build prefix..."
     g++ -O2 -fPIC -shared -std=c++14 \
-        -I"${REPO_ROOT}/crates/malus-web-runtime/native/opencdm/include" \
-        -I"${REPO_ROOT}/crates/malus-web-runtime/native/opencdm/include/cdm" \
+        -I"${REPO_ROOT}/crates/malus-wpe/native/opencdm/include" \
+        -I"${REPO_ROOT}/crates/malus-wpe/native/opencdm/include/cdm" \
         $(pkg-config --cflags gstreamer-1.0 gstreamer-base-1.0) \
-        "${REPO_ROOT}/crates/malus-web-runtime/native/opencdm/src/opencdm_shim.cpp" \
+        "${REPO_ROOT}/crates/malus-wpe/native/opencdm/src/opencdm_shim.cpp" \
         $(pkg-config --libs gstreamer-1.0 gstreamer-base-1.0) \
         -ldl \
         -o "${PREFIX_DIR}/lib/libocdm.so"
@@ -516,7 +516,7 @@ patch_rpath_if_needed "${OUTPUT_DIR}/lib/libWPEWebKit-2.0.so.1.9.10" "${PREFIX_D
 
 # 5. Build malus-wpe-host
 HOST_SRCS=(
-    "${REPO_ROOT}/crates/malus-web-runtime/wpe-host/main.cpp"
+    "${REPO_ROOT}/crates/malus-wpe/wpe-host/main.cpp"
     "${WEBKIT_BUILD_DIR}/lib/libWPEToolingBackends.a"
     "${OUTPUT_DIR}/lib/libWPEWebKit-2.0.so.1.9.10"
 )
@@ -532,7 +532,7 @@ if needs_rebuild "${OUTPUT_DIR}/bin/malus-wpe-host" "${HOST_SRCS[@]}"; then
         -I"${PREFIX_DIR}/usr/include/wpe-1.0" \
         -I"${PREFIX_DIR}/usr/include/wpe-fdo-1.0" \
         $(pkg-config --cflags glib-2.0 gio-2.0 libsoup-3.0) \
-        "${REPO_ROOT}/crates/malus-web-runtime/wpe-host/main.cpp" \
+        "${REPO_ROOT}/crates/malus-wpe/wpe-host/main.cpp" \
         "${WEBKIT_BUILD_DIR}/lib/libWPEToolingBackends.a" \
         -L"${OUTPUT_DIR}/lib" -lWPEWebKit-2.0 -lwpe-1.0 -lWPEBackend-fdo-1.0 \
         $(pkg-config --libs glib-2.0 gio-2.0 libsoup-3.0 atk-bridge-2.0 atk) -lepoxy -lwayland-client -lwayland-egl -lxkbcommon \

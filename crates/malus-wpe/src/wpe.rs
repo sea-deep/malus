@@ -369,6 +369,11 @@ impl WpeBackend {
             cmd.env_remove("MALUS_WIDEVINE_PATH");
         }
 
+        // Production audio-only memory optimizations:
+        // Run JavaScriptCore in pure interpreter (LLInt) mode to eliminate JIT code buffer allocations.
+        // MusicKit JS executes only lightweight I/O, token validation, and chunk buffering.
+        cmd.env("JSC_useJIT", "false");
+
         // Process group and parent-death signal configuration
         unsafe {
             cmd.pre_exec(|| {

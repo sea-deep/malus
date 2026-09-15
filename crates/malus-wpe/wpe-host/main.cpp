@@ -168,8 +168,9 @@ int main(int argc, char* argv[]) {
         webkit_cookie_manager_set_accept_policy(cookieManager, WEBKIT_COOKIE_POLICY_ACCEPT_ALWAYS);
     }
 
-    // Initialize WebKitWebContext
+    // Initialize WebKitWebContext with minimal document-viewer cache model
     WebKitWebContext* webContext = WEBKIT_WEB_CONTEXT(g_object_new(WEBKIT_TYPE_WEB_CONTEXT, nullptr));
+    webkit_web_context_set_cache_model(webContext, WEBKIT_CACHE_MODEL_DOCUMENT_VIEWER);
 
     // Configure sandbox paths
     const char* execPath = g_getenv("WEBKIT_EXEC_PATH");
@@ -198,13 +199,14 @@ int main(int argc, char* argv[]) {
             add_sandbox_path_safe(webContext, s_sandbox_paths_rw[i], FALSE);
     }
 
-    // WebKit settings
+    // WebKit settings: lean audio-only runtime profile
     WebKitSettings* settings = webkit_settings_new_with_settings(
-        "enable-developer-extras", TRUE,
-        "enable-webgl", TRUE,
-        "enable-media-stream", TRUE,
-        "enable-webrtc", TRUE,
+        "enable-developer-extras", FALSE,
+        "enable-webgl", FALSE,
+        "enable-media-stream", FALSE,
+        "enable-webrtc", FALSE,
         "enable-encrypted-media", TRUE,
+        "enable-mediasource", TRUE,
         "enable-write-console-messages-to-stdout", TRUE,
         "media-playback-requires-user-gesture", FALSE,
         "media-playback-allows-inline", TRUE,
@@ -219,7 +221,9 @@ int main(int argc, char* argv[]) {
     WebKitUserContentManager* ucm = webkit_user_content_manager_new();
     webkit_user_content_manager_register_script_message_handler(ucm, "malus", nullptr);
 
-    WebKitWebViewBackend* viewBackend = create_view_backend(s_headless_mode, 1280, 720);
+    uint32_t width = s_headless_mode ? 64 : 1280;
+    uint32_t height = s_headless_mode ? 64 : 720;
+    WebKitWebViewBackend* viewBackend = create_view_backend(s_headless_mode, width, height);
 
     WebKitWebView* webView = WEBKIT_WEB_VIEW(g_object_new(
         WEBKIT_TYPE_WEB_VIEW,
