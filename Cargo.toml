@@ -17,3 +17,6 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["Malus Contributors"]
 repository = "https://github.com/sea-deep/malus"
+
+[profile.dev.package."*"]
+opt-level = 2

@@ -229,9 +229,37 @@ impl MalusClient {
     }
 
     pub async fn play_media(&self, reference: &MediaRef) -> Result<(), ClientError> {
+        self.play_media_with_context(reference, None, None).await
+    }
+
+    pub async fn play_media_with_context(
+        &self,
+        reference: &MediaRef,
+        collection: Option<&MediaRef>,
+        index: Option<usize>,
+    ) -> Result<(), ClientError> {
         match self
             .send(&ClientRequest::PlayMedia {
                 reference: reference.clone(),
+                collection: collection.cloned(),
+                index,
+            })
+            .await?
+        {
+            ClientResponse::Ok => Ok(()),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn play_collection(
+        &self,
+        reference: &MediaRef,
+        shuffle: bool,
+    ) -> Result<(), ClientError> {
+        match self
+            .send(&ClientRequest::PlayCollection {
+                reference: reference.clone(),
+                shuffle,
             })
             .await?
         {
@@ -407,24 +435,46 @@ impl MalusClient {
 
     pub async fn play_next(&self, reference: &MediaRef) -> Result<(), ClientError> {
         match self
-            .send(&ClientRequest::PlayNext {
-                reference: reference.clone(),
+            .send(&ClientRequest::InvokeAction {
+                action: PageActionWire::PlayNext(reference.clone()),
             })
             .await?
         {
-            ClientResponse::Ok => Ok(()),
+            ClientResponse::ActionResult(res) => {
+                if res.is_success() {
+                    Ok(())
+                } else {
+                    Err(ClientError::ServerError {
+                        code: "PLAY_NEXT_FAILED".to_string(),
+                        message: res
+                            .message
+                            .unwrap_or_else(|| "Failed to play next".to_string()),
+                    })
+                }
+            }
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
         }
     }
 
     pub async fn play_later(&self, reference: &MediaRef) -> Result<(), ClientError> {
         match self
-            .send(&ClientRequest::PlayLater {
-                reference: reference.clone(),
+            .send(&ClientRequest::InvokeAction {
+                action: PageActionWire::PlayLater(reference.clone()),
             })
             .await?
         {
-            ClientResponse::Ok => Ok(()),
+            ClientResponse::ActionResult(res) => {
+                if res.is_success() {
+                    Ok(())
+                } else {
+                    Err(ClientError::ServerError {
+                        code: "PLAY_LATER_FAILED".to_string(),
+                        message: res
+                            .message
+                            .unwrap_or_else(|| "Failed to play later".to_string()),
+                    })
+                }
+            }
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
         }
     }
@@ -607,6 +657,107 @@ impl MalusClient {
             .await?
         {
             ClientResponse::MediaState(state) => Ok(state),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn remove_from_library(
+        &self,
+        reference: &MediaRef,
+    ) -> Result<AccountMediaState, ClientError> {
+        match self
+            .send(&ClientRequest::RemoveFromLibrary {
+                reference: reference.clone(),
+            })
+            .await?
+        {
+            ClientResponse::MediaState(state) => Ok(state),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn create_playlist(
+        &self,
+        name: impl Into<String>,
+        description: Option<String>,
+        initial_tracks: Vec<MediaRef>,
+    ) -> Result<malus_model::Playlist, ClientError> {
+        match self
+            .send(&ClientRequest::CreatePlaylist {
+                name: name.into(),
+                description,
+                initial_tracks,
+            })
+            .await?
+        {
+            ClientResponse::Playlist(playlist) => Ok(playlist),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn add_tracks_to_playlist(
+        &self,
+        playlist: &MediaRef,
+        tracks: Vec<MediaRef>,
+    ) -> Result<(), ClientError> {
+        match self
+            .send(&ClientRequest::AddTracksToPlaylist {
+                playlist: playlist.clone(),
+                tracks,
+            })
+            .await?
+        {
+            ClientResponse::Ok => Ok(()),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn remove_track_from_playlist(
+        &self,
+        playlist: &MediaRef,
+        track_index: usize,
+        expected_track: &MediaRef,
+    ) -> Result<(), ClientError> {
+        match self
+            .send(&ClientRequest::RemoveTrackFromPlaylist {
+                playlist: playlist.clone(),
+                track_index,
+                expected_track: expected_track.clone(),
+            })
+            .await?
+        {
+            ClientResponse::Ok => Ok(()),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn update_playlist(
+        &self,
+        playlist: &MediaRef,
+        name: impl Into<String>,
+        description: Option<String>,
+    ) -> Result<(), ClientError> {
+        match self
+            .send(&ClientRequest::UpdatePlaylist {
+                playlist: playlist.clone(),
+                name: name.into(),
+                description,
+            })
+            .await?
+        {
+            ClientResponse::Ok => Ok(()),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
+    pub async fn delete_playlist(&self, playlist: &MediaRef) -> Result<(), ClientError> {
+        match self
+            .send(&ClientRequest::DeletePlaylist {
+                playlist: playlist.clone(),
+            })
+            .await?
+        {
+            ClientResponse::Ok => Ok(()),
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
         }
     }

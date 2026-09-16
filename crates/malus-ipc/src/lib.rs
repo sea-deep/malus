@@ -18,6 +18,8 @@ mod tests {
     fn test_client_request_roundtrip() {
         let req = ClientRequest::PlayMedia {
             reference: MediaRef::parse("song:123").unwrap(),
+            collection: Some(MediaRef::parse("album:456").unwrap()),
+            index: Some(2),
         };
         let encoded = encode_message(&req).unwrap();
         let mut buf = encoded;

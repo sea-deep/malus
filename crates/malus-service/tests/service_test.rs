@@ -75,6 +75,9 @@ struct MockAppleWebSession {
     is_paused: Mutex<bool>,
     is_stopped: Mutex<bool>,
     last_seek_ms: Mutex<Option<u64>>,
+    volume: Mutex<u8>,
+    shuffle: Mutex<bool>,
+    repeat: Mutex<RepeatMode>,
     last_play_next: Mutex<Option<(String, String)>>,
     last_play_later: Mutex<Option<(String, String)>>,
     last_jump_idx: Mutex<Option<usize>>,
@@ -83,7 +86,7 @@ struct MockAppleWebSession {
     clear_upcoming_called: Mutex<bool>,
     skip_next_called: Mutex<bool>,
     skip_prev_called: Mutex<bool>,
-    event_sink: Mutex<Option<mpsc::UnboundedSender<PlayerStatus>>>,
+    event_sink: Mutex<Option<mpsc::UnboundedSender<malus_service::PlaybackEvent>>>,
 }
 
 impl MockAppleWebSession {
@@ -97,6 +100,9 @@ impl MockAppleWebSession {
             is_paused: Mutex::new(false),
             is_stopped: Mutex::new(true),
             last_seek_ms: Mutex::new(None),
+            volume: Mutex::new(100),
+            shuffle: Mutex::new(false),
+            repeat: Mutex::new(RepeatMode::Off),
             last_play_next: Mutex::new(None),
             last_play_later: Mutex::new(None),
             last_jump_idx: Mutex::new(None),
@@ -159,7 +165,7 @@ impl AppleWebSession for MockAppleWebSession {
                 "station" => MediaRef::Station(id.to_string()),
                 _ => MediaRef::Song(id.to_string()),
             };
-            let _ = sink.send(PlayerStatus {
+            let _ = sink.send(malus_service::PlaybackEvent::Status(PlayerStatus {
                 state: PlaybackState::Playing,
                 current_track: Some(Track::new(mref, "Mock Apple Song", "Mock Artist")),
                 position_ms: 0,
@@ -168,9 +174,33 @@ impl AppleWebSession for MockAppleWebSession {
                 muted: false,
                 shuffle: false,
                 repeat: RepeatMode::Off,
-            });
+            }));
         }
         Ok(())
+    }
+
+    async fn set_queue_at_index(
+        &self,
+        kind: &str,
+        id: &str,
+        _start_index: usize,
+    ) -> Result<(), AppleError> {
+        self.set_queue(kind, id).await
+    }
+
+    async fn set_queue_with_shuffle(
+        &self,
+        kind: &str,
+        id: &str,
+        shuffle: bool,
+    ) -> Result<(), AppleError> {
+        self.set_shuffle(shuffle).await?;
+        self.set_queue(kind, id).await
+    }
+
+    async fn restart_current_item(&self) -> Result<(), AppleError> {
+        self.seek(0).await?;
+        self.resume().await
     }
 
     async fn pause(&self) -> Result<(), AppleError> {
@@ -191,6 +221,19 @@ impl AppleWebSession for MockAppleWebSession {
 
     async fn seek(&self, position_ms: u64) -> Result<(), AppleError> {
         *self.last_seek_ms.lock().await = Some(position_ms);
+        Ok(())
+    }
+
+    async fn set_volume(&self, volume: u8) -> Result<(), AppleError> {
+        *self.volume.lock().await = volume;
+        Ok(())
+    }
+    async fn set_shuffle(&self, shuffle: bool) -> Result<(), AppleError> {
+        *self.shuffle.lock().await = shuffle;
+        Ok(())
+    }
+    async fn set_repeat(&self, repeat: RepeatMode) -> Result<(), AppleError> {
+        *self.repeat.lock().await = repeat;
         Ok(())
     }
 
@@ -215,10 +258,10 @@ impl AppleWebSession for MockAppleWebSession {
             current_track,
             position_ms: self.last_seek_ms.lock().await.unwrap_or(0),
             duration_ms: 180_000,
-            volume: 100,
+            volume: *self.volume.lock().await,
             muted: false,
-            shuffle: false,
-            repeat: RepeatMode::Off,
+            shuffle: *self.shuffle.lock().await,
+            repeat: *self.repeat.lock().await,
         })
     }
 
@@ -273,7 +316,7 @@ impl AppleWebSession for MockAppleWebSession {
         Ok(())
     }
 
-    fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlayerStatus>) {
+    fn set_event_sink(&self, sink: mpsc::UnboundedSender<malus_service::PlaybackEvent>) {
         if let Ok(mut guard) = self.event_sink.try_lock() {
             *guard = Some(sink);
         }
@@ -888,11 +931,15 @@ async fn test_apple_pages_navigation_manifest() {
     assert_eq!(nav.groups[1].entries[1].route, PageRoute::LibraryArtists);
     assert_eq!(nav.groups[1].entries[2].route, PageRoute::LibraryAlbums);
     assert_eq!(nav.groups[1].entries[3].route, PageRoute::LibrarySongs);
-    assert_eq!(nav.groups[1].entries[4].route, PageRoute::LibraryPlaylists);
+    assert_eq!(nav.groups[1].entries[4].route, PageRoute::LibraryMadeForYou);
 
-    // Replay group
-    assert_eq!(nav.groups[2].id, "replay");
-    assert!(!nav.groups[2].entries.is_empty());
+    // Playlists group
+    assert_eq!(nav.groups[2].id, "playlists");
+    assert_eq!(nav.groups[2].entries[0].route, PageRoute::LibraryPlaylists);
+    assert_eq!(
+        nav.groups[2].entries[1].route,
+        PageRoute::Playlist("p.VRU64LvNXP".to_string())
+    );
 }
 
 #[tokio::test]
@@ -974,37 +1021,35 @@ async fn test_apple_pages_home_generation() {
 
     let page = service.get_page(&PageRoute::Home).await.expect("home page");
     assert_eq!(page.id, "home");
-    assert_eq!(page.title, "Listen Now");
-    assert_eq!(page.sections.len(), 3);
+    assert_eq!(page.title, "Home");
+    assert_eq!(page.sections.len(), 4);
 
-    // Section 1: Recommendations
-    assert_eq!(page.sections[0].title.as_deref(), Some("Favorites Mix"));
+    // Section 0: Top Picks for You
+    assert_eq!(page.sections[0].id, "top-picks");
+    assert_eq!(page.sections[0].title.as_deref(), Some("Top Picks for You"));
     assert_eq!(page.sections[0].items.len(), 1);
     assert_eq!(page.sections[0].items[0].id, "pl.fav");
-    assert_eq!(
-        page.sections[0].items[0].entity,
-        Some(MediaRef::Playlist("pl.fav".to_string()))
-    );
-    assert_eq!(
-        page.sections[0].items[0].open_route,
-        Some(PageRoute::Playlist("pl.fav".to_string()))
-    );
 
-    // Section 2: Recently Played
+    // Section 1: Recently Played
     assert_eq!(page.sections[1].id, "recently-played");
     assert_eq!(page.sections[1].items.len(), 1);
     assert_eq!(page.sections[1].items[0].id, "1440857781");
+
+    // Section 2: Recommendations
+    assert_eq!(page.sections[2].title.as_deref(), Some("Favorites Mix"));
+    assert_eq!(page.sections[2].items.len(), 1);
+    assert_eq!(page.sections[2].items[0].id, "pl.fav");
     assert_eq!(
-        page.sections[1].items[0].entity,
-        Some(MediaRef::Song("1440857781".to_string()))
+        page.sections[2].items[0].entity,
+        Some(MediaRef::Playlist("pl.fav".to_string()))
     );
 
     // Section 3: Heavy Rotation
-    assert_eq!(page.sections[2].id, "heavy-rotation");
-    assert_eq!(page.sections[2].items.len(), 1);
-    assert_eq!(page.sections[2].items[0].id, "1440857780");
+    assert_eq!(page.sections[3].id, "heavy-rotation");
+    assert_eq!(page.sections[3].items.len(), 1);
+    assert_eq!(page.sections[3].items[0].id, "1440857780");
     assert_eq!(
-        page.sections[2].items[0].entity,
+        page.sections[3].items[0].entity,
         Some(MediaRef::Album("1440857780".to_string()))
     );
 
@@ -1119,5 +1164,66 @@ async fn test_apple_pages_detail_generation() {
     assert_eq!(
         playlist_page.sections[0].items[0].entity,
         Some(MediaRef::Song("1440857781".to_string()))
+    );
+}
+
+#[tokio::test]
+async fn player_settings_reach_the_session_and_preserve_silence() {
+    let session = Arc::new(MockAppleWebSession::new());
+    let service = AppleService::with_session(session);
+    for volume in [0, 25, 50, 100, 255] {
+        service.set_volume(volume).await.unwrap();
+        assert_eq!(service.get_status().await.unwrap().volume, volume.min(100));
+    }
+    service.set_shuffle(true).await.unwrap();
+    service.set_repeat(RepeatMode::Track).await.unwrap();
+    let status = service.get_status().await.unwrap();
+    assert!(status.shuffle);
+    assert_eq!(status.repeat, RepeatMode::Track);
+}
+
+#[tokio::test]
+async fn library_song_uses_apple_catalog_relationship_without_changing_identity() {
+    let (base, shutdown) = spawn_mock_apple_api(vec![(200, serde_json::json!({
+        "data": [{"id":"i.local", "relationships":{"catalog":{"data":[{"id":"12345", "type":"songs"}]}}}]
+    }))]).await;
+    let tokens = Arc::new(StaticTokenProvider::new(AppleCredentials::new(
+        "dev", "user", "us",
+    )));
+    let api = OfficialAppleMusicApi::with_base_url(tokens, base);
+    let library = MediaRef::Song("i.local".into());
+    assert_eq!(
+        api.catalog_reference(&library).await.unwrap(),
+        MediaRef::Song("12345".into())
+    );
+    // A second call uses the cached relationship, not another request.
+    assert_eq!(
+        api.catalog_reference(&library).await.unwrap(),
+        MediaRef::Song("12345".into())
+    );
+    assert_eq!(library.to_string(), "song:i.local");
+    let _ = shutdown.send(());
+}
+
+#[tokio::test]
+async fn collection_play_sets_requested_shuffle_and_preserves_resource_identity() {
+    let mock = Arc::new(MockAppleWebSession::new());
+    let service = AppleService::with_session(mock.clone());
+    service
+        .play_collection(&MediaRef::Album("123".into()), true)
+        .await
+        .unwrap();
+    assert!(*mock.shuffle.lock().await);
+    assert_eq!(*mock.last_played_kind.lock().await, Some("album".into()));
+    assert_eq!(*mock.last_played_track.lock().await, Some("123".into()));
+    service
+        .play_collection(&MediaRef::Playlist("p.actual".into()), false)
+        .await
+        .unwrap();
+    assert!(!*mock.shuffle.lock().await);
+    assert_eq!(*mock.last_played_kind.lock().await, Some("playlist".into()));
+    assert_eq!(
+        *mock.last_played_track.lock().await,
+        Some("p.actual".into())
     );
 }

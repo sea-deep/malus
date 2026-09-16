@@ -91,7 +91,7 @@ async fn test_daemon_navigation_and_pages_over_ipc() {
         assert_eq!(nav.groups.len(), 3);
         assert_eq!(nav.groups[0].id, "discover");
         assert_eq!(nav.groups[1].id, "library");
-        assert_eq!(nav.groups[2].id, "replay");
+        assert_eq!(nav.groups[2].id, "playlists");
     } else {
         panic!("Expected Navigation response, got {resp:?}");
     }
@@ -99,7 +99,7 @@ async fn test_daemon_navigation_and_pages_over_ipc() {
     // 2. GetPage with client helper
     let page = client.get_page(&PageRoute::Home).await.unwrap();
     assert_eq!(page.id, "home");
-    assert_eq!(page.title, "Listen Now");
+    assert_eq!(page.title, "Home");
 }
 
 #[tokio::test]
@@ -111,6 +111,8 @@ async fn test_daemon_playback_control_lifecycle() {
     let resp = client
         .send(&ClientRequest::PlayMedia {
             reference: MediaRef::parse("song:617154362").unwrap(),
+            collection: None,
+            index: None,
         })
         .await
         .unwrap();
@@ -217,4 +219,22 @@ async fn test_daemon_media_state_events() {
         }
         other => panic!("Expected MediaStateChanged event, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn test_daemon_playlist_mutation_requests() {
+    let server = TestServer::start().await;
+    let client = MalusClient::connect(&server.sock_path)
+        .await
+        .expect("Client connect");
+
+    // Empty playlist creation should validate empty name or reach service
+    let res = client.create_playlist("", None, vec![]).await;
+    assert!(res.is_err(), "Empty playlist name must fail validation");
+
+    let del_res = client
+        .delete_playlist(&MediaRef::Playlist("p.test".to_string()))
+        .await;
+    // Without live profile auth, it returns an error (auth/network/upstream), NOT an unexpected response or IPC framing crash
+    assert!(del_res.is_err());
 }

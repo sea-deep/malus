@@ -192,6 +192,14 @@ pub fn parse_apple_playlist(item: &Value) -> Option<Playlist> {
     let curator = attrs["curatorName"].as_str().map(str::to_string);
     let track_count = attrs["trackCount"].as_u64().map(|n| n as u32);
     let artwork = attrs.get("artwork").and_then(parse_apple_artwork);
+    let can_edit = attrs["canEdit"].as_bool().unwrap_or(false);
+    let can_delete = attrs["canDelete"].as_bool().unwrap_or(can_edit);
+    let is_library = item["type"].as_str() == Some("library-playlists")
+        || attrs
+            .get("playParams")
+            .and_then(|p| p["isLibrary"].as_bool())
+            .unwrap_or(false)
+        || raw_id.starts_with("p.");
 
     Some(Playlist {
         id: media_ref,
@@ -200,5 +208,8 @@ pub fn parse_apple_playlist(item: &Value) -> Option<Playlist> {
         description,
         track_count,
         artwork,
+        is_library,
+        can_edit,
+        can_delete,
     })
 }

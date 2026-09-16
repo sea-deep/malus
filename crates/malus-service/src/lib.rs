@@ -14,6 +14,6 @@ pub use error::AppleError;
 pub use pages::{continue_apple_page, get_apple_page};
 pub use service::AppleService;
 pub use web::{
-    AppleWebSession, ProductionAppleWebSession, parse_apple_album, parse_apple_artist,
-    parse_apple_artwork, parse_apple_playlist, parse_apple_track,
+    AppleWebSession, PlaybackEvent, ProductionAppleWebSession, parse_apple_album,
+    parse_apple_artist, parse_apple_artwork, parse_apple_playlist, parse_apple_track,
 };

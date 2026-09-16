@@ -12,8 +12,8 @@ pub fn apple_navigation() -> NavigationWire {
                 "discover",
                 Some("Discover".to_string()),
                 vec![
-                    NavEntryWire::with_icon(PageRoute::Home, "Listen Now", "house"),
-                    NavEntryWire::with_icon(PageRoute::New, "Browse", "compass"),
+                    NavEntryWire::with_icon(PageRoute::Home, "Home", "house"),
+                    NavEntryWire::with_icon(PageRoute::New, "New", "compass"),
                     NavEntryWire::with_icon(PageRoute::Radio, "Radio", "radio"),
                 ],
             ),
@@ -29,17 +29,24 @@ pub fn apple_navigation() -> NavigationWire {
                     NavEntryWire::with_icon(PageRoute::LibraryArtists, "Artists", "music-mic"),
                     NavEntryWire::with_icon(PageRoute::LibraryAlbums, "Albums", "record-vinyl"),
                     NavEntryWire::with_icon(PageRoute::LibrarySongs, "Songs", "music-note"),
-                    NavEntryWire::with_icon(PageRoute::LibraryPlaylists, "Playlists", "music-list"),
+                    NavEntryWire::with_icon(PageRoute::LibraryMadeForYou, "Made for You", "star"),
                 ],
             ),
             NavGroupWire::new(
-                "replay",
-                Some("Year in Review".to_string()),
-                vec![NavEntryWire::with_icon(
-                    PageRoute::Replay(2024),
-                    "Replay",
-                    "replay",
-                )],
+                "playlists",
+                Some("Playlists".to_string()),
+                vec![
+                    NavEntryWire::with_icon(
+                        PageRoute::LibraryPlaylists,
+                        "All Playlists",
+                        "music-list",
+                    ),
+                    NavEntryWire::with_icon(
+                        PageRoute::Playlist("p.VRU64LvNXP".to_string()),
+                        "Favourite Songs",
+                        "star-fill",
+                    ),
+                ],
             ),
         ],
     }
@@ -59,7 +66,7 @@ mod tests {
         assert_eq!(nav.groups[0].id, "discover");
         assert_eq!(nav.groups[0].entries.len(), 3);
         assert_eq!(nav.groups[0].entries[0].route, PageRoute::Home);
-        assert_eq!(nav.groups[0].entries[0].label, "Listen Now");
+        assert_eq!(nav.groups[0].entries[0].label, "Home");
 
         // Library
         assert_eq!(nav.groups[1].id, "library");
@@ -69,9 +76,9 @@ mod tests {
             PageRoute::LibraryRecentlyAdded
         );
 
-        // Replay
-        assert_eq!(nav.groups[2].id, "replay");
-        assert_eq!(nav.groups[2].entries[0].route, PageRoute::Replay(2024));
+        // Playlists
+        assert_eq!(nav.groups[2].id, "playlists");
+        assert_eq!(nav.groups[2].entries[0].route, PageRoute::LibraryPlaylists);
     }
 
     #[test]

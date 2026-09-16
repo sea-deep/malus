@@ -373,6 +373,12 @@ impl WpeBackend {
         // Run JavaScriptCore in pure interpreter (LLInt) mode to eliminate JIT code buffer allocations.
         // MusicKit JS executes only lightweight I/O, token validation, and chunk buffering.
         cmd.env("JSC_useJIT", "false");
+        // Bound JavaScriptCore large heap baseline to 16MB to reduce initial heap retention.
+        cmd.env("JSC_largeHeapSize", "16777216");
+        // Eliminate Mesa llvmpipe worker threads in headless audio-only runtime.
+        cmd.env("LP_NUM_THREADS", "0");
+        // Limit glibc multi-arena sprawl in WPE worker threads to reduce private dirty fragmentation.
+        cmd.env("MALLOC_ARENA_MAX", "2");
 
         // Process group and parent-death signal configuration
         unsafe {

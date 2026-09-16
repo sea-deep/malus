@@ -1,304 +1,622 @@
 /* ================================================================
- * Malus Consumer Music Player Design System
- * Governed strictly by:
- * - 4px Base Grid
- * - 8px Primary Layout Rhythm
- * - Modular Typography Scale (13, 16, 19, 23, 32)
- * - GTK System Theme Inheritance (Dark & Light)
- * - Zero Gradients in Application Chrome
- * - Zero Card Hell
+ * Malus GTK Desktop Music Player Design System
+ * Inspired by Apple Music Tahoe & Native GTK4 / Libadwaita
  * ================================================================ */
 
 /* --- Base Window Surface --- */
 window.malus-window {
     background-color: @window_bg_color;
     color: @window_fg_color;
-    font-size: 16px;
-    line-height: 24px;
-}
-
-/* Minimal Top Navigation Header */
-headerbar.malus-header {
-    min-height: 40px;
-    padding: 0 12px;
-    background-color: transparent;
-    border-bottom: 1px solid alpha(currentColor, 0.08);
-}
-
-.header-nav-btn {
-    min-width: 32px;
-    min-height: 32px;
-    padding: 4px;
-    border-radius: 6px;
-    background: transparent;
-    border: none;
-    color: alpha(currentColor, 0.7);
-}
-
-.header-nav-btn:hover {
-    background-color: alpha(currentColor, 0.08);
-    color: currentColor;
-}
-
-.header-nav-btn:disabled {
-    color: alpha(currentColor, 0.25);
-}
-
-/* --- Quiet Sidebar Navigation (224px) --- */
-.sidebar {
-    background-color: alpha(currentColor, 0.02);
-    border-right: 1px solid alpha(currentColor, 0.08);
-    min-width: 224px;
-    padding: 16px 8px;
-}
-
-.sidebar-heading {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: alpha(currentColor, 0.5);
-    padding: 8px 12px 4px 12px;
-    margin-top: 16px;
-}
-
-.sidebar-item {
-    min-height: 40px;
-    padding: 0 12px;
-    border-radius: 6px;
-    background: transparent;
-    border: none;
-    color: alpha(currentColor, 0.8);
     font-size: 15px;
-    font-weight: 500;
-    transition: background-color 120ms ease, color 120ms ease;
-}
-
-.sidebar-item:hover {
-    background-color: alpha(currentColor, 0.06);
-    color: currentColor;
-}
-
-.sidebar-item-selected {
-    background-color: alpha(currentColor, 0.12);
-    color: currentColor;
-    font-weight: 600;
-}
-
-.sidebar-icon {
-    min-width: 20px;
-    min-height: 20px;
-    margin-right: 12px;
-}
-
-/* --- Content Surface & Typography --- */
-.page {
-    padding: 32px;
-    background-color: @view_bg_color;
-}
-
-.page-title {
-    font-size: 32px;
-    line-height: 40px;
-    font-weight: 700;
-    letter-spacing: -0.02em;
-    color: @view_fg_color;
-    margin-bottom: 24px;
-}
-
-.section-title {
-    font-size: 23px;
-    line-height: 28px;
-    font-weight: 600;
-    color: @view_fg_color;
-    margin-top: 32px;
-    margin-bottom: 16px;
-}
-
-.secondary {
-    font-size: 13px;
-    line-height: 18px;
-    color: alpha(currentColor, 0.6);
-}
-
-/* --- Music Content Grid & Tiles --- */
-.content-grid {
-    margin-bottom: 32px;
-}
-
-.album-tile {
-    padding: 8px;
-    border-radius: 8px;
-    background: transparent;
-    border: none;
-    transition: background-color 150ms ease;
-}
-
-.album-tile:hover {
-    background-color: alpha(currentColor, 0.05);
-}
-
-.album-artwork {
-    border-radius: 10px;
-    background-color: alpha(currentColor, 0.06);
-}
-
-.album-title {
-    font-size: 16px;
     line-height: 22px;
-    font-weight: 600;
-    color: @view_fg_color;
-    margin-top: 8px;
 }
 
-.album-artist {
-    font-size: 13px;
-    line-height: 18px;
-    color: alpha(currentColor, 0.6);
-    margin-top: 2px;
-}
-
-/* --- Persistent Player (88px structurally attached) --- */
-.player {
-    min-height: 88px;
-    background-color: @window_bg_color;
+/* --- Compact bottom transport --- */
+.player-bar {
+    background-color: mix(@window_bg_color, @view_bg_color, 0.45);
     border-top: 1px solid alpha(currentColor, 0.08);
-    padding: 4px 24px 8px 24px;
+    color: @window_fg_color;
+    min-height: 84px;
+    padding: 0 12px;
 }
-
-.player-control-row {
-    min-height: 52px;
+.player-identity { padding: 4px 8px; margin: 0 6px 0 0; border-radius: 10px; transition: background-color 150ms ease; }
+.player-identity:hover { background-color: alpha(currentColor, 0.06); }
+.player-artwork { border-radius: 8px; background-color: alpha(currentColor, 0.06); box-shadow: 0 3px 10px alpha(black, 0.18); }
+.player-track-title { font-size: 13.5px; font-weight: 650; }
+.player-track-artist { font-size: 12px; color: alpha(currentColor, 0.65); }
+.player-icon-btn {
+    min-width: 32px; min-height: 32px; padding: 5px; border-radius: 8px;
+    color: alpha(currentColor, 0.75); transition: background-color 120ms ease, color 120ms ease;
 }
-
-.player-artwork {
-    border-radius: 10px;
-    background-color: alpha(currentColor, 0.06);
+.player-icon-btn:hover { background-color: alpha(currentColor, 0.08); color: currentColor; }
+.player-play-btn {
+    min-width: 36px; min-height: 36px; padding: 4px; border-radius: 999px;
+    background: @accent_bg_color; color: @accent_fg_color; box-shadow: none;
+    transition: background-color 120ms ease;
 }
+.player-play-btn image { -gtk-icon-size: 22px; }
+.player-play-btn:hover { background-color: shade(@accent_bg_color, 1.12); }
+.player-favorite-btn { min-width: 30px; min-height: 30px; padding: 5px; color: alpha(currentColor, 0.55); border-radius: 8px; }
+.player-favorite-btn:hover { background-color: alpha(currentColor, 0.06); color: currentColor; }
+.favorite-active { color: @accent_color; }
+.utility-active { background-color: alpha(currentColor, 0.12); color: currentColor; }
+.seek-time-label { font-size: 11px; font-variant-numeric: tabular-nums; color: alpha(currentColor, 0.55); }
+scale.seek-bar { padding: 6px 0; min-height: 14px; }
+scale.volume-slider { padding: 6px 0; min-height: 14px; min-width: 60px; color: @window_fg_color; }
+scale.seek-bar trough, scale.volume-slider trough {
+    min-height: 4px; border-radius: 9999px; background-color: alpha(@window_fg_color, 0.14); box-shadow: none; border: none;
+}
+scale.seek-bar highlight {
+    min-height: 4px; border-radius: 9999px; background-color: @accent_color; box-shadow: none; border: none;
+}
+.now-playing scale.seek-bar highlight {
+    background-color: alpha(white, 0.85);
+}
+scale.volume-slider highlight {
+    min-height: 4px; border-radius: 9999px; background-color: alpha(@window_fg_color, 0.75); color: @window_fg_color; box-shadow: none; border: none;
+}
+.now-playing scale.volume-slider highlight {
+    background-color: alpha(white, 0.75);
+    color: white;
+}
+scale.seek-bar slider, scale.volume-slider slider {
+    min-width: 12px; min-height: 12px; margin: 0; padding: 0; border-radius: 50%;
+    background: currentColor; box-shadow: 0 2px 5px alpha(black, 0.25); border: none; opacity: 0.85;
+}
+scale.seek-bar:hover slider, scale.volume-slider:hover slider { opacity: 1; }
 
-.player-title {
-    font-size: 15px;
-    line-height: 20px;
-    font-weight: 600;
+/* --- Left Navigation Sidebar --- */
+.sidebar {
+    background-color: mix(@window_bg_color, @view_bg_color, 0.25);
+    border-right: 1px solid alpha(currentColor, 0.07);
     color: @window_fg_color;
 }
 
-.player-artist {
+.sidebar-brand-title {
+    font-size: 29px;
+    font-weight: 800;
+    letter-spacing: -0.015em;
+    color: currentColor;
+    margin: 10px 10px 14px 10px;
+}
+
+.sidebar-search {
+    border-radius: 8px;
+    background-color: alpha(currentColor, 0.06);
+    border: 1px solid alpha(currentColor, 0.05);
+    padding: 1px 4px;
+    min-height: 32px;
     font-size: 13px;
-    line-height: 18px;
+}
+
+.sidebar-group-header {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: alpha(currentColor, 0.58);
+}
+
+.sidebar-row {
+    min-height: 34px;
+    padding: 0 10px;
+    border-radius: 9px;
+    background: transparent;
+    border: none;
+    color: alpha(currentColor, 0.82);
+    font-size: 13px;
+    font-weight: 500;
+    transition: background-color 100ms ease, color 100ms ease;
+}
+
+.sidebar-row:hover {
+    background-color: alpha(currentColor, 0.06);
+    color: currentColor;
+}
+
+.sidebar-row-active {
+    background-color: alpha(@accent_bg_color, 0.14);
+    color: @accent_color;
+    font-weight: 650;
+}
+
+.sidebar-row-active image {
+    color: @accent_color;
+}
+
+.sidebar-profile-avatar {
+    color: @accent_color;
+    background-color: alpha(@accent_bg_color, 0.14);
+    border-radius: 9999px;
+    padding: 2px;
+}
+
+.sidebar-profile-label {
+    font-weight: 600;
+    font-size: 13px;
+}
+
+/* --- Content Surfaces and Typography --- */
+.feed-scrolled-window, .search-scrolled-window {
+    background-color: @view_bg_color;
+    background-image: linear-gradient(155deg, alpha(@accent_bg_color, 0.055), transparent 420px);
+    color: @view_fg_color;
+}
+
+.page-title {
+    font-size: 38px;
+    line-height: 46px;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    color: @view_fg_color;
+}
+
+.page-subtitle {
+    font-size: 15px;
     color: alpha(currentColor, 0.6);
 }
 
-.player-idle {
-    font-size: 13px;
-    color: alpha(currentColor, 0.4);
+.section-title {
+    font-size: 22px;
+    line-height: 28px;
+    font-weight: 700;
+    color: @view_fg_color;
 }
 
-/* Transport Buttons */
-.player-btn-normal {
+.section-subtitle {
+    font-size: 13px;
+    color: alpha(currentColor, 0.6);
+}
+
+/* --- Hero Banner (Album, Artist, Playlist Header) --- */
+.hero-header {
+    padding: 24px;
+    margin-bottom: 8px;
+    border-radius: 20px;
+    background-image: linear-gradient(120deg, alpha(@accent_bg_color, 0.14), alpha(currentColor, 0.025));
+    border: 1px solid alpha(currentColor, 0.06);
+}
+
+.hero-artwork {
+    border-radius: 14px;
+    box-shadow: 0 10px 28px alpha(black, 0.28);
+    background-color: alpha(currentColor, 0.08);
+}
+
+.hero-title {
+    font-size: 34px;
+    line-height: 40px;
+    font-weight: 700;
+    color: @view_fg_color;
+}
+
+.hero-subtitle {
+    font-size: 16px;
+    color: alpha(currentColor, 0.75);
+    font-weight: 500;
+}
+
+.hero-metadata {
+    font-size: 13px;
+    color: alpha(currentColor, 0.5);
+}
+
+.hero-play-btn {
+    border-radius: 10px;
+    font-weight: 600;
+    padding: 8px 22px;
+}
+
+.hero-action-btn {
+    min-width: 36px;
+    min-height: 36px;
+    border-radius: 9px;
+    background-color: alpha(currentColor, 0.06);
+    transition: background-color 140ms ease;
+}
+
+.hero-action-btn:hover {
+    background-color: alpha(currentColor, 0.12);
+}
+
+/* --- Media Cards & Shelves --- */
+flowboxchild {
+    padding: 0;
+    margin: 0;
+    background: transparent;
+}
+
+.media-card {
+    padding: 6px;
+    border-radius: 16px;
+    transition: background-color 140ms ease;
+}
+
+.media-card:hover {
+    background-color: alpha(currentColor, 0.06);
+}
+
+.card-artwork {
+    border-radius: 14px;
+    background-color: alpha(currentColor, 0.06);
+    box-shadow: 0 6px 18px alpha(black, 0.22);
+}
+
+.card-artwork-circular {
+    border-radius: 9999px;
+    background-color: alpha(currentColor, 0.06);
+    box-shadow: 0 4px 14px alpha(black, 0.16);
+}
+
+.card-play-overlay {
     min-width: 40px;
     min-height: 40px;
-    border-radius: 6px;
-    background: transparent;
+    border-radius: 9999px;
+    background-color: alpha(black, 0.82);
+    color: white;
     border: none;
-    color: alpha(currentColor, 0.75);
-    padding: 8px;
+    opacity: 0.0;
+    box-shadow: 0 4px 12px alpha(black, 0.35);
+    transition: opacity 160ms ease, transform 140ms ease;
 }
 
-.player-btn-normal:hover {
-    background-color: alpha(currentColor, 0.08);
-    color: currentColor;
-}
-
-.player-btn-normal:disabled {
-    color: alpha(currentColor, 0.25);
-}
-
-.player-btn-prominent {
-    min-width: 48px;
-    min-height: 48px;
-    border-radius: 50%;
-    background-color: alpha(currentColor, 0.12);
-    border: none;
-    color: currentColor;
-    padding: 12px;
-    transition: background-color 120ms ease, transform 80ms ease;
-}
-
-.player-btn-prominent:hover {
-    background-color: alpha(currentColor, 0.2);
-}
-
-.player-btn-prominent:disabled {
-    opacity: 0.4;
-}
-
-/* Progress / Seek Row (32px) */
-.player-progress-row {
-    min-height: 28px;
-}
-
-.player-time {
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-    color: alpha(currentColor, 0.55);
-    min-width: 44px;
-}
-
-/* Native GtkScale Styling */
-.player-seek-scale {
-    margin: 0 12px;
-}
-
-.player-seek-scale trough {
-    min-height: 4px;
-    border-radius: 2px;
-    background-color: alpha(currentColor, 0.15);
-}
-
-.player-seek-scale highlight {
-    min-height: 4px;
-    border-radius: 2px;
-    background-color: currentColor;
-}
-
-.player-seek-scale slider {
-    min-width: 8px;
-    min-height: 8px;
-    margin: -2px;
-    border-radius: 50%;
-    background-color: currentColor;
-    opacity: 0.7;
-    transition: min-width 100ms ease, min-height 100ms ease, opacity 100ms ease;
-}
-
-.player-seek-scale:hover slider {
-    min-width: 12px;
-    min-height: 12px;
-    margin: -4px;
+.media-card:hover .card-play-overlay,
+.media-card:focus-within .card-play-overlay {
     opacity: 1.0;
 }
 
-/* Volume Control */
-.player-volume-scale {
-    min-width: 80px;
+.card-overline {
+    font-size: 11px;
+    font-weight: 700;
+    color: alpha(currentColor, 0.55);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    line-height: 14px;
 }
 
-.player-volume-scale trough {
-    min-height: 4px;
-    border-radius: 2px;
-    background-color: alpha(currentColor, 0.15);
+.card-title {
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 18px;
 }
 
-.player-volume-scale highlight {
-    min-height: 4px;
-    border-radius: 2px;
-    background-color: currentColor;
+.card-subtitle {
+    font-size: 12.5px;
+    color: alpha(currentColor, 0.6);
+    line-height: 16px;
 }
 
-.player-volume-scale slider {
-    min-width: 8px;
-    min-height: 8px;
-    margin: -2px;
-    border-radius: 50%;
-    background-color: currentColor;
+/* --- Artist Master-Detail Layout --- */
+.artist-master-list {
+    border-right: 1px solid alpha(currentColor, 0.08);
+}
+
+.artist-row {
+    padding: 6px 10px;
+    border-radius: 8px;
+    transition: background-color 100ms ease;
+}
+
+.artist-row:hover {
+    background-color: alpha(currentColor, 0.08);
+}
+
+.artist-row-active {
+    background-color: @accent_color;
+    color: #ffffff;
+    border-radius: 8px;
+}
+
+.artist-row-active .card-title,
+.artist-row-active label {
+    color: @accent_fg_color;
+    font-weight: 700;
+}
+
+/* --- Track Rows --- */
+.track-row {
+    padding: 6px 10px;
+    border-radius: 8px;
+    transition: background-color 120ms ease;
+}
+
+.track-row:hover {
+    background-color: alpha(currentColor, 0.06);
+}
+
+.track-number {
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    color: alpha(currentColor, 0.60);
+}
+
+.track-artwork {
+    border-radius: 6px;
+    background-color: alpha(currentColor, 0.06);
+    box-shadow: 0 2px 6px alpha(black, 0.12);
+}
+
+.track-title {
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 18px;
+}
+
+.track-artist {
+    font-size: 12.5px;
+    color: alpha(currentColor, 0.6);
+    line-height: 16px;
+}
+
+.track-artwork {
+    min-width: 40px;
+    min-height: 40px;
+    border-radius: 4px;
+}
+
+.track-duration {
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: alpha(currentColor, 0.60);
+    min-width: 36px;
+}
+
+.badge-explicit {
+    font-size: 9px;
+    font-weight: 700;
+    border: 1px solid alpha(currentColor, 0.58);
+    border-radius: 3px;
+    padding: 1px 4px;
+    color: alpha(currentColor, 0.6);
+}
+
+.track-action-btn {
+    min-width: 28px;
+    min-height: 28px;
+    padding: 4px;
+    border-radius: 6px;
+    color: alpha(currentColor, 0.58);
+    transition: color 120ms ease;
+}
+
+.track-action-btn:hover {
+    color: currentColor;
+}
+
+listview.track-list-view {
+    background: transparent;
+}
+
+listview.track-list-view > row {
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: transparent;
+}
+
+listview.track-list-view > row:hover {
+    background: transparent;
+}
+
+listview.track-list-view > row:selected {
+    background: transparent;
+}
+
+/* --- Right Utility Pane (Queue & Lyrics) --- */
+.utility-pane {
+    background-color: @window_bg_color;
+    border-left: 1px solid alpha(currentColor, 0.08);
+    color: @window_fg_color;
+}
+
+.utility-title {
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.utility-action-btn {
+    font-size: 13px;
+    color: alpha(currentColor, 0.7);
+}
+
+.utility-empty-label {
+    font-size: 14px;
+    color: alpha(currentColor, 0.60);
+}
+
+.queue-section-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: alpha(currentColor, 0.60);
+}
+
+.queue-row {
+    padding: 6px 8px;
+    border-radius: 6px;
+}
+
+.queue-row:hover {
+    background-color: alpha(currentColor, 0.06);
+}
+
+.queue-row-current {
+    background-color: alpha(currentColor, 0.08);
+}
+
+.queue-art {
+    min-width: 40px;
+    min-height: 40px;
+    border-radius: 4px;
+    background-color: alpha(currentColor, 0.06);
+}
+
+.queue-art.upcoming {
+    min-width: 36px;
+    min-height: 36px;
+}
+
+.queue-title {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 16px;
+}
+
+.queue-artist {
+    font-size: 11px;
+    color: alpha(currentColor, 0.6);
+}
+
+.queue-duration {
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: alpha(currentColor, 0.60);
+}
+
+.queue-action-btn {
+    min-width: 24px;
+    min-height: 24px;
+    padding: 2px;
+    border-radius: 4px;
+    color: alpha(currentColor, 0.58);
+}
+
+.queue-action-btn:hover {
+    color: currentColor;
+}
+
+/* Lyrics views share row structure and one current-line calculation. */
+.lyric-line { padding: 2px 0; margin: 0; border-radius: 6px; font-weight: 700; }
+.pane-lyrics .lyric-line { font-size: 21px; color: alpha(currentColor, 0.36); }
+.pane-lyrics .lyric-active, .pane-lyrics .lyric-unsynced { color: @view_fg_color; }
+.lyrics-empty { font-size: 15px; color: alpha(currentColor, 0.62); }
+
+/* Immersive player: all color comes from the decoded artwork wash. */
+.now-playing { background: #171719; color: #ffffff; }
+.nowplaying-artwork { border-radius: 10px; background-color: alpha(white, 0.035); }
+.nowplaying-title { font-size: 21px; font-weight: 700; color: white; }
+.nowplaying-artist { font-size: 15px; color: alpha(white, 0.65); }
+.now-playing .seek-time-label { font-size: 12px; color: alpha(white, 0.58); }
+.now-playing .seek-bar { padding: 6px 0; color: white; }
+.now-playing .volume-slider { color: alpha(white, 0.68); }
+.now-playing .np-control, .now-playing .player-favorite-btn {
+    min-width: 30px; min-height: 30px; padding: 4px; border-radius: 8px;
+    background: transparent; color: alpha(white, 0.76); box-shadow: none; border: none;
+}
+.now-playing .np-control image { -gtk-icon-size: 20px; }
+.now-playing .np-play {
+    min-width: 52px; min-height: 52px; padding: 2px; border-radius: 12px;
+    background: transparent; color: white; box-shadow: none; border: none;
+}
+.now-playing .np-play image { -gtk-icon-size: 36px; }
+.now-playing .np-play:hover, .now-playing .np-control:hover { background: alpha(white, 0.10); }
+.now-playing .control-active { color: white; background: alpha(white, 0.14); }
+.now-playing .favorite-active { color: @accent_color; background: alpha(@accent_bg_color, 0.14); }
+.immersive-lyrics { background: transparent; }
+.immersive-lyrics .lyric-line {
+    font-size: 32px; line-height: 1.4em; font-weight: 700; color: alpha(white, 0.34);
+    background: transparent; box-shadow: none;
+    padding: 4px 0;
+    transition: color 220ms ease, opacity 280ms ease;
+}
+/* Active lyric: bigger and fully opaque */
+.immersive-lyrics .lyric-active {
+    color: white;
+}
+.immersive-lyrics .lyric-unsynced { color: white; }
+.immersive-lyrics .lyric-past { color: alpha(white, 0.43); }
+/* Progressive distance fade: lines farther from active get dimmer */
+.immersive-lyrics .lyric-dist-1 { opacity: 0.80; }
+.immersive-lyrics .lyric-dist-2 { opacity: 0.55; }
+.immersive-lyrics .lyric-dist-3 { opacity: 0.35; }
+.immersive-lyrics .lyric-dist-4 { opacity: 0.22; }
+.immersive-lyrics .lyric-line:hover { color: alpha(white, 0.90); opacity: 1.0; }
+.np-narrow .immersive-lyrics .lyric-line { font-size: 28px; }
+.np-narrow .immersive-lyrics .lyric-active { color: white; }
+.now-playing popover { color: @popover_fg_color; }
+
+/* Compact Now Playing: small header artwork, larger transport, wide volume */
+.np-narrow .nowplaying-title { font-size: 16px; }
+.np-narrow .nowplaying-artist { font-size: 13px; }
+.np-volume-icon { color: alpha(white, 0.55); }
+.now-playing .compact-transport .player-icon-btn {
+    min-width: 44px; min-height: 44px; padding: 6px; border-radius: 10px;
+    color: white; background: transparent;
+}
+.now-playing .compact-transport .player-icon-btn image { -gtk-icon-size: 28px; }
+.now-playing .compact-transport .player-play-btn {
+    min-width: 60px; min-height: 60px; padding: 4px; border-radius: 14px;
+    background: transparent; color: white; box-shadow: none; border: none;
+}
+.now-playing .compact-transport .player-play-btn image { -gtk-icon-size: 42px; }
+.now-playing .compact-transport .player-play-btn:hover,
+.now-playing .compact-transport .player-icon-btn:hover { background: alpha(white, 0.10); }
+
+/* Credits Modal */
+.credits-track-title {
+    font-size: 20px;
+    font-weight: 700;
+}
+
+.credits-category-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: alpha(currentColor, 0.5);
+}
+
+.credits-item-name {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.credits-item-roles {
+    font-size: 12px;
+    color: alpha(currentColor, 0.6);
+}
+
+/* Sort Switcher Controls */
+.sort-switcher-box {
+    background-color: alpha(currentColor, 0.05);
+    border-radius: 10px;
+    padding: 3px 6px;
+}
+
+.sort-pill {
+    min-height: 28px;
+    padding: 2px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 550;
+    transition: background-color 120ms ease, color 120ms ease;
+}
+
+.sort-dropdown {
+    font-size: 13px;
+    font-weight: 550;
+    border-radius: 8px;
+}
+
+/* Shared shell details and keyboard focus. */
+.malus-window headerbar { background: transparent; box-shadow: none; }
+.malus-window headerbar button { border-radius: 999px; }
+.malus-window .navigation-title { font-size: 12px; font-weight: 650; color: alpha(currentColor, 0.6); }
+.malus-window .sidebar-row:focus-visible,
+.malus-window .media-card:focus-visible,
+.malus-window .track-row:focus-visible {
+    outline: 2px solid @accent_color;
+    outline-offset: -2px;
+}
+.malus-window .status-surface { padding: 24px; border-radius: 18px; background: alpha(currentColor, 0.035); }
+.malus-window .connection-banner { background: alpha(@accent_bg_color, 0.12); }
+.malus-window .feed-eyebrow { font-size: 11px; letter-spacing: 0.12em; font-weight: 700; color: @accent_color; }
+.malus-window .sidebar-profile-row { border-top: 1px solid alpha(currentColor, 0.08); border-radius: 0; padding-top: 8px; }
+.malus-window .media-card:focus-within { background: alpha(currentColor, 0.06); }
+.malus-window .track-row:nth-child(even) { background-color: alpha(currentColor, 0.022); }
+.malus-window .track-row:hover { background-color: alpha(currentColor, 0.07); }
+
+/* Float toasts above the persistent bottom player bar */
+toastoverlay > toast {
+    margin-bottom: 96px;
 }

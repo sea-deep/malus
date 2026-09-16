@@ -2,8 +2,8 @@
 
 use crate::wire::{
     AccountMediaState, ActionResultWire, AuthStatusWire, CatalogItemWire, Credits, LibraryPageWire,
-    Lyrics, NavigationWire, PageContinuationWire, PageWire, PagedListWire, PlayerStatus, Queue,
-    SearchResultsWire, Track,
+    Lyrics, NavigationWire, PageContinuationWire, PageWire, PagedListWire, PlayerStatus, Playlist,
+    Queue, SearchResultsWire, Track,
 };
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +25,7 @@ pub enum ClientResponse {
     Lyrics(Lyrics),
     Credits(Credits),
     MediaState(AccountMediaState),
+    Playlist(Playlist),
     Ok,
     Error { code: String, message: String },
 }

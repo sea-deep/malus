@@ -489,7 +489,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Play { media_id } => {
             let req = match media_id {
                 Some(id) => match MediaRef::parse(&id) {
-                    Ok(reference) => ClientRequest::PlayMedia { reference },
+                    Ok(reference) => ClientRequest::PlayMedia {
+                        reference,
+                        collection: None,
+                        index: None,
+                    },
                     Err(e) => {
                         eprintln!("Invalid media reference '{id}': {e}");
                         return Ok(());
@@ -567,40 +571,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Some(QueueCommands::Next { media_id }) => {
                 let mref = MediaRef::parse(&media_id)?;
-                let resp = client
-                    .send(&ClientRequest::PlayNext { reference: mref })
-                    .await?;
-                match resp {
-                    ClientResponse::Ok => {
-                        let q_resp = client.send(&ClientRequest::GetQueue).await?;
-                        if let ClientResponse::Queue(q) = q_resp {
-                            display_queue(&q, json)?;
-                        } else if json {
-                            println!("{{\"status\":\"ok\"}}");
-                        } else {
-                            println!("Item queued to play next.");
-                        }
-                    }
-                    other => print_response(&other),
+                client.play_next(&mref).await?;
+                let q_resp = client.send(&ClientRequest::GetQueue).await?;
+                if let ClientResponse::Queue(q) = q_resp {
+                    display_queue(&q, json)?;
+                } else if json {
+                    println!("{{\"status\":\"ok\"}}");
+                } else {
+                    println!("Item queued to play next.");
                 }
             }
             Some(QueueCommands::Later { media_id }) => {
                 let mref = MediaRef::parse(&media_id)?;
-                let resp = client
-                    .send(&ClientRequest::PlayLater { reference: mref })
-                    .await?;
-                match resp {
-                    ClientResponse::Ok => {
-                        let q_resp = client.send(&ClientRequest::GetQueue).await?;
-                        if let ClientResponse::Queue(q) = q_resp {
-                            display_queue(&q, json)?;
-                        } else if json {
-                            println!("{{\"status\":\"ok\"}}");
-                        } else {
-                            println!("Item queued to play later.");
-                        }
-                    }
-                    other => print_response(&other),
+                client.play_later(&mref).await?;
+                let q_resp = client.send(&ClientRequest::GetQueue).await?;
+                if let ClientResponse::Queue(q) = q_resp {
+                    display_queue(&q, json)?;
+                } else if json {
+                    println!("{{\"status\":\"ok\"}}");
+                } else {
+                    println!("Item queued to play later.");
                 }
             }
             Some(QueueCommands::Jump { index }) => {
@@ -938,6 +928,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     } else {
                         match &event {
+                            malus_ipc::client::ClientEvent::PlaybackError { source, message } => {
+                                eprintln!("[{source}] {message}");
+                            }
                             malus_ipc::client::ClientEvent::StatusChanged(s) => {
                                 let track_str = match &s.current_track {
                                     Some(t) => format!("{} - {}", t.title, t.artist_display()),
@@ -1697,6 +1690,7 @@ fn print_response(resp: &ClientResponse) {
                 s.in_library, s.favorite, s.rating
             );
         }
+        ClientResponse::Playlist(p) => println!("{p:?}"),
     }
 }
 

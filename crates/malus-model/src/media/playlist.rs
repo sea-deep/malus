@@ -20,6 +20,12 @@ pub struct Playlist {
     pub track_count: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artwork: Option<Artwork>,
+    #[serde(default)]
+    pub is_library: bool,
+    #[serde(default)]
+    pub can_edit: bool,
+    #[serde(default)]
+    pub can_delete: bool,
 }
 
 impl Playlist {
@@ -31,6 +37,9 @@ impl Playlist {
             description: None,
             track_count: None,
             artwork: None,
+            is_library: false,
+            can_edit: false,
+            can_delete: false,
         }
     }
 
@@ -51,6 +60,28 @@ impl Playlist {
 
     pub fn with_artwork(mut self, artwork: Artwork) -> Self {
         self.artwork = Some(artwork);
+        self
+    }
+
+    pub fn with_capabilities(mut self, is_library: bool, can_edit: bool, can_delete: bool) -> Self {
+        self.is_library = is_library;
+        self.can_edit = can_edit;
+        self.can_delete = can_delete;
+        self
+    }
+
+    pub fn with_can_edit(mut self, can_edit: bool) -> Self {
+        self.can_edit = can_edit;
+        self
+    }
+
+    pub fn with_can_delete(mut self, can_delete: bool) -> Self {
+        self.can_delete = can_delete;
+        self
+    }
+
+    pub fn with_is_library(mut self, is_library: bool) -> Self {
+        self.is_library = is_library;
         self
     }
 }

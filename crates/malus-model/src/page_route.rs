@@ -29,6 +29,7 @@ pub enum PageRoute {
     LibraryAlbums,
     LibraryArtists,
     LibraryPlaylists,
+    LibraryMadeForYou,
     Album(String),
     Artist(String),
     Playlist(String),
@@ -47,6 +48,7 @@ impl PageRoute {
             "library:albums" => Some(Self::LibraryAlbums),
             "library:artists" => Some(Self::LibraryArtists),
             "library:playlists" => Some(Self::LibraryPlaylists),
+            "library:made-for-you" => Some(Self::LibraryMadeForYou),
             _ => {
                 if let Some(id) = route.strip_prefix("album:")
                     && !id.is_empty()
@@ -84,6 +86,7 @@ impl PageRoute {
             Self::LibraryAlbums => "library:albums".to_string(),
             Self::LibraryArtists => "library:artists".to_string(),
             Self::LibraryPlaylists => "library:playlists".to_string(),
+            Self::LibraryMadeForYou => "library:made-for-you".to_string(),
             Self::Album(id) => format!("album:{id}"),
             Self::Artist(id) => format!("artist:{id}"),
             Self::Playlist(id) => format!("playlist:{id}"),
@@ -134,6 +137,10 @@ mod tests {
         assert_eq!(
             PageRoute::parse("library:playlists"),
             Some(PageRoute::LibraryPlaylists)
+        );
+        assert_eq!(
+            PageRoute::parse("library:made-for-you"),
+            Some(PageRoute::LibraryMadeForYou)
         );
         assert_eq!(
             PageRoute::parse("album:123"),

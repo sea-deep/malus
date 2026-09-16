@@ -36,6 +36,7 @@ pub struct OfficialAppleMusicApi {
     client: reqwest::Client,
     base_url: String,
     token_provider: Arc<dyn TokenProvider>,
+    catalog_references: tokio::sync::Mutex<std::collections::HashMap<MediaRef, MediaRef>>,
 }
 
 impl OfficialAppleMusicApi {
@@ -66,6 +67,7 @@ impl OfficialAppleMusicApi {
             client,
             base_url: base_url.into().trim_end_matches('/').to_string(),
             token_provider,
+            catalog_references: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -231,12 +233,16 @@ impl OfficialAppleMusicApi {
             if body_str.trim().is_empty() {
                 return Ok(Value::Null);
             }
-            serde_json::from_str::<Value>(&body_str)
-                .map_err(|e| AppleApiError::Parse(format!("Failed to parse response JSON: {e}")))
+            serde_json::from_str::<Value>(&body_str).map_err(|e| {
+                AppleApiError::Parse(format!(
+                    "Failed to parse response JSON: {e} (status: {status}, body: '{body_str}')"
+                ))
+            })
         } else if status == reqwest::StatusCode::UNAUTHORIZED {
-            Err(AppleApiError::AuthRequired(
-                "Apple Music session expired or unauthorized".to_string(),
-            ))
+            let body_str = resp.text().await.unwrap_or_default();
+            Err(AppleApiError::AuthRequired(format!(
+                "Apple Music session expired or unauthorized (status: {status}, body: '{body_str}')"
+            )))
         } else if status == reqwest::StatusCode::FORBIDDEN {
             let body_str = resp.text().await.unwrap_or_default();
             Err(AppleApiError::Forbidden(body_str))
@@ -290,8 +296,47 @@ impl OfficialAppleMusicApi {
         }
     }
 
+    /// Resolve catalog-only operations through Apple's explicit relationship.
+    /// Keep the caller's library reference for UI identity and event matching.
+    pub async fn catalog_reference(&self, reference: &MediaRef) -> Result<MediaRef, AppleApiError> {
+        if !matches!(reference, MediaRef::Song(id) if id.starts_with("i.") || id.starts_with("l."))
+        {
+            return Ok(reference.clone());
+        }
+        if let Some(cached) = self.catalog_references.lock().await.get(reference).cloned() {
+            return Ok(cached);
+        }
+        let path = format!("/v1/me/library/songs/{}", reference.id());
+        let response = self.send_request(&path, &[("include", "catalog")]).await?;
+        let item = response
+            .get("data")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first());
+        let catalog_id = item
+            .and_then(|item| {
+                item.pointer("/relationships/catalog/data/0/id")
+                    .or_else(|| item.pointer("/attributes/playParams/catalogId"))
+            })
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty());
+        let id = catalog_id.ok_or_else(|| {
+            AppleApiError::NotFound("This library song has no catalog equivalent".into())
+        })?;
+        let resolved = MediaRef::Song(id.to_string());
+        let mut cache = self.catalog_references.lock().await;
+        if cache.len() >= 256 {
+            cache.clear();
+        }
+        cache.insert(reference.clone(), resolved.clone());
+        Ok(resolved)
+    }
+
     /// Fetch time-synced or unsynced lyrics for a catalog song.
     pub async fn get_lyrics(&self, song_id: &str) -> Result<Lyrics, AppleApiError> {
+        let reference = self
+            .catalog_reference(&MediaRef::Song(song_id.to_string()))
+            .await?;
+        let song_id = reference.id();
         let path = format!(
             "https://amp-api.music.apple.com/v1/catalog/{{storefront}}/songs/{song_id}/lyrics"
         );
@@ -335,6 +380,10 @@ impl OfficialAppleMusicApi {
 
     /// Fetch song credits for a catalog song.
     pub async fn get_credits(&self, song_id: &str) -> Result<Credits, AppleApiError> {
+        let reference = self
+            .catalog_reference(&MediaRef::Song(song_id.to_string()))
+            .await?;
+        let song_id = reference.id();
         let path = format!(
             "https://amp-api.music.apple.com/v1/catalog/{{storefront}}/songs/{song_id}/credits"
         );
@@ -350,27 +399,42 @@ impl OfficialAppleMusicApi {
 
     /// Favorite an item (song, album, playlist).
     pub async fn favorite(&self, reference: &MediaRef) -> Result<(), AppleApiError> {
+        let resolved = self.catalog_reference(reference).await?;
+        let reference = &resolved;
         let kind = Self::media_kind_plural(reference)?;
-        let path = format!("/v1/me/favorites?ids[{kind}]={}", reference.id());
-        self.send_request_with_method(reqwest::Method::POST, &path, &[], None)
-            .await?;
+        let query_key = format!("ids[{kind}]");
+        let id_val = reference.id();
+        self.send_request_with_method(
+            reqwest::Method::POST,
+            "/v1/me/favorites",
+            &[(&query_key, id_val)],
+            None,
+        )
+        .await?;
         Ok(())
     }
 
     /// Unfavorite an item (song, album, playlist) using amp-api.
     pub async fn unfavorite(&self, reference: &MediaRef) -> Result<(), AppleApiError> {
+        let resolved = self.catalog_reference(reference).await?;
+        let reference = &resolved;
         let kind = Self::media_kind_plural(reference)?;
-        let path = format!(
-            "https://amp-api.music.apple.com/v1/me/favorites?ids[{kind}]={}",
-            reference.id()
-        );
-        self.send_request_with_method(reqwest::Method::DELETE, &path, &[], None)
-            .await?;
+        let query_key = format!("ids[{kind}]");
+        let id_val = reference.id();
+        self.send_request_with_method(
+            reqwest::Method::DELETE,
+            "https://amp-api.music.apple.com/v1/me/favorites",
+            &[(&query_key, id_val)],
+            None,
+        )
+        .await?;
         Ok(())
     }
 
     /// Suggest less for an item (negative rating -1).
     pub async fn suggest_less(&self, reference: &MediaRef) -> Result<(), AppleApiError> {
+        let resolved = self.catalog_reference(reference).await?;
+        let reference = &resolved;
         let kind = Self::media_kind_plural(reference)?;
         let path = format!("/v1/me/ratings/{kind}/{}", reference.id());
         let body = serde_json::json!({
@@ -384,6 +448,8 @@ impl OfficialAppleMusicApi {
 
     /// Clear rating (set to neutral).
     pub async fn clear_rating(&self, reference: &MediaRef) -> Result<(), AppleApiError> {
+        let resolved = self.catalog_reference(reference).await?;
+        let reference = &resolved;
         let kind = Self::media_kind_plural(reference)?;
         let path = format!("/v1/me/ratings/{kind}/{}", reference.id());
         self.send_request_with_method(reqwest::Method::DELETE, &path, &[], None)
@@ -393,6 +459,8 @@ impl OfficialAppleMusicApi {
 
     /// Add an item (song, album, playlist) to the user's library.
     pub async fn add_to_library(&self, reference: &MediaRef) -> Result<(), AppleApiError> {
+        let resolved = self.catalog_reference(reference).await?;
+        let reference = &resolved;
         let kind = match reference {
             MediaRef::Song(_) => "songs",
             MediaRef::Album(_) => "albums",
@@ -404,10 +472,293 @@ impl OfficialAppleMusicApi {
                 )));
             }
         };
-        let path = format!("/v1/me/library?ids[{kind}]={}", reference.id());
-        self.send_request_with_method(reqwest::Method::POST, &path, &[], None)
+        let query_key = format!("ids[{kind}]");
+        let id_val = reference.id();
+        self.send_request_with_method(
+            reqwest::Method::POST,
+            "/v1/me/library",
+            &[(&query_key, id_val)],
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Create a new library playlist.
+    /// Supports empty playlists (omitting `relationships.tracks`) or seeded with `initial_tracks`.
+    pub async fn create_playlist(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        initial_tracks: &[MediaRef],
+    ) -> Result<Playlist, AppleApiError> {
+        let trimmed_name = name.trim();
+        if trimmed_name.is_empty() {
+            return Err(AppleApiError::Other(
+                "Playlist name cannot be empty".to_string(),
+            ));
+        }
+
+        let mut attrs = serde_json::json!({
+            "name": trimmed_name,
+        });
+        if let Some(desc) = description.map(str::trim).filter(|d| !d.is_empty()) {
+            attrs["description"] = serde_json::Value::String(desc.to_string());
+        }
+
+        let mut body = serde_json::json!({
+            "attributes": attrs,
+        });
+
+        if !initial_tracks.is_empty() {
+            let tracks_data: Vec<_> = initial_tracks
+                .iter()
+                .map(|t| {
+                    let raw_id = t.id();
+                    let typ = if raw_id.starts_with("i.m") {
+                        "library-songs"
+                    } else {
+                        "songs"
+                    };
+                    serde_json::json!({
+                        "id": raw_id,
+                        "type": typ,
+                    })
+                })
+                .collect();
+            body["relationships"] = serde_json::json!({
+                "tracks": {
+                    "data": tracks_data,
+                }
+            });
+        }
+
+        let val = self
+            .send_request_with_method(
+                reqwest::Method::POST,
+                "/v1/me/library/playlists",
+                &[],
+                Some(&body),
+            )
+            .await?;
+
+        let first = val
+            .get("data")
+            .and_then(|d| d.as_array())
+            .and_then(|a| a.first())
+            .ok_or_else(|| {
+                AppleApiError::Parse("Missing data array in create playlist response".to_string())
+            })?;
+
+        crate::api::parse::parse_apple_playlist(first).ok_or_else(|| {
+            AppleApiError::Parse("Failed to parse newly created playlist".to_string())
+        })
+    }
+
+    /// Add track(s) to an existing library playlist.
+    pub async fn add_tracks_to_playlist(
+        &self,
+        playlist: &MediaRef,
+        tracks: &[MediaRef],
+    ) -> Result<(), AppleApiError> {
+        if tracks.is_empty() {
+            return Ok(());
+        }
+
+        let playlist_id = playlist.id();
+        let path = format!("/v1/me/library/playlists/{playlist_id}/tracks");
+
+        let tracks_data: Vec<_> = tracks
+            .iter()
+            .map(|t| {
+                let raw_id = t.id();
+                let typ = if raw_id.starts_with("i.") {
+                    "library-songs"
+                } else {
+                    "songs"
+                };
+                serde_json::json!({
+                    "id": raw_id,
+                    "type": typ,
+                })
+            })
+            .collect();
+
+        let body = serde_json::json!({
+            "data": tracks_data,
+        });
+
+        self.send_request_with_method(reqwest::Method::POST, &path, &[], Some(&body))
+            .await?;
+
+        Ok(())
+    }
+
+    /// Delete an existing user library playlist.
+    pub async fn delete_playlist(&self, playlist: &MediaRef) -> Result<(), AppleApiError> {
+        let playlist_id = playlist.id();
+        let url = format!("https://amp-api.music.apple.com/v1/me/library/playlists/{playlist_id}");
+        self.send_request_with_method(reqwest::Method::DELETE, &url, &[], None)
             .await?;
         Ok(())
+    }
+
+    /// Update playlist metadata (name, description).
+    pub async fn update_playlist(
+        &self,
+        playlist: &MediaRef,
+        name: &str,
+        description: Option<&str>,
+    ) -> Result<(), AppleApiError> {
+        let playlist_id = playlist.id();
+        let url = format!("https://amp-api.music.apple.com/v1/me/library/playlists/{playlist_id}");
+        let trimmed_name = name.trim();
+        if trimmed_name.is_empty() {
+            return Err(AppleApiError::Other(
+                "Playlist name cannot be empty".to_string(),
+            ));
+        }
+        let mut attrs = serde_json::json!({
+            "name": trimmed_name,
+        });
+        if let Some(desc) = description.map(str::trim).filter(|d| !d.is_empty()) {
+            attrs["description"] = serde_json::Value::String(desc.to_string());
+        }
+        let body = serde_json::json!({
+            "attributes": attrs,
+        });
+        self.send_request_with_method(reqwest::Method::PATCH, &url, &[], Some(&body))
+            .await?;
+        Ok(())
+    }
+
+    /// Remove a track from an editable playlist at the specified index,
+    /// verifying that the item at `track_index` matches `expected_track`.
+    pub async fn remove_track_from_playlist(
+        &self,
+        playlist: &MediaRef,
+        track_index: usize,
+        expected_track: &MediaRef,
+    ) -> Result<(), AppleApiError> {
+        let playlist_id = playlist.id();
+        let path = format!("/v1/me/library/playlists/{playlist_id}/tracks");
+        let val = self.send_request(&path, &[("limit", "100")]).await?;
+        let data = val
+            .get("data")
+            .and_then(|d| d.as_array())
+            .ok_or_else(|| AppleApiError::Parse("Missing tracks data in playlist".to_string()))?;
+
+        if track_index >= data.len() {
+            return Err(AppleApiError::Other(format!(
+                "Track index {track_index} out of bounds (playlist has {} tracks)",
+                data.len()
+            )));
+        }
+
+        // Verify identity: compare item id or catalogId to expected_track
+        let target_item = &data[track_index];
+        let item_id = target_item["id"].as_str().unwrap_or_default();
+        let catalog_id = target_item["attributes"]["playParams"]["catalogId"]
+            .as_str()
+            .unwrap_or_default();
+        let exp_id = expected_track.id();
+
+        if item_id != exp_id && catalog_id != exp_id {
+            return Err(AppleApiError::Other(format!(
+                "Track identity mismatch at index {track_index}: expected {exp_id}, found id='{item_id}', catalogId='{catalog_id}'"
+            )));
+        }
+
+        // Build new track list omitting track_index
+        let mut new_tracks = Vec::with_capacity(data.len().saturating_sub(1));
+        for (i, item) in data.iter().enumerate() {
+            if i == track_index {
+                continue;
+            }
+            let id = item["id"].as_str().unwrap_or_default();
+            let typ = item["type"].as_str().unwrap_or("library-songs");
+            new_tracks.push(serde_json::json!({
+                "id": id,
+                "type": typ,
+            }));
+        }
+
+        let body = serde_json::json!({
+            "data": new_tracks,
+        });
+
+        let url =
+            format!("https://amp-api.music.apple.com/v1/me/library/playlists/{playlist_id}/tracks");
+        self.send_request_with_method(reqwest::Method::PUT, &url, &[], Some(&body))
+            .await?;
+        Ok(())
+    }
+
+    /// Remove an item (song, album, playlist) from the user's library.
+    pub async fn remove_from_library(&self, reference: &MediaRef) -> Result<(), AppleApiError> {
+        match reference {
+            MediaRef::Playlist(_) => self.delete_playlist(reference).await,
+            MediaRef::Song(id) => {
+                let lib_id = if id.starts_with("i.") {
+                    id.clone()
+                } else {
+                    let cat_path = format!("/v1/catalog/{{storefront}}/songs/{id}");
+                    let val = self
+                        .send_request(&cat_path, &[("relate", "library")])
+                        .await?;
+                    val.get("data")
+                        .and_then(|d| d.as_array())
+                        .and_then(|a| a.first())
+                        .and_then(|i| i.get("relationships"))
+                        .and_then(|r| r.get("library"))
+                        .and_then(|l| l.get("data"))
+                        .and_then(|d| d.as_array())
+                        .and_then(|a| a.first())
+                        .and_then(|x| x.get("id"))
+                        .and_then(|i| i.as_str())
+                        .map(str::to_string)
+                        .ok_or_else(|| {
+                            AppleApiError::NotFound(format!("Song {id} is not in library"))
+                        })?
+                };
+                let url = format!("https://amp-api.music.apple.com/v1/me/library/songs/{lib_id}");
+                self.send_request_with_method(reqwest::Method::DELETE, &url, &[], None)
+                    .await?;
+                Ok(())
+            }
+            MediaRef::Album(id) => {
+                let lib_id = if id.starts_with("l.") {
+                    id.clone()
+                } else {
+                    let cat_path = format!("/v1/catalog/{{storefront}}/albums/{id}");
+                    let val = self
+                        .send_request(&cat_path, &[("relate", "library")])
+                        .await?;
+                    val.get("data")
+                        .and_then(|d| d.as_array())
+                        .and_then(|a| a.first())
+                        .and_then(|i| i.get("relationships"))
+                        .and_then(|r| r.get("library"))
+                        .and_then(|l| l.get("data"))
+                        .and_then(|d| d.as_array())
+                        .and_then(|a| a.first())
+                        .and_then(|x| x.get("id"))
+                        .and_then(|i| i.as_str())
+                        .map(str::to_string)
+                        .ok_or_else(|| {
+                            AppleApiError::NotFound(format!("Album {id} is not in library"))
+                        })?
+                };
+                let url = format!("https://amp-api.music.apple.com/v1/me/library/albums/{lib_id}");
+                self.send_request_with_method(reqwest::Method::DELETE, &url, &[], None)
+                    .await?;
+                Ok(())
+            }
+            _ => Err(AppleApiError::Other(format!(
+                "Removing {} from library is not supported",
+                reference.kind()
+            ))),
+        }
     }
 
     /// Get current account state (in_library, favorite, rating) for a resource.
@@ -415,6 +766,9 @@ impl OfficialAppleMusicApi {
         &self,
         reference: &MediaRef,
     ) -> Result<AccountMediaState, AppleApiError> {
+        let original_reference = reference;
+        let resolved = self.catalog_reference(reference).await?;
+        let reference = &resolved;
         let kind = match Self::media_kind_plural(reference) {
             Ok(k) => k,
             Err(_) => {
@@ -484,8 +838,8 @@ impl OfficialAppleMusicApi {
         };
 
         Ok(AccountMediaState::new(
-            reference.clone(),
-            in_library,
+            original_reference.clone(),
+            in_library || original_reference != reference,
             favorite,
             rating,
         ))

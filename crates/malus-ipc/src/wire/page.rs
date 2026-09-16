@@ -121,6 +121,10 @@ pub struct PageHeaderWire {
     pub badges: Vec<PageBadgeWire>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<PageActionWire>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub can_edit: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub can_delete: bool,
 }
 
 impl PageHeaderWire {
@@ -132,6 +136,8 @@ impl PageHeaderWire {
             metadata: Vec::new(),
             badges: Vec::new(),
             actions: Vec::new(),
+            can_edit: false,
+            can_delete: false,
         }
     }
 }
@@ -192,6 +198,16 @@ pub struct PageItemWire {
     pub actions: Vec<PageActionWire>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presentation_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_favorite: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_library: Option<bool>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub can_edit: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub can_delete: bool,
 }
 
 impl PageItemWire {
@@ -208,7 +224,37 @@ impl PageItemWire {
             badges: Vec::new(),
             actions: Vec::new(),
             presentation_hint: None,
+            duration_ms: None,
+            is_favorite: None,
+            in_library: None,
+            can_edit: false,
+            can_delete: false,
         }
+    }
+
+    /// Whether this item is marked as a favorite.
+    pub fn is_favorite(&self) -> bool {
+        if let Some(fav) = self.is_favorite {
+            return fav;
+        }
+        self.actions
+            .iter()
+            .any(|a| matches!(a, PageActionWire::Unfavorite(_)))
+    }
+
+    /// Whether this item is in the user's library.
+    pub fn in_library(&self) -> bool {
+        if let Some(lib) = self.in_library {
+            return lib;
+        }
+        self.id.starts_with("i.")
+            || self.id.starts_with("p.")
+            || self.id.starts_with("l.")
+            || (!self.actions.is_empty()
+                && !self
+                    .actions
+                    .iter()
+                    .any(|a| matches!(a, PageActionWire::AddToLibrary(_))))
     }
 }
 
@@ -247,6 +293,7 @@ pub enum PageActionWire {
     Unfavorite(MediaRef),
     SuggestLess(MediaRef),
     AddToLibrary(MediaRef),
+    RemoveFromLibrary(MediaRef),
 }
 
 /// Pagination cursor for continuing a page or section.
@@ -320,6 +367,15 @@ impl ActionResultWire {
     pub fn with_refresh(mut self, refresh: PageRefreshWire) -> Self {
         self.refresh = refresh;
         self
+    }
+
+    pub fn with_message(mut self, message: impl Into<String>) -> Self {
+        self.message = Some(message.into());
+        self
+    }
+
+    pub fn is_success(&self) -> bool {
+        self.status == ActionStatusWire::Success
     }
 }
 

@@ -14,6 +14,14 @@ pub enum ClientRequest {
     Play,
     PlayMedia {
         reference: MediaRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        collection: Option<MediaRef>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<usize>,
+    },
+    PlayCollection {
+        reference: MediaRef,
+        shuffle: bool,
     },
     Pause,
     TogglePlay,
@@ -59,12 +67,6 @@ pub enum ClientRequest {
         cursor: Option<String>,
     },
     GetQueue,
-    PlayNext {
-        reference: MediaRef,
-    },
-    PlayLater {
-        reference: MediaRef,
-    },
     QueueJump {
         index: usize,
     },
@@ -113,6 +115,34 @@ pub enum ClientRequest {
     },
     AddToLibrary {
         reference: MediaRef,
+    },
+    RemoveFromLibrary {
+        reference: MediaRef,
+    },
+    CreatePlaylist {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        initial_tracks: Vec<MediaRef>,
+    },
+    AddTracksToPlaylist {
+        playlist: MediaRef,
+        tracks: Vec<MediaRef>,
+    },
+    RemoveTrackFromPlaylist {
+        playlist: MediaRef,
+        track_index: usize,
+        expected_track: MediaRef,
+    },
+    UpdatePlaylist {
+        playlist: MediaRef,
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+    DeletePlaylist {
+        playlist: MediaRef,
     },
     SubscribeEvents,
 }

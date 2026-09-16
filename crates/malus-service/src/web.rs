@@ -40,6 +40,27 @@ pub trait AppleWebSession: Send + Sync {
     /// Set MusicKit queue to a media item and begin playback.
     async fn set_queue(&self, kind: &str, id: &str) -> Result<(), AppleError>;
 
+    /// Set MusicKit queue to a media item and begin playback at a specific index.
+    async fn set_queue_at_index(
+        &self,
+        kind: &str,
+        id: &str,
+        start_index: usize,
+    ) -> Result<(), AppleError>;
+
+    /// Set MusicKit queue to a collection with optional shuffle.
+    async fn set_queue_with_shuffle(
+        &self,
+        kind: &str,
+        id: &str,
+        shuffle: bool,
+    ) -> Result<(), AppleError>;
+
+    /// Rewind already-loaded current playable item to the beginning and ensure playback.
+    /// Used only when the user explicitly re-selects the currently active item (product intent).
+    /// Does not reconstruct the queue, tear down the media pipeline, or reacquire DRM licenses.
+    async fn restart_current_item(&self) -> Result<(), AppleError>;
+
     /// Pause current playback.
     async fn pause(&self) -> Result<(), AppleError>;
 
@@ -51,6 +72,15 @@ pub trait AppleWebSession: Send + Sync {
 
     /// Seek to a specific position in milliseconds.
     async fn seek(&self, position_ms: u64) -> Result<(), AppleError>;
+
+    /// Set playback volume (0..=100).
+    async fn set_volume(&self, volume: u8) -> Result<(), AppleError>;
+
+    /// Set playback shuffle state.
+    async fn set_shuffle(&self, shuffle: bool) -> Result<(), AppleError>;
+
+    /// Set playback repeat mode.
+    async fn set_repeat(&self, repeat: RepeatMode) -> Result<(), AppleError>;
 
     /// Skip to next track in queue.
     async fn skip_to_next(&self) -> Result<(), AppleError>;
@@ -83,7 +113,7 @@ pub trait AppleWebSession: Send + Sync {
     async fn queue_clear_upcoming(&self) -> Result<(), AppleError>;
 
     /// Register a sink for streaming unsolicited player events.
-    fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlayerStatus>);
+    fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlaybackEvent>);
 }
 
 struct ActiveSession {
@@ -94,7 +124,7 @@ struct ActiveSession {
 pub struct ProductionAppleWebSession {
     profile_lock: Arc<Mutex<()>>,
     active_session: Arc<Mutex<Option<ActiveSession>>>,
-    event_sink: Arc<Mutex<Option<mpsc::UnboundedSender<PlayerStatus>>>>,
+    event_sink: Arc<Mutex<Option<mpsc::UnboundedSender<PlaybackEvent>>>>,
 }
 
 impl Default for ProductionAppleWebSession {
@@ -265,7 +295,7 @@ async fn bootstrap_minimal_page(
     .await
     .map_err(AppleError::Web)?;
 
-    // 6. Configure MusicKit via call_function with structured CDP arguments
+    // 6. Configure MusicKit via call_function with structured runtime host arguments
     let config_func = r#"
         async function(devToken, userToken, expectedStorefront, appName, appBuild) {
             try {
@@ -373,65 +403,18 @@ async fn bootstrap_minimal_page(
 
 fn build_inject_playback_bridge_script() -> String {
     format!(
-        r#"
-        (() => {{
-            if (window.__malusPlaybackBridge) return;
-            window.__malusPlaybackBridge = true;
-            let previousState = "";
-
-            const notify = () => {{
-                try {{
-                    const mk = window.MusicKit && window.MusicKit.getInstance();
-                    if (!mk) return;
-                    const item = mk.nowPlayingItem;
-                    const a = item ? (item.attributes || item) : null;
-                    const payload = {{
-                        isPlaying: !!mk.isPlaying,
-                        playbackState: mk.playbackState,
-                        positionMs: Math.round((mk.currentPlaybackTime || 0) * 1000),
-                        durationMs: Math.round(a?.durationInMillis ? a.durationInMillis : ((item?.playbackDuration || mk.currentPlaybackDuration || 0) * 1000)),
-                        volume: Math.round((mk.volume || 1) * 100),
-                        muted: !!mk.isMuted,
-                        shuffle: mk.shuffleMode === 1,
-                        repeat: mk.repeatMode || 0,
-                        track: item ? {{
-                            id: String(item.id || a?.playParams?.id || ""),
-                            title: String(a?.name || item.title || ""),
-                            artist: String(a?.artistName || item.artistName || ""),
-                            album: String(a?.albumName || item.albumName || ""),
-                            artwork: (a?.artwork || item.artwork) ? {{
-                                url: (a?.artwork || item.artwork).url,
-                                width: (a?.artwork || item.artwork).width,
-                                height: (a?.artwork || item.artwork).height
-                            }} : null
-                        }} : null
-                    }};
-                    const json = JSON.stringify(payload);
-                    if (json !== previousState) {{
-                        previousState = json;
-                        if (typeof window.{sink} === "function") {{
-                            window.{sink}(json);
-                        }}
-                    }}
-                }} catch (_) {{}}
-            }};
-
-            window.__malusPlaybackNotify = notify;
-            const mk = window.MusicKit && window.MusicKit.getInstance();
-            if (mk) {{
-                mk.addEventListener("playbackStateDidChange", notify);
-                mk.addEventListener("nowPlayingItemDidChange", notify);
-                mk.addEventListener("playbackVolumeDidChange", notify);
-                mk.addEventListener("playbackTimeDidChange", notify);
-                mk.addEventListener("queueItemsDidChange", notify);
-                mk.addEventListener("queuePositionDidChange", notify);
-            }}
-            setInterval(notify, 500);
-            notify();
-        }})()
-        "#,
-        sink = MUSICKIT_PLAYBACK_SINK
+        "(() => {{\n{}\n{}\n}})()",
+        include_str!("playback/snapshot.js"),
+        include_str!("playback/events.js")
     )
+}
+
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
+pub enum PlaybackEvent {
+    Status(PlayerStatus),
+    Queue(Queue),
+    Error { source: String, message: String },
 }
 
 impl ProductionAppleWebSession {
@@ -443,7 +426,7 @@ impl ProductionAppleWebSession {
         }
     }
 
-    async fn ensure_playback_session(&self) -> Result<Arc<WebPage>, AppleError> {
+    pub async fn ensure_playback_session(&self) -> Result<Arc<WebPage>, AppleError> {
         let mut session_guard = self.active_session.lock().await;
         if let Some(ref session) = *session_guard
             && let Ok(health) = session.runtime.check_health().await
@@ -610,9 +593,13 @@ impl ProductionAppleWebSession {
         }
 
         // Register and inject exactly ONE active playback bridge
-        let _ = page.register_event_sink(MUSICKIT_PLAYBACK_SINK).await;
+        page.register_event_sink(MUSICKIT_PLAYBACK_SINK)
+            .await
+            .map_err(AppleError::Web)?;
         let mut page_events = page.subscribe_events();
-        let _ = page.evaluate(&build_inject_playback_bridge_script()).await;
+        page.evaluate(&build_inject_playback_bridge_script())
+            .await
+            .map_err(AppleError::Web)?;
 
         // Apply visual suppression only if full-page fallback was used in headless mode
         if !minimal_active && launch_mode == LaunchMode::Headless {
@@ -640,13 +627,37 @@ impl ProductionAppleWebSession {
         // Spawn event listener task
         let sink_holder = self.event_sink.clone();
         tokio::spawn(async move {
-            while let Ok(event) = page_events.recv().await {
-                if event.name == MUSICKIT_PLAYBACK_SINK
-                    && let Some(status) = parse_player_status(&event.payload)
-                {
+            loop {
+                let event = match page_events.recv().await {
+                    Ok(event) => event,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                };
+                if event.name != MUSICKIT_PLAYBACK_SINK {
+                    continue;
+                }
+                let payload = match event.payload.as_str() {
+                    Some(json) => serde_json::from_str::<Value>(json).unwrap_or(Value::Null),
+                    None => event.payload,
+                };
+                let event = match payload["kind"].as_str() {
+                    Some("status") => {
+                        parse_player_status(&payload["data"]).map(PlaybackEvent::Status)
+                    }
+                    Some("queue") => parse_queue(&payload["data"]).ok().map(PlaybackEvent::Queue),
+                    Some("error") => Some(PlaybackEvent::Error {
+                        source: payload["source"].as_str().unwrap_or("MusicKit").to_string(),
+                        message: payload["message"]
+                            .as_str()
+                            .unwrap_or("Playback error")
+                            .to_string(),
+                    }),
+                    _ => None,
+                };
+                if let Some(event) = event {
                     let guard = sink_holder.lock().await;
-                    if let Some(ref sink) = *guard {
-                        let _ = sink.send(status);
+                    if let Some(sink) = &*guard {
+                        let _ = sink.send(event);
                     }
                 }
             }
@@ -670,8 +681,7 @@ fn parse_player_status(payload: &Value) -> Option<PlayerStatus> {
     } else {
         payload
     };
-    let is_playing = payload["isPlaying"].as_bool().unwrap_or(false);
-    let raw_state = payload["playbackState"].as_i64().unwrap_or(0);
+    let raw_state = payload["playbackState"].as_i64()?;
     let position_ms = payload["positionMs"].as_u64().unwrap_or(0);
     let duration_ms = payload["durationMs"].as_u64().unwrap_or(0);
     let volume = payload["volume"].as_u64().unwrap_or(100).min(100) as u8;
@@ -683,20 +693,10 @@ fn parse_player_status(payload: &Value) -> Option<PlayerStatus> {
         _ => RepeatMode::Off,
     };
 
-    let state = if is_playing {
-        PlaybackState::Playing
-    } else {
-        match raw_state {
-            3 => PlaybackState::Paused,
-            0 | 4 | 5 => PlaybackState::Stopped,
-            _ => {
-                if position_ms > 0 {
-                    PlaybackState::Paused
-                } else {
-                    PlaybackState::Stopped
-                }
-            }
-        }
+    let state = match raw_state {
+        2 => PlaybackState::Playing,
+        1 | 3 | 6 | 8 | 9 => PlaybackState::Paused,
+        _ => PlaybackState::Stopped,
     };
 
     let current_track = payload.get("track").and_then(|t| {
@@ -740,6 +740,68 @@ fn parse_player_status(payload: &Value) -> Option<PlayerStatus> {
         shuffle,
         repeat,
     })
+}
+
+fn parse_queue(val: &Value) -> Result<Queue, AppleError> {
+    if !val["items"].is_array() {
+        return Err(AppleError::Internal(
+            "Invalid MusicKit queue snapshot".into(),
+        ));
+    }
+    let items_val = &val["items"];
+    let current_index = val["currentIndex"]
+        .as_i64()
+        .and_then(|i| if i >= 0 { Some(i as usize) } else { None });
+
+    let mut tracks = Vec::new();
+    if let Some(arr) = items_val.as_array() {
+        for item in arr {
+            let raw_id = item["id"].as_str().unwrap_or_default();
+            if raw_id.is_empty() {
+                return Err(AppleError::Internal("Queue item has no identity".into()));
+            }
+            let id_clean = raw_id.strip_prefix("song:").unwrap_or(raw_id);
+            let mref = MediaRef::Song(id_clean.to_string());
+            let mut track = Track::new(
+                mref,
+                item["title"].as_str().unwrap_or_default(),
+                item["artist"].as_str().unwrap_or_default(),
+            );
+            if let Some(alb) = item["album"].as_str()
+                && !alb.is_empty()
+            {
+                track = track.with_album(alb);
+            }
+            if let Some(art_val) = item.get("artwork")
+                && let Some(artwork) = parse_apple_artwork(art_val)
+            {
+                track = track.with_artwork(artwork);
+            }
+            if let Some(dur) = item["durationMs"].as_u64()
+                && dur > 0
+            {
+                track = track.with_duration_ms(dur);
+            }
+            if let Some(tn) = item["trackNumber"].as_u64()
+                && tn > 0
+            {
+                track = track.with_track_number(tn as u32);
+            }
+            if let Some(dn) = item["discNumber"].as_u64()
+                && dn > 0
+            {
+                track = track.with_disc_number(dn as u32);
+            }
+            tracks.push(track);
+        }
+    }
+
+    if current_index.is_some_and(|index| index >= tracks.len()) {
+        return Err(AppleError::Internal(
+            "Queue position is outside its items".into(),
+        ));
+    }
+    Ok(Queue::with_items(tracks, current_index))
 }
 
 #[async_trait]
@@ -1111,6 +1173,15 @@ impl AppleWebSession for ProductionAppleWebSession {
     }
 
     async fn set_queue(&self, kind: &str, id: &str) -> Result<(), AppleError> {
+        self.set_queue_at_index(kind, id, 0).await
+    }
+
+    async fn set_queue_at_index(
+        &self,
+        kind: &str,
+        id: &str,
+        start_index: usize,
+    ) -> Result<(), AppleError> {
         let page = self.ensure_playback_session().await?;
         {
             let guard = self.active_session.lock().await;
@@ -1122,12 +1193,9 @@ impl AppleWebSession for ProductionAppleWebSession {
             }
         }
         let func = r#"
-            async function(kind, itemId) {
+            async function(kind, itemId, startIndex) {
                 const mk = window.MusicKit && window.MusicKit.getInstance();
                 if (!mk) throw new Error("MusicKit instance not available");
-                if (mk.assertUserStorefront) {
-                    mk.assertUserStorefront = () => {};
-                }
 
                 // For library song IDs (i.xxx / l.xxx), resolve catalog ID first
                 let resolvedId = itemId;
@@ -1140,36 +1208,37 @@ impl AppleWebSession for ProductionAppleWebSession {
                     } catch (_) {}
                 }
 
+                // Cleanly pause if currently playing to prevent MusicKit "The play() method was called without a previous stop() or pause() call" error
+                if (mk.isPlaying || mk.playbackState === 2) {
+                    try {
+                        await mk.pause();
+                    } catch (_) {}
+                }
+
                 // Build MusicKit setQueue descriptor based on kind
                 let descriptor;
                 switch (kind) {
                     case "song":
-                        descriptor = { song: resolvedId };
+                        descriptor = { song: resolvedId, startPlaying: true };
                         break;
                     case "album":
-                        descriptor = { album: resolvedId };
+                        descriptor = { album: resolvedId, startPlaying: true };
                         break;
                     case "playlist":
-                        descriptor = { playlist: resolvedId };
+                        descriptor = { playlist: resolvedId, startPlaying: true };
                         break;
                     case "station":
-                        descriptor = { station: resolvedId };
+                        descriptor = { station: resolvedId, startPlaying: true };
                         break;
                     default:
                         throw new Error("Unsupported media kind: " + kind);
                 }
-
-                try {
-                    await mk.setQueue(descriptor);
-                } catch (e) {
-                    // Fallback: try plural form for songs
-                    if (kind === "song") {
-                        await mk.setQueue({ songs: [resolvedId] });
-                    } else {
-                        throw e;
-                    }
+                if (typeof startIndex === "number" && startIndex > 0) {
+                    descriptor.startPosition = startIndex;
                 }
-                await mk.play();
+
+                await mk.setQueue(descriptor);
+
                 if (window.__malusPlaybackNotify) {
                     window.__malusPlaybackNotify();
                 }
@@ -1180,10 +1249,112 @@ impl AppleWebSession for ProductionAppleWebSession {
             &[
                 Value::String(kind.to_string()),
                 Value::String(id.to_string()),
+                serde_json::json!(start_index),
             ],
         )
         .await
         .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn set_queue_with_shuffle(
+        &self,
+        kind: &str,
+        id: &str,
+        shuffle: bool,
+    ) -> Result<(), AppleError> {
+        let page = self.ensure_playback_session().await?;
+        let func = r#"
+            async function(shuf) {
+                const mk = window.MusicKit && window.MusicKit.getInstance();
+                if (!mk) throw new Error("MusicKit instance not available");
+                mk.shuffleMode = shuf ? 1 : 0;
+            }
+        "#;
+        page.call_function(func, &[serde_json::json!(shuffle)])
+            .await
+            .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
+        self.set_queue_at_index(kind, id, 0).await
+    }
+
+    async fn restart_current_item(&self) -> Result<(), AppleError> {
+        let page = self.ensure_playback_session().await?;
+        let func = r#"
+            async function() {
+                const mk = window.MusicKit && window.MusicKit.getInstance();
+                if (!mk) throw new Error("MusicKit instance not available");
+                const isPlaying = !!mk.isPlaying;
+                await mk.seekToTime(0);
+                if (!isPlaying) {
+                    await mk.play();
+                }
+                if (window.__malusPlaybackNotify) {
+                    window.__malusPlaybackNotify();
+                }
+            }
+        "#;
+        page.call_function(func, &[])
+            .await
+            .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn set_volume(&self, volume: u8) -> Result<(), AppleError> {
+        let page = self.ensure_playback_session().await?;
+        let func = r#"
+            async function(vol) {
+                const mk = window.MusicKit && window.MusicKit.getInstance();
+                if (!mk) throw new Error("MusicKit instance not available");
+                mk.volume = vol / 100.0;
+                if (window.__malusPlaybackNotify) {
+                    window.__malusPlaybackNotify();
+                }
+            }
+        "#;
+        page.call_function(func, &[serde_json::json!(volume.min(100))])
+            .await
+            .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn set_shuffle(&self, shuffle: bool) -> Result<(), AppleError> {
+        let page = self.ensure_playback_session().await?;
+        let func = r#"
+            async function(shuf) {
+                const mk = window.MusicKit && window.MusicKit.getInstance();
+                if (!mk) throw new Error("MusicKit instance not available");
+                mk.shuffleMode = shuf ? 1 : 0;
+                if (window.__malusPlaybackNotify) {
+                    window.__malusPlaybackNotify();
+                }
+            }
+        "#;
+        page.call_function(func, &[serde_json::json!(shuffle)])
+            .await
+            .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn set_repeat(&self, repeat: RepeatMode) -> Result<(), AppleError> {
+        let page = self.ensure_playback_session().await?;
+        let rep_code: i64 = match repeat {
+            RepeatMode::Track => 1,
+            RepeatMode::All => 2,
+            RepeatMode::Off => 0,
+        };
+        let func = r#"
+            async function(rep) {
+                const mk = window.MusicKit && window.MusicKit.getInstance();
+                if (!mk) throw new Error("MusicKit instance not available");
+                mk.repeatMode = rep;
+                if (window.__malusPlaybackNotify) {
+                    window.__malusPlaybackNotify();
+                }
+            }
+        "#;
+        page.call_function(func, &[serde_json::json!(rep_code)])
+            .await
+            .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
         Ok(())
     }
 
@@ -1220,9 +1391,6 @@ impl AppleWebSession for ProductionAppleWebSession {
             async function() {
                 const mk = window.MusicKit && window.MusicKit.getInstance();
                 if (!mk) throw new Error("MusicKit instance not available");
-                if (mk.assertUserStorefront) {
-                    mk.assertUserStorefront = () => {};
-                }
                 await mk.play();
                 if (window.__malusPlaybackNotify) {
                     window.__malusPlaybackNotify();
@@ -1307,31 +1475,11 @@ impl AppleWebSession for ProductionAppleWebSession {
             }
         };
 
-        let expr = r#"
-            (() => {
-                const mk = window.MusicKit && window.MusicKit.getInstance();
-                if (!mk) return null;
-                const item = mk.nowPlayingItem;
-                const a = item ? (item.attributes || item) : null;
-                return {
-                    isPlaying: !!mk.isPlaying,
-                    playbackState: mk.playbackState,
-                    positionMs: Math.round((mk.currentPlaybackTime || 0) * 1000),
-                    durationMs: Math.round(a?.durationInMillis ? a.durationInMillis : ((item?.playbackDuration || mk.currentPlaybackDuration || 0) * 1000)),
-                    volume: Math.round((mk.volume || 1) * 100),
-                    muted: !!mk.isMuted,
-                    shuffle: mk.shuffleMode === 1,
-                    repeat: mk.repeatMode || 0,
-                    track: item ? {
-                        id: String(item.id || a?.playParams?.id || ""),
-                        title: String(a?.name || item.title || ""),
-                        artist: String(a?.artistName || item.artistName || ""),
-                        album: String(a?.albumName || item.albumName || "")
-                    } : null
-                };
-            })()
-        "#;
-        let val = page.evaluate(expr).await.map_err(AppleError::Web)?;
+        drop(session_guard);
+        let val = page
+            .evaluate("window.__malusPlaybackSnapshot()?.status")
+            .await
+            .map_err(AppleError::Web)?;
         parse_player_status(&val).ok_or_else(|| {
             AppleError::Internal("Failed to parse player status from MusicKit".to_string())
         })
@@ -1354,92 +1502,12 @@ impl AppleWebSession for ProductionAppleWebSession {
             }
         };
 
-        let expr = r#"
-            (() => {
-                const mk = window.MusicKit && window.MusicKit.getInstance();
-                if (!mk) return null;
-                const q = mk.queue;
-                if (!q || !q.items || q.items.length === 0) {
-                    return { items: [], currentIndex: -1 };
-                }
-                const items = q.items.map(item => {
-                    const a = item.attributes || item;
-                    const art = a?.artwork || item.artwork;
-                    return {
-                        id: String(item.id || a?.playParams?.id || ""),
-                        title: String(a?.name || item.title || ""),
-                        artist: String(a?.artistName || item.artistName || ""),
-                        album: String(a?.albumName || item.albumName || ""),
-                        durationMs: a?.durationInMillis || Math.round((item.playbackDuration || 0) * 1000),
-                        trackNumber: a?.trackNumber || 0,
-                        discNumber: a?.discNumber || 0,
-                        artwork: art ? {
-                            url: art.url,
-                            width: art.width,
-                            height: art.height
-                        } : null
-                    };
-                });
-                // MusicKit v3: queue.position is the current index
-                const pos = typeof q.position === "number" ? q.position : -1;
-                return { items, currentIndex: pos };
-            })()
-        "#;
-        let val = page.evaluate(expr).await.map_err(AppleError::Web)?;
-
-        if val.is_null() {
-            return Ok(Queue::new());
-        }
-
-        let items_val = &val["items"];
-        let current_index = val["currentIndex"]
-            .as_i64()
-            .and_then(|i| if i >= 0 { Some(i as usize) } else { None });
-
-        let mut tracks = Vec::new();
-        if let Some(arr) = items_val.as_array() {
-            for item in arr {
-                let raw_id = item["id"].as_str().unwrap_or_default();
-                if raw_id.is_empty() {
-                    continue;
-                }
-                let id_clean = raw_id.strip_prefix("song:").unwrap_or(raw_id);
-                let mref = MediaRef::Song(id_clean.to_string());
-                let mut track = Track::new(
-                    mref,
-                    item["title"].as_str().unwrap_or_default(),
-                    item["artist"].as_str().unwrap_or_default(),
-                );
-                if let Some(alb) = item["album"].as_str()
-                    && !alb.is_empty()
-                {
-                    track = track.with_album(alb);
-                }
-                if let Some(art_val) = item.get("artwork")
-                    && let Some(artwork) = parse_apple_artwork(art_val)
-                {
-                    track = track.with_artwork(artwork);
-                }
-                if let Some(dur) = item["durationMs"].as_u64()
-                    && dur > 0
-                {
-                    track = track.with_duration_ms(dur);
-                }
-                if let Some(tn) = item["trackNumber"].as_u64()
-                    && tn > 0
-                {
-                    track = track.with_track_number(tn as u32);
-                }
-                if let Some(dn) = item["discNumber"].as_u64()
-                    && dn > 0
-                {
-                    track = track.with_disc_number(dn as u32);
-                }
-                tracks.push(track);
-            }
-        }
-
-        Ok(Queue::with_items(tracks, current_index))
+        drop(session_guard);
+        let val = page
+            .evaluate("window.__malusPlaybackSnapshot()?.queue")
+            .await
+            .map_err(AppleError::Web)?;
+        parse_queue(&val)
     }
 
     async fn play_next(&self, kind: &str, id: &str) -> Result<(), AppleError> {
@@ -1579,7 +1647,17 @@ impl AppleWebSession for ProductionAppleWebSession {
             async function() {
                 const mk = window.MusicKit && window.MusicKit.getInstance();
                 if (!mk) throw new Error("MusicKit instance not available");
-                await mk.skipToNextItem();
+                const currentRepeat = mk.repeatMode;
+                if (currentRepeat === 1) {
+                    mk.repeatMode = 0;
+                }
+                try {
+                    await mk.skipToNextItem();
+                } finally {
+                    if (currentRepeat === 1) {
+                        mk.repeatMode = 1;
+                    }
+                }
                 if (window.__malusPlaybackNotify) {
                     window.__malusPlaybackNotify();
                 }
@@ -1597,7 +1675,17 @@ impl AppleWebSession for ProductionAppleWebSession {
             async function() {
                 const mk = window.MusicKit && window.MusicKit.getInstance();
                 if (!mk) throw new Error("MusicKit instance not available");
-                await mk.skipToPreviousItem();
+                const currentRepeat = mk.repeatMode;
+                if (currentRepeat === 1) {
+                    mk.repeatMode = 0;
+                }
+                try {
+                    await mk.skipToPreviousItem();
+                } finally {
+                    if (currentRepeat === 1) {
+                        mk.repeatMode = 1;
+                    }
+                }
                 if (window.__malusPlaybackNotify) {
                     window.__malusPlaybackNotify();
                 }
@@ -1609,7 +1697,7 @@ impl AppleWebSession for ProductionAppleWebSession {
         Ok(())
     }
 
-    fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlayerStatus>) {
+    fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlaybackEvent>) {
         let sink_lock = self.event_sink.clone();
         tokio::spawn(async move {
             *sink_lock.lock().await = Some(sink);
@@ -1621,3 +1709,35 @@ pub use crate::api::{
     parse_apple_album, parse_apple_artist, parse_apple_artwork, parse_apple_playlist,
     parse_apple_track,
 };
+
+#[cfg(test)]
+mod playback_normalization_tests {
+    use super::*;
+    #[test]
+    fn only_raw_playing_state_allows_progress() {
+        for raw in 0..=10 {
+            let status = parse_player_status(&serde_json::json!({
+                "playbackState": raw, "isPlaying": true, "positionMs": 2500, "volume": 0
+            }))
+            .unwrap();
+            assert_eq!(
+                status.state == PlaybackState::Playing,
+                raw == 2,
+                "raw state {raw}"
+            );
+            assert_eq!(status.volume, 0);
+        }
+        assert!(parse_player_status(&Value::Null).is_none());
+    }
+    #[test]
+    fn malformed_queue_cannot_shift_indexes_silently() {
+        assert!(
+            parse_queue(&serde_json::json!({"items":[{"id":"a"},{}],"currentIndex":1})).is_err()
+        );
+        assert!(parse_queue(&serde_json::json!({"items":[{"id":"a"}],"currentIndex":5})).is_err());
+        let queue =
+            parse_queue(&serde_json::json!({"items":[{"id":"a"},{"id":"a"}],"currentIndex":1}))
+                .unwrap();
+        assert_eq!(queue.current_index, Some(1));
+    }
+}

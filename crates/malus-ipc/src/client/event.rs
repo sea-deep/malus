@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "event", content = "data")]
 pub enum ClientEvent {
     StatusChanged(PlayerStatus),
+    PlaybackError { source: String, message: String },
     QueueChanged(Queue),
     TrackChanged(Option<Track>),
     AuthChanged(AuthStatusWire),

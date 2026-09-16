@@ -12,7 +12,7 @@ use malus_ipc::wire::{
     SearchResultsWire,
 };
 use malus_model::{
-    AccountMediaState, Credits, Lyrics, MediaRef, PageRoute, PlayerStatus, Queue, Track,
+    AccountMediaState, Credits, Lyrics, MediaRef, PageRoute, PlayerStatus, Queue, RepeatMode, Track,
 };
 use tokio::sync::{Mutex, mpsc};
 use tracing::info;
@@ -90,7 +90,7 @@ impl AppleService {
     }
 
     /// Register a sink for playback status changes from MusicKit runtime.
-    pub fn set_event_sink(&self, sink: mpsc::UnboundedSender<PlayerStatus>) {
+    pub fn set_event_sink(&self, sink: mpsc::UnboundedSender<crate::web::PlaybackEvent>) {
         self.session.set_event_sink(sink);
     }
 
@@ -162,6 +162,35 @@ impl AppleService {
             .await
     }
 
+    /// Play a media item starting at a specific index within the collection.
+    pub async fn play_at_index(
+        &self,
+        reference: &MediaRef,
+        start_index: usize,
+    ) -> Result<(), AppleError> {
+        info!("Apple Music play at index {start_index}: {reference}");
+        self.session
+            .set_queue_at_index(reference.kind(), reference.id(), start_index)
+            .await
+    }
+
+    /// Start a collection in the requested order before MusicKit begins playback.
+    pub async fn play_collection(
+        &self,
+        reference: &MediaRef,
+        shuffle: bool,
+    ) -> Result<(), AppleError> {
+        self.session
+            .set_queue_with_shuffle(reference.kind(), reference.id(), shuffle)
+            .await
+    }
+
+    /// Rewind already-loaded current playable item to the beginning and ensure playback.
+    /// Used only when the user explicitly re-selects the currently active item (product intent).
+    pub async fn restart_current_item(&self) -> Result<(), AppleError> {
+        self.session.restart_current_item().await
+    }
+
     /// Read the authoritative queue snapshot from MusicKit.
     pub async fn get_queue(&self) -> Result<Queue, AppleError> {
         self.session.get_queue().await
@@ -185,6 +214,18 @@ impl AppleService {
     /// Seek playback to specified millisecond position.
     pub async fn seek(&self, position_ms: u64) -> Result<(), AppleError> {
         self.session.seek(position_ms).await
+    }
+
+    pub async fn set_volume(&self, volume: u8) -> Result<(), AppleError> {
+        self.session.set_volume(volume.min(100)).await
+    }
+
+    pub async fn set_shuffle(&self, shuffle: bool) -> Result<(), AppleError> {
+        self.session.set_shuffle(shuffle).await
+    }
+
+    pub async fn set_repeat(&self, repeat: RepeatMode) -> Result<(), AppleError> {
+        self.session.set_repeat(repeat).await
     }
 
     /// Skip to next track.
@@ -391,10 +432,15 @@ impl AppleService {
             .add_to_library(reference)
             .await
             .map_err(AppleError::from)?;
-        self.api
+        let mut state = self
+            .api
             .get_account_media_state(reference)
             .await
-            .map_err(AppleError::from)
+            .unwrap_or_else(|_| {
+                AccountMediaState::new(reference.clone(), true, false, malus_model::Rating::Neutral)
+            });
+        state.in_library = true;
+        Ok(state)
     }
 
     /// Get current account media state (in_library, rating).
@@ -414,5 +460,94 @@ impl AppleService {
         reference: &MediaRef,
     ) -> Result<AccountMediaState, AppleError> {
         self.get_account_media_state(reference).await
+    }
+
+    /// Create a new playlist in the user's Apple Music library.
+    pub async fn create_playlist(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        initial_tracks: &[MediaRef],
+    ) -> Result<malus_model::Playlist, AppleError> {
+        self.api
+            .create_playlist(name, description, initial_tracks)
+            .await
+            .map_err(AppleError::from)
+    }
+
+    /// Add track(s) to a playlist in the user's Apple Music library.
+    pub async fn add_tracks_to_playlist(
+        &self,
+        playlist: &MediaRef,
+        tracks: &[MediaRef],
+    ) -> Result<(), AppleError> {
+        self.api
+            .add_tracks_to_playlist(playlist, tracks)
+            .await
+            .map_err(AppleError::from)
+    }
+
+    /// Remove a track from an editable playlist at index.
+    pub async fn remove_track_from_playlist(
+        &self,
+        playlist: &MediaRef,
+        track_index: usize,
+        expected_track: &MediaRef,
+    ) -> Result<(), AppleError> {
+        self.api
+            .remove_track_from_playlist(playlist, track_index, expected_track)
+            .await
+            .map_err(AppleError::from)
+    }
+
+    /// Update an existing playlist's title and description.
+    pub async fn update_playlist(
+        &self,
+        playlist: &MediaRef,
+        name: &str,
+        description: Option<&str>,
+    ) -> Result<(), AppleError> {
+        self.api
+            .update_playlist(playlist, name, description)
+            .await
+            .map_err(AppleError::from)
+    }
+
+    /// Delete a user-created playlist from Apple Music.
+    pub async fn delete_playlist(&self, playlist: &MediaRef) -> Result<(), AppleError> {
+        self.api
+            .delete_playlist(playlist)
+            .await
+            .map_err(AppleError::from)
+    }
+
+    /// Remove a song, album, or playlist from user's library.
+    pub async fn remove_from_library(
+        &self,
+        reference: &MediaRef,
+    ) -> Result<AccountMediaState, AppleError> {
+        self.api
+            .remove_from_library(reference)
+            .await
+            .map_err(AppleError::from)?;
+        let mut state = self
+            .api
+            .get_account_media_state(reference)
+            .await
+            .unwrap_or_else(|_| {
+                AccountMediaState::new(
+                    reference.clone(),
+                    false,
+                    false,
+                    malus_model::Rating::Neutral,
+                )
+            });
+        state.in_library = false;
+        Ok(state)
+    }
+
+    /// Access the underlying official API client.
+    pub fn api(&self) -> &OfficialAppleMusicApi {
+        &self.api
     }
 }

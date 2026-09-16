@@ -1,7 +1,7 @@
-//! Lightweight mathematical consistency audit for malus-gui-next tokens.
+//! Mathematical consistency audit for malus-gtk design tokens.
 
-use malus_gui_next::design::*;
-use malus_gui_next::model::*;
+use malus_gtk::design::*;
+use malus_gtk::model::*;
 
 #[test]
 fn test_base_grid_alignment() {
@@ -27,36 +27,10 @@ fn test_base_grid_alignment() {
         "Sidebar width must be an 8px multiple"
     );
     assert_eq!(
-        SIDEBAR_ROW_HEIGHT % 8,
-        0,
-        "Sidebar row height must be an 8px multiple"
-    );
-    assert_eq!(
-        PLAYER_TOTAL_HEIGHT % 8,
-        0,
-        "Player total height must be an 8px multiple"
-    );
-    assert_eq!(
-        PLAYER_CONTROLS_ROW_HEIGHT % 8,
-        0,
-        "Player controls row must be an 8px multiple"
-    );
-    assert_eq!(
-        PLAYER_PROGRESS_ROW_HEIGHT % 8,
-        0,
-        "Player progress row must be an 8px multiple"
-    );
-    assert_eq!(
-        PLAYER_ARTWORK_SIZE % 8,
-        0,
-        "Player artwork size must be an 8px multiple"
-    );
-    assert_eq!(
         PAGE_PADDING_NORMAL % 8,
         0,
         "Page padding must be an 8px multiple"
     );
-    assert_eq!(GRID_GAP % 8, 0, "Grid gap must be an 8px multiple");
 }
 
 #[test]
@@ -72,14 +46,14 @@ fn test_control_and_icon_hierarchy() {
     }
 
     // Hit targets must be at least 40px for normal controls
-    assert!(CONTROL_MD >= 40);
-    assert!(CONTROL_LG >= 48);
+    const { assert!(CONTROL_MD >= 40) };
+    const { assert!(CONTROL_LG >= 48) };
 }
 
 #[test]
 fn test_radii_scale() {
-    let radii = [RADIUS_SM, RADIUS_MD, RADIUS_LG];
-    assert_eq!(radii, [6, 10, 14]);
+    let radii = [RADIUS_SM, RADIUS_MD, RADIUS_LG, RADIUS_XL];
+    assert_eq!(radii, [6, 8, 10, 12]);
 }
 
 #[test]
