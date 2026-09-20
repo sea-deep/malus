@@ -20,7 +20,7 @@ pub mod mapper;
 
 use malus_ipc::wire::{
     PageActionWire, PageBadgeWire, PageContinuationWire, PageCursorWire, PageHeaderWire,
-    PageItemWire, PageSectionWire, PageWire,
+    PageItemWire, PageSectionWire, PageWire, SubtitleLinkWire,
 };
 use malus_model::{Artwork, PageRoute};
 use serde_json::Value;
@@ -496,6 +496,163 @@ async fn build_library_list(
 
 // ──────────────────────── ALBUM DETAIL ────────────────────────
 
+fn push_known_artist(
+    known_artists: &mut Vec<(Option<String>, String)>,
+    name: Option<&str>,
+    id: &str,
+) {
+    let clean_id = id.trim();
+    if clean_id.is_empty() {
+        return;
+    }
+    if !known_artists
+        .iter()
+        .any(|(_, existing_id)| existing_id == clean_id)
+    {
+        known_artists.push((name.map(|n| n.trim().to_string()), clean_id.to_string()));
+    } else if let Some(n) = name
+        && let Some((existing_name, _)) = known_artists.iter_mut().find(|(_, eid)| eid == clean_id)
+        && existing_name.is_none()
+        && !n.trim().is_empty()
+    {
+        *existing_name = Some(n.trim().to_string());
+    }
+}
+
+fn extract_album_artists(
+    album: &serde_json::Value,
+    attrs: &serde_json::Value,
+    raw_artist_name: &str,
+) -> (Option<String>, Option<PageRoute>, Vec<SubtitleLinkWire>) {
+    if raw_artist_name.trim().is_empty() {
+        return (None, None, Vec::new());
+    }
+
+    let mut known_artists: Vec<(Option<String>, String)> = Vec::new();
+
+    // 1. From album.relationships.artists.data
+    if let Some(arr) = album
+        .get("relationships")
+        .and_then(|r| r.get("artists"))
+        .and_then(|a| a.get("data"))
+        .and_then(|d| d.as_array())
+    {
+        for a in arr {
+            let id = a.get("id").and_then(|i| i.as_str());
+            let name = a
+                .get("attributes")
+                .and_then(|at| at.get("name"))
+                .and_then(|n| n.as_str())
+                .or_else(|| a.get("name").and_then(|n| n.as_str()));
+            if let Some(id) = id {
+                push_known_artist(&mut known_artists, name, id);
+            }
+        }
+    }
+
+    // 2. From tracks: album.relationships.tracks.data
+    if let Some(tracks) = album
+        .get("relationships")
+        .and_then(|r| r.get("tracks"))
+        .and_then(|t| t.get("data"))
+        .and_then(|d| d.as_array())
+    {
+        for t in tracks {
+            if let Some(arr) = t
+                .get("relationships")
+                .and_then(|r| r.get("artists"))
+                .and_then(|a| a.get("data"))
+                .and_then(|d| d.as_array())
+            {
+                for a in arr {
+                    let id = a.get("id").and_then(|i| i.as_str());
+                    let name = a
+                        .get("attributes")
+                        .and_then(|at| at.get("name"))
+                        .and_then(|n| n.as_str())
+                        .or_else(|| a.get("name").and_then(|n| n.as_str()));
+                    if let Some(id) = id {
+                        push_known_artist(&mut known_artists, name, id);
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. From attrs.artistUrl if known_artists is still empty
+    if known_artists.is_empty()
+        && let Some(id) = attrs
+            .get("artistUrl")
+            .and_then(|u| u.as_str())
+            .and_then(|url| url.trim_end_matches('/').rsplit('/').next())
+    {
+        push_known_artist(&mut known_artists, Some(raw_artist_name), id);
+    }
+
+    let primary_route = known_artists
+        .first()
+        .map(|(_, id)| PageRoute::Artist(id.clone()));
+
+    // Check if raw_artist_name matches a single known artist exactly (e.g. "Simon & Garfunkel")
+    if let Some((_, id)) = known_artists.iter().find(|(name, _)| {
+        name.as_deref()
+            .map(|n| n.eq_ignore_ascii_case(raw_artist_name))
+            .unwrap_or(false)
+    }) {
+        let links = vec![SubtitleLinkWire::new(
+            raw_artist_name,
+            Some(PageRoute::Artist(id.clone())),
+        )];
+        return (
+            Some(raw_artist_name.to_string()),
+            Some(PageRoute::Artist(id.clone())),
+            links,
+        );
+    }
+
+    // If raw_artist_name contains delimiters like " & " or ", "
+    let tokens: Vec<&str> = raw_artist_name
+        .split(", ")
+        .flat_map(|part| part.split(" & "))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let mut links = Vec::new();
+    if tokens.len() > 1 {
+        for (idx, token) in tokens.iter().enumerate() {
+            let matched_id = known_artists
+                .iter()
+                .find(|(name, _)| {
+                    name.as_deref()
+                        .map(|n| n.eq_ignore_ascii_case(token))
+                        .unwrap_or(false)
+                })
+                .map(|(_, id)| id.clone())
+                .or_else(|| {
+                    if known_artists.len() == tokens.len() {
+                        Some(known_artists[idx].1.clone())
+                    } else if idx == 0 {
+                        known_artists.first().map(|(_, id)| id.clone())
+                    } else {
+                        None
+                    }
+                });
+            links.push(SubtitleLinkWire::new(
+                *token,
+                matched_id.map(PageRoute::Artist),
+            ));
+        }
+    } else {
+        links.push(SubtitleLinkWire::new(
+            raw_artist_name,
+            primary_route.clone(),
+        ));
+    }
+
+    (Some(raw_artist_name.to_string()), primary_route, links)
+}
+
 async fn build_album_detail(
     api: &OfficialAppleMusicApi,
     album_id: &str,
@@ -550,30 +707,10 @@ async fn build_album_detail(
     let mut page = PageWire::new(&page_id, name);
     let mut header = PageHeaderWire::new(name);
     header.actions = mapper::map_detail_actions(album);
-    header.subtitle = if artist.is_empty() {
-        None
-    } else {
-        Some(artist.to_string())
-    };
-    let artist_id = album
-        .get("relationships")
-        .and_then(|r| r.get("artists"))
-        .and_then(|a| a.get("data"))
-        .and_then(|d| d.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|art| art.get("id"))
-        .and_then(|i| i.as_str())
-        .or_else(|| {
-            attrs
-                .get("artistUrl")
-                .and_then(|u| u.as_str())
-                .and_then(|url| url.trim_end_matches('/').rsplit('/').next())
-        });
-    if let Some(art_id) = artist_id
-        && !art_id.is_empty()
-    {
-        header.subtitle_route = Some(PageRoute::Artist(art_id.to_string()));
-    }
+    let (sub, sub_route, sub_links) = extract_album_artists(album, attrs, artist);
+    header.subtitle = sub;
+    header.subtitle_route = sub_route;
+    header.subtitle_links = sub_links;
     header.artwork = attrs
         .get("artwork")
         .and_then(crate::api::parse::parse_apple_artwork);
@@ -706,11 +843,10 @@ async fn build_library_album_detail(
     let mut page = PageWire::new(&page_id, name);
     let mut header = PageHeaderWire::new(name);
     header.actions = mapper::map_detail_actions(album);
-    header.subtitle = if artist.is_empty() {
-        None
-    } else {
-        Some(artist.to_string())
-    };
+    let (sub, sub_route, sub_links) = extract_album_artists(album, attrs, artist);
+    header.subtitle = sub;
+    header.subtitle_route = sub_route;
+    header.subtitle_links = sub_links;
     header.artwork = attrs
         .get("artwork")
         .and_then(crate::api::parse::parse_apple_artwork);
@@ -1093,4 +1229,112 @@ fn extract_next_cursor(val: &Value, section_id: Option<&str>) -> Option<PageCurs
     } else {
         PageCursorWire::new(token)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_album_artists_collab_single() {
+        let album = serde_json::json!({
+            "relationships": {
+                "artists": {
+                    "data": [
+                        { "id": "1560945939", "type": "artists", "attributes": { "name": "Natkhat" } }
+                    ]
+                },
+                "tracks": {
+                    "data": [
+                        {
+                            "id": "1001",
+                            "relationships": {
+                                "artists": {
+                                    "data": [
+                                        { "id": "1560945939", "attributes": { "name": "Natkhat" } },
+                                        { "id": "1612345678", "attributes": { "name": "Chaar Diwaari" } }
+                                    ]
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        });
+        let attrs = serde_json::json!({
+            "artistName": "Natkhat & Chaar Diwaari"
+        });
+
+        let (sub, primary_route, links) =
+            extract_album_artists(&album, &attrs, "Natkhat & Chaar Diwaari");
+        assert_eq!(sub, Some("Natkhat & Chaar Diwaari".to_string()));
+        assert_eq!(
+            primary_route,
+            Some(PageRoute::Artist("1560945939".to_string()))
+        );
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].text, "Natkhat");
+        assert_eq!(
+            links[0].route,
+            Some(PageRoute::Artist("1560945939".to_string()))
+        );
+        assert_eq!(links[1].text, "Chaar Diwaari");
+        assert_eq!(
+            links[1].route,
+            Some(PageRoute::Artist("1612345678".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_extract_album_artists_single_band_with_ampersand() {
+        let album = serde_json::json!({
+            "relationships": {
+                "artists": {
+                    "data": [
+                        { "id": "12345", "type": "artists", "attributes": { "name": "Simon & Garfunkel" } }
+                    ]
+                }
+            }
+        });
+        let attrs = serde_json::json!({
+            "artistName": "Simon & Garfunkel"
+        });
+
+        let (sub, primary_route, links) =
+            extract_album_artists(&album, &attrs, "Simon & Garfunkel");
+        assert_eq!(sub, Some("Simon & Garfunkel".to_string()));
+        assert_eq!(primary_route, Some(PageRoute::Artist("12345".to_string())));
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].text, "Simon & Garfunkel");
+        assert_eq!(links[0].route, Some(PageRoute::Artist("12345".to_string())));
+    }
+
+    #[test]
+    fn test_extract_album_artists_single_artist() {
+        let album = serde_json::json!({
+            "relationships": {
+                "artists": {
+                    "data": [
+                        { "id": "1440857780", "type": "artists", "attributes": { "name": "Daft Punk" } }
+                    ]
+                }
+            }
+        });
+        let attrs = serde_json::json!({
+            "artistName": "Daft Punk"
+        });
+
+        let (sub, primary_route, links) = extract_album_artists(&album, &attrs, "Daft Punk");
+        assert_eq!(sub, Some("Daft Punk".to_string()));
+        assert_eq!(
+            primary_route,
+            Some(PageRoute::Artist("1440857780".to_string()))
+        );
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].text, "Daft Punk");
+        assert_eq!(
+            links[0].route,
+            Some(PageRoute::Artist("1440857780".to_string()))
+        );
+    }
 }

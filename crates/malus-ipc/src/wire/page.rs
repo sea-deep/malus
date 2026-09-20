@@ -107,6 +107,23 @@ impl PageWire {
     }
 }
 
+/// An individual linked element within a page header subtitle (e.g. one of multiple artists).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubtitleLinkWire {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<PageRoute>,
+}
+
+impl SubtitleLinkWire {
+    pub fn new(text: impl Into<String>, route: Option<PageRoute>) -> Self {
+        Self {
+            text: text.into(),
+            route,
+        }
+    }
+}
+
 /// Rich header for album, artist, playlist, or summary pages.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PageHeaderWire {
@@ -115,6 +132,8 @@ pub struct PageHeaderWire {
     pub subtitle: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtitle_route: Option<PageRoute>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subtitle_links: Vec<SubtitleLinkWire>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artwork: Option<Artwork>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -139,6 +158,7 @@ impl PageHeaderWire {
             title: title.into(),
             subtitle: None,
             subtitle_route: None,
+            subtitle_links: Vec::new(),
             artwork: None,
             banner_artwork: None,
             description: None,

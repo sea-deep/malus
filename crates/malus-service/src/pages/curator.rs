@@ -56,6 +56,7 @@ pub async fn build_curator_page(
         title: title.clone(),
         subtitle: subtitle.clone(),
         subtitle_route: None,
+        subtitle_links: Vec::new(),
         artwork,
         banner_artwork,
         badges: Vec::new(),

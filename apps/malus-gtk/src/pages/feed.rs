@@ -337,17 +337,21 @@ impl Component for FeedPage {
 
         let widgets = view_output!();
         let content = widgets.main_box.clone();
-        let last_narrow = std::cell::Cell::new(false);
+        let last_narrow = std::cell::Cell::new(None::<bool>);
         root.add_tick_callback(move |page, _| {
-            let narrow = page.width() < 600;
-            if last_narrow.replace(narrow) != narrow {
-                let padding = if narrow {
-                    PAGE_PADDING_NARROW
-                } else {
-                    PAGE_PADDING_NORMAL
-                };
-                content.set_margin_start(padding);
-                content.set_margin_end(padding);
+            let w = page.width();
+            if w > 0 {
+                let narrow = w < 600;
+                if last_narrow.get() != Some(narrow) {
+                    last_narrow.set(Some(narrow));
+                    let padding = if narrow {
+                        PAGE_PADDING_NARROW
+                    } else {
+                        PAGE_PADDING_NORMAL
+                    };
+                    content.set_margin_start(padding);
+                    content.set_margin_end(padding);
+                }
             }
             gtk::glib::ControlFlow::Continue
         });

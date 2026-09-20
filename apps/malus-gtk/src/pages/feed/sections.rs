@@ -152,7 +152,48 @@ impl FeedPage {
         details.append(&title_label);
 
         // Subtitle (Artist / Curator)
-        if let Some(ref sub) = header.subtitle {
+        if !header.subtitle_links.is_empty() {
+            let sub_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            sub_box.add_css_class("hero-subtitle-box");
+            sub_box.set_halign(gtk::Align::Start);
+            for (i, link) in header.subtitle_links.iter().enumerate() {
+                if i > 0 {
+                    let sep_str = if header.subtitle_links.len() == 2
+                        || i == header.subtitle_links.len() - 1
+                    {
+                        " & "
+                    } else {
+                        ", "
+                    };
+                    let sep = gtk::Label::new(Some(sep_str));
+                    sep.add_css_class("hero-subtitle");
+                    sub_box.append(&sep);
+                }
+                let sub_label = gtk::Label::builder()
+                    .label(&link.text)
+                    .xalign(0.0)
+                    .wrap(true)
+                    .wrap_mode(gtk::pango::WrapMode::WordChar)
+                    .css_classes(vec!["hero-subtitle".to_string()])
+                    .build();
+                if let Some(ref route) = link.route {
+                    sub_label.add_css_class("metadata-link");
+                    sub_label.set_cursor_from_name(Some("pointer"));
+                    let s = sender.clone();
+                    let rt = route.clone();
+                    let g = gtk::GestureClick::new();
+                    g.connect_released(move |g, n, _, _| {
+                        if n == 1 {
+                            g.set_state(gtk::EventSequenceState::Claimed);
+                            let _ = s.output(FeedOutput::Navigate(rt.clone()));
+                        }
+                    });
+                    sub_label.add_controller(g);
+                }
+                sub_box.append(&sub_label);
+            }
+            details.append(&sub_box);
+        } else if let Some(ref sub) = header.subtitle {
             let sub_label = gtk::Label::builder()
                 .label(sub)
                 .xalign(0.0)
@@ -200,23 +241,27 @@ impl FeedPage {
         details.append(&actions_host);
         self.header_actions_host = Some(actions_host);
         root.append(&details);
-        let last = std::cell::Cell::new(false);
+        let last = std::cell::Cell::new(None::<bool>);
         root.add_tick_callback(move |header, _| {
-            let narrow = header.width() < 580;
-            if last.replace(narrow) != narrow {
-                header.set_orientation(if narrow {
-                    gtk::Orientation::Vertical
-                } else {
-                    gtk::Orientation::Horizontal
-                });
-                if let Some(art) = &art {
-                    art.set_side(if narrow { 176 } else { ARTWORK_HERO_SIZE });
+            let w = header.width();
+            if w > 0 {
+                let narrow = w < 580;
+                if last.get() != Some(narrow) {
+                    last.set(Some(narrow));
+                    header.set_orientation(if narrow {
+                        gtk::Orientation::Vertical
+                    } else {
+                        gtk::Orientation::Horizontal
+                    });
+                    if let Some(art) = &art {
+                        art.set_side(if narrow { 176 } else { ARTWORK_HERO_SIZE });
+                    }
+                    details.set_valign(if narrow {
+                        gtk::Align::Start
+                    } else {
+                        gtk::Align::End
+                    });
                 }
-                details.set_valign(if narrow {
-                    gtk::Align::Start
-                } else {
-                    gtk::Align::End
-                });
             }
             glib::ControlFlow::Continue
         });

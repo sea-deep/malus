@@ -662,17 +662,18 @@ impl Component for MalusApp {
                 .map(|w| w.is::<gtk::Editable>() || w.is::<gtk::TextView>() || w.is::<gtk::Text>())
                 .unwrap_or(false);
 
+            let k = keyval.to_lower();
             if modifier.contains(gtk::gdk::ModifierType::CONTROL_MASK) {
-                if keyval == gtk::gdk::Key::b {
+                if k == gtk::gdk::Key::b {
                     s_key.input(AppInput::ToggleSidebar);
                     return gtk::glib::Propagation::Stop;
-                } else if keyval == gtk::gdk::Key::u {
+                } else if k == gtk::gdk::Key::q || k == gtk::gdk::Key::u {
                     s_key.input(AppInput::ToggleQueue);
                     return gtk::glib::Propagation::Stop;
-                } else if keyval == gtk::gdk::Key::l {
+                } else if k == gtk::gdk::Key::l {
                     s_key.input(AppInput::ToggleLyrics);
                     return gtk::glib::Propagation::Stop;
-                } else if keyval == gtk::gdk::Key::f || keyval == gtk::gdk::Key::k {
+                } else if k == gtk::gdk::Key::f || k == gtk::gdk::Key::k {
                     s_key.input(AppInput::FocusSearch);
                     return gtk::glib::Propagation::Stop;
                 }
@@ -706,6 +707,29 @@ impl Component for MalusApp {
             gtk::glib::Propagation::Proceed
         });
         root.add_controller(event_ctrl);
+
+        // GTK4 native ShortcutController for accelerator robustness across XKB maps / CapsLock / NumLock
+        let shortcut_ctrl = gtk::ShortcutController::new();
+        shortcut_ctrl.set_scope(gtk::ShortcutScope::Local);
+
+        let add_shortcut = |accel: &str, create_input: Box<dyn Fn() -> AppInput>| {
+            if let Some(trigger) = gtk::ShortcutTrigger::parse_string(accel) {
+                let s = sender.clone();
+                let action = gtk::CallbackAction::new(move |_, _| {
+                    s.input(create_input());
+                    gtk::glib::Propagation::Stop
+                });
+                shortcut_ctrl.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(action)));
+            }
+        };
+
+        add_shortcut("<Control>b", Box::new(|| AppInput::ToggleSidebar));
+        add_shortcut("<Control>q", Box::new(|| AppInput::ToggleQueue));
+        add_shortcut("<Control>u", Box::new(|| AppInput::ToggleQueue));
+        add_shortcut("<Control>l", Box::new(|| AppInput::ToggleLyrics));
+        add_shortcut("<Control>f", Box::new(|| AppInput::FocusSearch));
+        add_shortcut("<Control>k", Box::new(|| AppInput::FocusSearch));
+        root.add_controller(shortcut_ctrl);
 
         ComponentParts { model, widgets }
     }
@@ -752,15 +776,12 @@ impl Component for MalusApp {
                 widgets.outer_split_view.set_show_sidebar(show);
             }
             AppInput::ToggleQueue => {
-                if self.now_playing_mode.take().is_some() {
-                    self.now_playing_closing = true;
-                    self.utility_mode = UtilityMode::Queue;
-                    self.player_bar.refresh(&self.player, self.utility_mode);
-                    widgets.shell_stack.set_visible_child_name("browse");
+                if self.now_playing_mode.is_some() {
+                    sender.input(AppInput::ToggleNowPlayingQueue);
                 } else {
                     self.utility_mode.toggle_queue();
+                    self.sync_utility(widgets);
                 }
-                self.sync_utility(widgets);
             }
             AppInput::ToggleLyrics => {
                 if self.now_playing_mode.is_some() {
@@ -1240,6 +1261,8 @@ impl MalusApp {
         if self.utility_mode == UtilityMode::Queue {
             self.utility_pane.reload_queue();
             self.utility_pane.scroll_to_now_playing();
+        } else if self.utility_mode == UtilityMode::Lyrics {
+            self.utility_pane.lyrics.view.refresh();
         }
         self.player_bar.refresh(&self.player, self.utility_mode);
     }

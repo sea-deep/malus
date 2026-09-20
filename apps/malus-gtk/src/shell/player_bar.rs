@@ -129,7 +129,7 @@ impl PlayerBar {
         lyrics_button.add_css_class("control-inactive");
         lyrics_button.set_focus_on_click(false);
         lyrics_button.connect_clicked(move |_| lyrics());
-        let queue_button = icon_button(ICON_QUEUE, "Queue (Ctrl+U)", "player-icon-btn");
+        let queue_button = icon_button(ICON_QUEUE, "Queue (Ctrl+Q)", "player-icon-btn");
         queue_button.add_css_class("control-inactive");
         queue_button.set_focus_on_click(false);
         queue_button.connect_clicked(move |_| queue());
@@ -152,7 +152,7 @@ impl PlayerBar {
         let last_width = std::cell::Cell::new(0);
         root.add_tick_callback(move |root, _| {
             let width = root.width();
-            if last_width.replace(width) != width {
+            if width > 0 && last_width.replace(width) != width {
                 let compact = width < 850;
                 let narrow = width < 680;
                 let very_narrow = width < 560;

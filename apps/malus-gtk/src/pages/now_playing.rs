@@ -504,6 +504,9 @@ impl NowPlayingPage {
         root.add_tick_callback(move |root, _| {
             let width = root.width();
             let height = root.height();
+            if width <= 0 || height <= 0 {
+                return gtk::glib::ControlFlow::Continue;
+            }
             let mode = m.get();
             let has_lyrics = state
                 .borrow()
