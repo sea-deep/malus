@@ -369,6 +369,9 @@ impl FeedPage {
                 .scrolled_window
                 .set_vscrollbar_policy(gtk::PolicyType::Never);
             widgets.main_box.set_vexpand(true);
+            widgets.main_box.set_margin_start(0);
+            widgets.main_box.set_margin_end(0);
+            widgets.main_box.set_margin_top(0);
             widgets.main_box.set_margin_bottom(0);
             widgets.sections_container.set_vexpand(true);
             let artists_view = self.build_library_artists_view(&page, sender.clone());
@@ -379,6 +382,9 @@ impl FeedPage {
                 .scrolled_window
                 .set_vscrollbar_policy(gtk::PolicyType::Never);
             widgets.main_box.set_vexpand(true);
+            widgets.main_box.set_margin_start(PAGE_PADDING_NORMAL);
+            widgets.main_box.set_margin_end(PAGE_PADDING_NORMAL);
+            widgets.main_box.set_margin_top(24);
             widgets.main_box.set_margin_bottom(0);
             widgets.sections_container.set_vexpand(true);
             let songs_view = self.build_library_songs_view(&page, sender.clone());
@@ -389,6 +395,9 @@ impl FeedPage {
                 .scrolled_window
                 .set_vscrollbar_policy(gtk::PolicyType::Never);
             widgets.main_box.set_vexpand(true);
+            widgets.main_box.set_margin_start(0);
+            widgets.main_box.set_margin_end(0);
+            widgets.main_box.set_margin_top(0);
             widgets.main_box.set_margin_bottom(0);
             widgets.sections_container.set_vexpand(true);
             let genres_view = self.build_library_genres_view(&page, sender.clone());
@@ -399,6 +408,9 @@ impl FeedPage {
                 .scrolled_window
                 .set_vscrollbar_policy(gtk::PolicyType::Automatic);
             widgets.main_box.set_vexpand(false);
+            widgets.main_box.set_margin_start(PAGE_PADDING_NORMAL);
+            widgets.main_box.set_margin_end(PAGE_PADDING_NORMAL);
+            widgets.main_box.set_margin_top(24);
             widgets.main_box.set_margin_bottom(48);
             widgets.sections_container.set_vexpand(false);
         }
@@ -756,9 +768,10 @@ impl FeedPage {
     ) -> gtk::Widget {
         let split = adw::OverlaySplitView::builder()
             .sidebar_position(gtk::PackType::Start)
-            .min_sidebar_width(220.0)
-            .max_sidebar_width(280.0)
+            .min_sidebar_width(200.0)
+            .max_sidebar_width(260.0)
             .sidebar_width_fraction(0.24)
+            .collapsed(true)
             .enable_show_gesture(true)
             .enable_hide_gesture(true)
             .css_classes(vec!["master-split-view".to_string()])
@@ -868,13 +881,9 @@ impl FeedPage {
         let back_box_ref = back_box_opt;
         let show_cell_ref = show_cell;
         split.add_tick_callback(move |widget, _| {
-            let win_w = widget
-                .root()
-                .and_then(|r| r.downcast::<gtk::Window>().ok())
-                .map(|w| w.width())
-                .unwrap_or_else(|| widget.width());
-            if win_w > 0 && last_w.replace(win_w) != win_w {
-                let is_narrow = win_w < 850;
+            let avail_w = widget.width();
+            if avail_w > 0 && last_w.replace(avail_w) != avail_w {
+                let is_narrow = avail_w < 620;
                 let show_detail = show_cell_ref.get();
                 split_ref.set_collapsed(is_narrow);
                 if is_narrow {
@@ -900,7 +909,7 @@ impl FeedPage {
         sender: ComponentSender<Self>,
     ) -> (gtk::ScrolledWindow, Option<gtk::Box>) {
         let detail_scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
+            .hscrollbar_policy(gtk::PolicyType::Automatic)
             .vscrollbar_policy(gtk::PolicyType::Automatic)
             .vexpand(true)
             .hexpand(true)
@@ -1139,9 +1148,10 @@ impl FeedPage {
     ) -> gtk::Widget {
         let split = adw::OverlaySplitView::builder()
             .sidebar_position(gtk::PackType::Start)
-            .min_sidebar_width(220.0)
-            .max_sidebar_width(280.0)
+            .min_sidebar_width(200.0)
+            .max_sidebar_width(260.0)
             .sidebar_width_fraction(0.24)
+            .collapsed(true)
             .enable_show_gesture(true)
             .enable_hide_gesture(true)
             .css_classes(vec!["master-split-view".to_string()])
@@ -1277,13 +1287,9 @@ impl FeedPage {
         let back_box_ref = back_box_opt;
         let show_cell_ref = show_cell;
         split.add_tick_callback(move |widget, _| {
-            let win_w = widget
-                .root()
-                .and_then(|r| r.downcast::<gtk::Window>().ok())
-                .map(|w| w.width())
-                .unwrap_or_else(|| widget.width());
-            if win_w > 0 && last_w.replace(win_w) != win_w {
-                let is_narrow = win_w < 850;
+            let avail_w = widget.width();
+            if avail_w > 0 && last_w.replace(avail_w) != avail_w {
+                let is_narrow = avail_w < 620;
                 let show_detail = show_cell_ref.get();
                 split_ref.set_collapsed(is_narrow);
                 if is_narrow {
@@ -1318,7 +1324,7 @@ impl FeedPage {
 
         // 2. Detail Content
         let detail_scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
+            .hscrollbar_policy(gtk::PolicyType::Automatic)
             .vscrollbar_policy(gtk::PolicyType::Automatic)
             .vexpand(true)
             .hexpand(true)
