@@ -110,11 +110,11 @@ pub struct FeedPage {
     genre_search_query: String,
     show_genre_detail: bool,
     pub(super) active_artist_split: Option<adw::OverlaySplitView>,
-    pub(super) active_artist_back_box: Option<gtk::Box>,
+    pub(super) active_artist_back_box: std::rc::Rc<std::cell::RefCell<Option<gtk::Box>>>,
     pub(super) show_artist_detail_cell: Option<std::rc::Rc<std::cell::Cell<bool>>>,
     pub(super) active_genre_split: Option<adw::OverlaySplitView>,
     pub(super) active_genre_list: Option<gtk::Box>,
-    pub(super) active_genre_back_box: Option<gtk::Box>,
+    pub(super) active_genre_back_box: std::rc::Rc<std::cell::RefCell<Option<gtk::Box>>>,
     pub(super) show_genre_detail_cell: Option<std::rc::Rc<std::cell::Cell<bool>>>,
 }
 
@@ -341,11 +341,11 @@ impl Component for FeedPage {
             genre_search_query: String::new(),
             show_genre_detail: false,
             active_artist_split: None,
-            active_artist_back_box: None,
+            active_artist_back_box: std::rc::Rc::new(std::cell::RefCell::new(None)),
             show_artist_detail_cell: None,
             active_genre_split: None,
             active_genre_list: None,
-            active_genre_back_box: None,
+            active_genre_back_box: std::rc::Rc::new(std::cell::RefCell::new(None)),
             show_genre_detail_cell: None,
         };
 

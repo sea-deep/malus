@@ -340,11 +340,11 @@ impl FeedPage {
         self.active_artist_list = None;
         self.active_artist_spinner = None;
         self.active_artist_split = None;
-        self.active_artist_back_box = None;
+        *self.active_artist_back_box.borrow_mut() = None;
         self.show_artist_detail_cell = None;
         self.active_genre_split = None;
         self.active_genre_list = None;
-        self.active_genre_back_box = None;
+        *self.active_genre_back_box.borrow_mut() = None;
         self.show_genre_detail_cell = None;
         self.virtual_track_list = None;
         self.library_subtitle_lbl = None;
@@ -867,7 +867,7 @@ impl FeedPage {
         split.set_sidebar(Some(&sidebar_box));
 
         let (detail_scroll, back_box_opt) = self.build_artist_detail_content(sender);
-        self.active_artist_back_box = back_box_opt.clone();
+        *self.active_artist_back_box.borrow_mut() = back_box_opt;
         split.set_content(Some(&detail_scroll));
 
         let show_cell = std::rc::Rc::new(std::cell::Cell::new(self.show_artist_detail));
@@ -877,7 +877,7 @@ impl FeedPage {
         // Responsive behavior
         let split_ref = split.clone();
         let last_w = std::cell::Cell::new(0);
-        let back_box_ref = back_box_opt;
+        let back_box_cell = self.active_artist_back_box.clone();
         let show_cell_ref = show_cell;
         split.add_tick_callback(move |widget, _| {
             let win_w = widget
@@ -891,12 +891,12 @@ impl FeedPage {
                 split_ref.set_collapsed(is_narrow);
                 if is_narrow {
                     split_ref.set_show_sidebar(!show_detail);
-                    if let Some(b) = &back_box_ref {
+                    if let Some(b) = back_box_cell.borrow().as_ref() {
                         b.set_visible(show_detail);
                     }
                 } else {
                     split_ref.set_show_sidebar(true);
-                    if let Some(b) = &back_box_ref {
+                    if let Some(b) = back_box_cell.borrow().as_ref() {
                         b.set_visible(false);
                     }
                 }
@@ -1077,7 +1077,7 @@ impl FeedPage {
         }
 
         let (detail_scroll, back_box) = self.build_artist_detail_content(sender);
-        self.active_artist_back_box = back_box.clone();
+        *self.active_artist_back_box.borrow_mut() = back_box.clone();
         split.set_content(Some(&detail_scroll));
 
         let win_narrow = split
@@ -1282,7 +1282,7 @@ impl FeedPage {
         split.set_sidebar(Some(&sidebar_box));
 
         let (detail_scroll, back_box_opt) = self.build_genre_detail_content(page, sender);
-        self.active_genre_back_box = back_box_opt.clone();
+        *self.active_genre_back_box.borrow_mut() = back_box_opt;
         split.set_content(Some(&detail_scroll));
 
         let show_cell = std::rc::Rc::new(std::cell::Cell::new(self.show_genre_detail));
@@ -1292,7 +1292,7 @@ impl FeedPage {
         // Responsive behavior
         let split_ref = split.clone();
         let last_w = std::cell::Cell::new(0);
-        let back_box_ref = back_box_opt;
+        let back_box_cell = self.active_genre_back_box.clone();
         let show_cell_ref = show_cell;
         split.add_tick_callback(move |widget, _| {
             let win_w = widget
@@ -1306,12 +1306,12 @@ impl FeedPage {
                 split_ref.set_collapsed(is_narrow);
                 if is_narrow {
                     split_ref.set_show_sidebar(!show_detail);
-                    if let Some(b) = &back_box_ref {
+                    if let Some(b) = back_box_cell.borrow().as_ref() {
                         b.set_visible(show_detail);
                     }
                 } else {
                     split_ref.set_show_sidebar(true);
-                    if let Some(b) = &back_box_ref {
+                    if let Some(b) = back_box_cell.borrow().as_ref() {
                         b.set_visible(false);
                     }
                 }
@@ -1614,7 +1614,7 @@ impl FeedPage {
         }
 
         let (detail_scroll, back_box) = self.build_genre_detail_content(&page, sender);
-        self.active_genre_back_box = back_box.clone();
+        *self.active_genre_back_box.borrow_mut() = back_box.clone();
         split.set_content(Some(&detail_scroll));
 
         let win_narrow = split
