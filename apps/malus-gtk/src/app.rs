@@ -142,6 +142,11 @@ pub enum AppCmd {
         state: Option<AccountMediaState>,
     },
     PlayerFinished(Result<(), String>),
+    TrackEnriched {
+        generation: u64,
+        track: malus_model::Track,
+    },
+    TrackEnrichedFailed,
 }
 
 #[relm4::component(pub)]
@@ -1167,6 +1172,25 @@ impl Component for MalusApp {
                     sender.input(AppInput::ShowToast(format!("Playback failed: {error}")));
                 }
             }
+            AppCmd::TrackEnriched { generation, track } => {
+                let mut p = self.player.borrow_mut();
+                if generation == p.lyrics.generation
+                    && let Some(cur) = p.now.current_track.as_mut()
+                    && cur.id == track.id
+                {
+                    if cur.album.as_ref().and_then(|a| a.id.as_ref()).is_none()
+                        && let Some(alb) = track.album
+                    {
+                        cur.album = Some(alb);
+                    }
+                    if !track.artists.is_empty() && cur.artists.iter().any(|a| a.id.is_none()) {
+                        cur.artists = track.artists;
+                    }
+                    drop(p);
+                    self.refresh_player();
+                }
+            }
+            AppCmd::TrackEnrichedFailed => {}
             AppCmd::ShowToast(msg) => {
                 sender.input(AppInput::ShowToast(msg));
             }
@@ -1260,6 +1284,23 @@ impl MalusApp {
                         state: c.get_media_state(&id).await.ok(),
                     }
                 });
+                let needs_enrichment = track.album.as_ref().and_then(|a| a.id.as_ref()).is_none()
+                    || track.artists.iter().any(|a| a.id.is_none());
+                if needs_enrichment {
+                    let id = track.id.clone();
+                    let c = self.client.clone();
+                    sender.oneshot_command(async move {
+                        match c.get_catalog_item(&id).await {
+                            Ok(malus_ipc::wire::CatalogItemWire::Track(enriched)) => {
+                                AppCmd::TrackEnriched {
+                                    generation,
+                                    track: enriched,
+                                }
+                            }
+                            _ => AppCmd::TrackEnrichedFailed,
+                        }
+                    });
+                }
             }
         }
         let position = p.now.extrapolated_position_ms();

@@ -69,6 +69,7 @@ pub struct NowPlayingPage {
     lyrics_button: gtk::Button,
     queue_button: gtk::Button,
     navigate: Rc<dyn Fn(AppDestination) + 'static>,
+    last_track_fingerprint: std::cell::RefCell<Option<String>>,
 }
 
 impl NowPlayingPage {
@@ -691,6 +692,7 @@ impl NowPlayingPage {
             lyrics_button,
             queue_button,
             navigate,
+            last_track_fingerprint: std::cell::RefCell::new(None),
         }
     }
     pub fn set_mode(&self, mode: NowPlayingMode) {
@@ -760,42 +762,47 @@ impl NowPlayingPage {
         self.compact_queue.emit(QueueInput::ScrollToNowPlaying);
     }
     pub fn refresh(&self, player: &SharedPlayer) {
-        self.last_layout.set((0, 0, NowPlayingMode::Player, false));
-        self.wide_scroll.vadjustment().set_value(0.0);
-        self.root.queue_resize();
         let state = player.borrow();
-        let title_text = state
-            .now
-            .current_track
-            .as_ref()
-            .map(|t| t.title.as_str())
-            .unwrap_or("Not Playing");
+        let current_fingerprint = track_fingerprint(state.now.current_track.as_ref());
+        let track_changed =
+            self.last_track_fingerprint.borrow().as_ref() != Some(&current_fingerprint);
 
-        self.title.set_text(title_text);
-        self.compact_title.set_text(title_text);
-        self.compact_mini_title.set_text(title_text);
+        if track_changed {
+            *self.last_track_fingerprint.borrow_mut() = Some(current_fingerprint);
 
-        populate_artists_box(
-            &self.subtitle_box,
-            state.now.current_track.as_ref(),
-            &self.navigate,
-            "nowplaying-artist",
-            "nowplaying-artist-sep",
-        );
-        populate_artists_box(
-            &self.compact_subtitle_box,
-            state.now.current_track.as_ref(),
-            &self.navigate,
-            "nowplaying-artist",
-            "nowplaying-artist-sep",
-        );
-        populate_artists_box(
-            &self.compact_mini_subtitle_box,
-            state.now.current_track.as_ref(),
-            &self.navigate,
-            "compact-mini-artist",
-            "nowplaying-artist-sep",
-        );
+            let title_text = state
+                .now
+                .current_track
+                .as_ref()
+                .map(|t| t.title.as_str())
+                .unwrap_or("Not Playing");
+
+            self.title.set_text(title_text);
+            self.compact_title.set_text(title_text);
+            self.compact_mini_title.set_text(title_text);
+
+            populate_artists_box(
+                &self.subtitle_box,
+                state.now.current_track.as_ref(),
+                &self.navigate,
+                "nowplaying-artist",
+                "nowplaying-artist-sep",
+            );
+            populate_artists_box(
+                &self.compact_subtitle_box,
+                state.now.current_track.as_ref(),
+                &self.navigate,
+                "nowplaying-artist",
+                "nowplaying-artist-sep",
+            );
+            populate_artists_box(
+                &self.compact_mini_subtitle_box,
+                state.now.current_track.as_ref(),
+                &self.navigate,
+                "compact-mini-artist",
+                "nowplaying-artist-sep",
+            );
+        }
 
         let has_track = state.now.current_track.is_some();
         self.more.set_sensitive(has_track);
@@ -822,9 +829,6 @@ impl NowPlayingPage {
         }
     }
     pub fn set_artwork(&self, image: Option<&DecodedImage>) {
-        self.last_layout.set((0, 0, NowPlayingMode::Player, false));
-        self.wide_scroll.vadjustment().set_value(0.0);
-        self.root.queue_resize();
         let texture = image.map(artwork_texture);
         self.artwork.picture().set_paintable(texture.as_ref());
         self.compact_player_artwork
@@ -854,6 +858,35 @@ impl NowPlayingPage {
         self.compact_seek.slider.cancel();
         self.compact_volume.slider.cancel();
     }
+}
+
+fn track_fingerprint(track: Option<&Track>) -> String {
+    let Some(t) = track else {
+        return String::new();
+    };
+    let album_id = t
+        .album
+        .as_ref()
+        .and_then(|a| a.id.as_ref())
+        .map(|r| r.to_string())
+        .unwrap_or_default();
+    let album_title = t.album_title().unwrap_or_default();
+    let artists_str = t
+        .artists
+        .iter()
+        .map(|a| {
+            format!(
+                "{}:{}",
+                a.id.as_ref().map(|r| r.to_string()).unwrap_or_default(),
+                a.name
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{}:{}:{}:{}:{}",
+        t.id, t.title, artists_str, album_id, album_title
+    )
 }
 
 fn populate_artists_box(
@@ -886,20 +919,6 @@ fn populate_artists_box(
         lbl.add_css_class(artist_css_class);
         lbl.set_xalign(0.0);
         lbl.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        if !name.is_empty() && name != "Unknown Artist" {
-            lbl.add_css_class("metadata-link");
-            lbl.set_cursor_from_name(Some("pointer"));
-            let nav = navigate.clone();
-            let dest = AppDestination::Search(name);
-            let g = gtk::GestureClick::new();
-            g.connect_released(move |g, n, _, _| {
-                if n == 1 {
-                    g.set_state(gtk::EventSequenceState::Claimed);
-                    nav(dest.clone());
-                }
-            });
-            lbl.add_controller(g);
-        }
         container.append(&lbl);
     } else {
         for (i, artist) in t.artists.iter().enumerate() {
@@ -912,22 +931,20 @@ fn populate_artists_box(
             lbl.add_css_class(artist_css_class);
             lbl.set_xalign(0.0);
             lbl.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            lbl.add_css_class("metadata-link");
-            lbl.set_cursor_from_name(Some("pointer"));
-            let nav = navigate.clone();
-            let dest = if let Some(ref id) = artist.id {
-                AppDestination::Page(PageRoute::Artist(id.id().to_string()))
-            } else {
-                AppDestination::Search(artist.name.clone())
-            };
-            let g = gtk::GestureClick::new();
-            g.connect_released(move |g, n, _, _| {
-                if n == 1 {
-                    g.set_state(gtk::EventSequenceState::Claimed);
-                    nav(dest.clone());
-                }
-            });
-            lbl.add_controller(g);
+            if let Some(ref id) = artist.id {
+                lbl.add_css_class("metadata-link");
+                lbl.set_cursor_from_name(Some("pointer"));
+                let nav = navigate.clone();
+                let dest = AppDestination::Page(PageRoute::Artist(id.id().to_string()));
+                let g = gtk::GestureClick::new();
+                g.connect_released(move |g, n, _, _| {
+                    if n == 1 {
+                        g.set_state(gtk::EventSequenceState::Claimed);
+                        nav(dest.clone());
+                    }
+                });
+                lbl.add_controller(g);
+            }
             container.append(&lbl);
         }
     }
@@ -944,22 +961,20 @@ fn populate_artists_box(
         lbl.add_css_class(artist_css_class);
         lbl.set_xalign(0.0);
         lbl.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        lbl.add_css_class("metadata-link");
-        lbl.set_cursor_from_name(Some("pointer"));
-        let nav = navigate.clone();
-        let dest = if let Some(id) = t.album.as_ref().and_then(|a| a.id.as_ref()) {
-            AppDestination::Page(PageRoute::Album(id.id().to_string()))
-        } else {
-            AppDestination::Search(album.to_string())
-        };
-        let g = gtk::GestureClick::new();
-        g.connect_released(move |g, n, _, _| {
-            if n == 1 {
-                g.set_state(gtk::EventSequenceState::Claimed);
-                nav(dest.clone());
-            }
-        });
-        lbl.add_controller(g);
+        if let Some(id) = t.album.as_ref().and_then(|a| a.id.as_ref()) {
+            lbl.add_css_class("metadata-link");
+            lbl.set_cursor_from_name(Some("pointer"));
+            let nav = navigate.clone();
+            let dest = AppDestination::Page(PageRoute::Album(id.id().to_string()));
+            let g = gtk::GestureClick::new();
+            g.connect_released(move |g, n, _, _| {
+                if n == 1 {
+                    g.set_state(gtk::EventSequenceState::Claimed);
+                    nav(dest.clone());
+                }
+            });
+            lbl.add_controller(g);
+        }
         container.append(&lbl);
     }
 }

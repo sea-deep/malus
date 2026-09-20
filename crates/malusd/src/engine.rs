@@ -7,8 +7,9 @@ use malus_ipc::{
     client::{ClientEvent, ClientRequest, ClientResponse},
     wire::{ActionResultWire, PageActionWire},
 };
-use malus_model::{MediaRef, PlaybackState, PlayerStatus, PresentationClock, Queue};
+use malus_model::{MediaRef, PlaybackState, PlayerStatus, PresentationClock, Queue, Track};
 use malus_service::AppleService;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast, mpsc};
 use tracing::info;
@@ -71,6 +72,7 @@ pub struct Engine {
     queue_context: Arc<RwLock<QueueContext>>,
     playback_mutex: Arc<tokio::sync::Mutex<()>>,
     event_tx: broadcast::Sender<ClientEvent>,
+    track_cache: Arc<RwLock<HashMap<String, Track>>>,
 }
 
 impl Default for Engine {
@@ -149,10 +151,85 @@ impl Engine {
         let event_tx_clone = event_tx.clone();
         let mirrored_clone = mirrored_player.clone();
         let mirrored_queue_clone = mirrored_queue.clone();
+        let track_cache = Arc::new(RwLock::new(HashMap::new()));
+        let track_cache_clone = track_cache.clone();
+        let in_flight_enrich: Arc<tokio::sync::Mutex<HashSet<String>>> =
+            Arc::new(tokio::sync::Mutex::new(HashSet::new()));
+        let in_flight_clone = in_flight_enrich.clone();
+        let apple_enrich = apple.clone();
+
         tokio::spawn(async move {
             while let Some(event) = status_rx.recv().await {
                 match event {
-                    malus_service::PlaybackEvent::Status(status) => {
+                    malus_service::PlaybackEvent::Status(mut status) => {
+                        if let Some(ref mut track) = status.current_track {
+                            let has_album_id =
+                                track.album.as_ref().and_then(|a| a.id.as_ref()).is_some();
+                            if has_album_id {
+                                track_cache_clone
+                                    .write()
+                                    .await
+                                    .insert(track.id.id().to_string(), track.clone());
+                            } else if let Some(cached) =
+                                track_cache_clone.read().await.get(track.id.id())
+                            {
+                                if let Some(ref alb) = cached.album {
+                                    track.album = Some(alb.clone());
+                                }
+                                if !cached.artists.is_empty() {
+                                    track.artists = cached.artists.clone();
+                                }
+                            } else {
+                                let tid = track.id.id().to_string();
+                                let mut in_flight = in_flight_clone.lock().await;
+                                if !in_flight.contains(&tid) {
+                                    in_flight.insert(tid.clone());
+                                    drop(in_flight);
+                                    let apple_task = apple_enrich.clone();
+                                    let cache_task = track_cache_clone.clone();
+                                    let in_flight_task = in_flight_clone.clone();
+                                    let mirrored_task = mirrored_clone.clone();
+                                    let event_tx_task = event_tx_clone.clone();
+                                    let mref = track.id.clone();
+                                    tokio::spawn(async move {
+                                        if let Ok(malus_ipc::wire::CatalogItemWire::Track(
+                                            enriched,
+                                        )) = apple_task.get_catalog_item(&mref).await
+                                        {
+                                            cache_task
+                                                .write()
+                                                .await
+                                                .insert(mref.id().to_string(), enriched.clone());
+                                            let mut guard = mirrored_task.write().await;
+                                            if let Some(ref mut state) = *guard
+                                                && let Some(ref mut cur) =
+                                                    state.status.current_track
+                                                && cur.id == enriched.id
+                                            {
+                                                if cur
+                                                    .album
+                                                    .as_ref()
+                                                    .and_then(|a| a.id.as_ref())
+                                                    .is_none()
+                                                {
+                                                    cur.album = enriched.album.clone();
+                                                }
+                                                if cur.artists.iter().any(|a| a.id.is_none()) {
+                                                    cur.artists = enriched.artists.clone();
+                                                }
+                                                let updated_status = state.status.clone();
+                                                drop(guard);
+                                                let _ = event_tx_task.send(
+                                                    ClientEvent::StatusChanged(updated_status),
+                                                );
+                                            }
+                                        }
+                                        in_flight_task.lock().await.remove(&mref.id().to_string());
+                                    });
+                                }
+                            }
+                        }
+
                         let mut guard = mirrored_clone.write().await;
                         if let Some(ref mut state) = *guard {
                             state.update(status.clone());
@@ -181,6 +258,7 @@ impl Engine {
             queue_context,
             playback_mutex,
             event_tx,
+            track_cache,
         }
     }
 
@@ -189,7 +267,22 @@ impl Engine {
         &self.apple
     }
 
-    pub async fn update_mirrored_status(&self, status: PlayerStatus) {
+    pub async fn update_mirrored_status(&self, mut status: PlayerStatus) {
+        if let Some(ref mut track) = status.current_track {
+            if track.album.as_ref().and_then(|a| a.id.as_ref()).is_some() {
+                self.track_cache
+                    .write()
+                    .await
+                    .insert(track.id.id().to_string(), track.clone());
+            } else if let Some(cached) = self.track_cache.read().await.get(track.id.id()) {
+                if let Some(ref alb) = cached.album {
+                    track.album = Some(alb.clone());
+                }
+                if !cached.artists.is_empty() {
+                    track.artists = cached.artists.clone();
+                }
+            }
+        }
         let mut guard = self.mirrored_player.write().await;
         if let Some(ref mut state) = *guard {
             state.update(status);
@@ -910,9 +1003,17 @@ impl Engine {
                     match self.apple.get_status().await {
                         Ok(status) => {
                             if status.current_track.is_some() {
-                                self.update_mirrored_status(status.clone()).await;
-                                self.emit(ClientEvent::StatusChanged(status.clone()));
-                                ClientResponse::Status(status)
+                                self.update_mirrored_status(status).await;
+                                let enriched = {
+                                    let guard = self.mirrored_player.read().await;
+                                    guard.as_ref().map(|m| m.extrapolated_status())
+                                };
+                                if let Some(s) = enriched {
+                                    self.emit(ClientEvent::StatusChanged(s.clone()));
+                                    ClientResponse::Status(s)
+                                } else {
+                                    ClientResponse::Status(PlayerStatus::default())
+                                }
                             } else {
                                 // MusicKit is dormant / no active track.
                                 let existing = {
