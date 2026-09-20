@@ -36,6 +36,11 @@ fn test_base_grid_alignment() {
         0,
         "Navigation collapse breakpoint must be a 4px multiple"
     );
+    assert_eq!(
+        BREAKPOINT_COLLAPSE_UTILITY as i32 % 4,
+        0,
+        "Utility collapse breakpoint must be a 4px multiple"
+    );
 }
 
 #[test]

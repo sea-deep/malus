@@ -55,11 +55,12 @@ pub const SIDEBAR_SECTION_GAP: i32 = 14;
 
 // --- Right Utility Pane Geometry ---
 pub const UTILITY_PANE_WIDTH: f64 = 340.0;
-pub const UTILITY_PANE_MIN_WIDTH: f64 = 280.0;
+pub const UTILITY_PANE_MIN_WIDTH: f64 = 300.0;
 pub const UTILITY_PANE_MAX_WIDTH: f64 = 420.0;
 
 // --- Responsive Layout Breakpoints ---
 pub const BREAKPOINT_COLLAPSE_NAVIGATION: f64 = 860.0;
+pub const BREAKPOINT_COLLAPSE_UTILITY: f64 = 1120.0;
 
 // --- Page & Content Grid Geometry ---
 pub const PAGE_PADDING_NORMAL: i32 = 32;

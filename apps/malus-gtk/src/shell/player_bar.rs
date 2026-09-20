@@ -153,38 +153,62 @@ impl PlayerBar {
         root.add_tick_callback(move |root, _| {
             let width = root.width();
             if width > 0 && last_width.replace(width) != width {
-                let compact = width < 850;
-                let narrow = width < 680;
-                let very_narrow = width < 560;
-                if very_narrow {
-                    center_box.set_width_request(-1);
-                } else if narrow {
-                    let center_width = (width - 340).clamp(120, 260);
-                    center_box.set_width_request(center_width);
+                let (max_chars, target_center_max) = if width >= 1200 {
+                    (22, 480)
+                } else if width >= 1000 {
+                    (18, 400)
+                } else if width >= 860 {
+                    (14, 340)
+                } else if width >= 680 {
+                    (12, 280)
+                } else if width >= 560 {
+                    (9, 220)
                 } else {
-                    let center_width = (width - 340).clamp(160, if compact { 320 } else { 520 });
-                    center_box.set_width_request(center_width);
-                }
-                let max_chars = if very_narrow {
-                    6
-                } else if narrow {
-                    9
-                } else if compact {
-                    14
-                } else {
-                    24
+                    (6, 0)
                 };
                 title_label.set_max_width_chars(max_chars);
                 artist_label.set_max_width_chars(max_chars);
 
-                shuffle_btn.set_visible(width >= 620);
-                repeat_btn.set_visible(width >= 620);
-                lyrics_btn.set_visible(width >= 560);
-                queue_btn.set_visible(width >= 500);
-                favorite_button.set_visible(width >= 520);
-                more_button.set_visible(width >= 460);
-                volume_box.set_visible(width >= 380);
+                let has_fav = width >= 520;
+                let has_more = width >= 460;
+                let has_lyrics = width >= 560;
+                let has_queue = width >= 500;
+                let has_volume = width >= 380;
+                let has_shuffle_repeat = width >= 620;
+
+                shuffle_btn.set_visible(has_shuffle_repeat);
+                repeat_btn.set_visible(has_shuffle_repeat);
+                lyrics_btn.set_visible(has_lyrics);
+                queue_btn.set_visible(has_queue);
+                favorite_button.set_visible(has_fav);
+                more_button.set_visible(has_more);
+                volume_box.set_visible(has_volume);
                 metadata.set_visible(width >= 320);
+
+                let left_buttons = (if has_fav { 34 } else { 0 }) + (if has_more { 34 } else { 0 });
+                let left_width = if width >= 320 {
+                    84 + (max_chars * 8) + left_buttons
+                } else {
+                    74
+                };
+                let right_width = (if has_lyrics { 36 } else { 0 })
+                    + (if has_queue { 36 } else { 0 })
+                    + (if has_volume { 36 } else { 0 });
+
+                let side_needed = left_width.max(right_width);
+                let centered_available = width - 2 * side_needed - 32;
+                let absolute_max_center = (width - left_width - right_width - 32).max(120);
+
+                let center_width = if target_center_max > 0 && width >= 560 {
+                    if centered_available >= 160 {
+                        centered_available.min(target_center_max)
+                    } else {
+                        absolute_max_center.min(target_center_max)
+                    }
+                } else {
+                    -1
+                };
+                center_box.set_width_request(center_width);
             }
             gtk::glib::ControlFlow::Continue
         });

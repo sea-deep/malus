@@ -231,6 +231,7 @@ impl Component for MalusApp {
                             set_min_sidebar_width: SIDEBAR_WIDTH_NORMAL,
                             set_max_sidebar_width: SIDEBAR_WIDTH_NORMAL,
                             set_sidebar_width_fraction: 0.20,
+                            set_enable_hide_gesture: true,
                             set_collapsed: false,
                             set_show_sidebar: true,
 
@@ -245,6 +246,8 @@ impl Component for MalusApp {
                                 set_sidebar_position: gtk::PackType::End,
                                 set_min_sidebar_width: UTILITY_PANE_MIN_WIDTH,
                                 set_max_sidebar_width: UTILITY_PANE_WIDTH,
+                                set_sidebar_width_fraction: 0.28,
+                                set_enable_hide_gesture: true,
                                 set_collapsed: false,
                                 set_show_sidebar: false,
 
@@ -560,10 +563,10 @@ impl Component for MalusApp {
                 }
             });
 
-        // Responsive breakpoint to collapse utility pane (lyrics/queue) to an overlay when window width <= 1040px
+        // Responsive breakpoint to collapse utility pane (lyrics/queue) to an overlay when window width <= BREAKPOINT_COLLAPSE_UTILITY (1120px)
         let utility_breakpoint = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
             adw::BreakpointConditionLengthType::MaxWidth,
-            1040.0,
+            BREAKPOINT_COLLAPSE_UTILITY,
             adw::LengthUnit::Px,
         ));
         utility_breakpoint.add_setter(
@@ -774,11 +777,19 @@ impl Component for MalusApp {
             AppInput::ToggleSidebar => {
                 let show = !widgets.outer_split_view.shows_sidebar();
                 widgets.outer_split_view.set_show_sidebar(show);
+                if show && widgets.inner_split_view.is_collapsed() && self.utility_mode.is_open() {
+                    sender.input(AppInput::CloseUtility);
+                }
             }
             AppInput::ToggleQueue => {
                 if self.now_playing_mode.is_some() {
                     sender.input(AppInput::ToggleNowPlayingQueue);
                 } else {
+                    if widgets.outer_split_view.is_collapsed()
+                        && widgets.outer_split_view.shows_sidebar()
+                    {
+                        widgets.outer_split_view.set_show_sidebar(false);
+                    }
                     self.utility_mode.toggle_queue();
                     self.sync_utility(widgets);
                 }
@@ -787,6 +798,11 @@ impl Component for MalusApp {
                 if self.now_playing_mode.is_some() {
                     sender.input(AppInput::ToggleNowPlayingLyrics);
                 } else {
+                    if widgets.outer_split_view.is_collapsed()
+                        && widgets.outer_split_view.shows_sidebar()
+                    {
+                        widgets.outer_split_view.set_show_sidebar(false);
+                    }
                     self.utility_mode.toggle_lyrics();
                     self.sync_utility(widgets);
                 }
@@ -809,6 +825,9 @@ impl Component for MalusApp {
                 }
                 widgets.shell_stack.set_visible_child_name("browse");
                 widgets.outer_split_view.set_show_sidebar(true);
+                if widgets.inner_split_view.is_collapsed() && self.utility_mode.is_open() {
+                    sender.input(AppInput::CloseUtility);
+                }
                 if self.history.current() == &AppDestination::Page(PageRoute::Search) {
                     self.search_page.emit(SearchInput::FocusSearch);
                 } else {
