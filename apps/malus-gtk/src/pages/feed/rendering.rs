@@ -768,10 +768,9 @@ impl FeedPage {
     ) -> gtk::Widget {
         let split = adw::OverlaySplitView::builder()
             .sidebar_position(gtk::PackType::Start)
-            .min_sidebar_width(200.0)
-            .max_sidebar_width(260.0)
+            .min_sidebar_width(220.0)
+            .max_sidebar_width(280.0)
             .sidebar_width_fraction(0.24)
-            .collapsed(true)
             .enable_show_gesture(true)
             .enable_hide_gesture(true)
             .css_classes(vec!["master-split-view".to_string()])
@@ -881,9 +880,13 @@ impl FeedPage {
         let back_box_ref = back_box_opt;
         let show_cell_ref = show_cell;
         split.add_tick_callback(move |widget, _| {
-            let avail_w = widget.width();
-            if avail_w > 0 && last_w.replace(avail_w) != avail_w {
-                let is_narrow = avail_w < 620;
+            let win_w = widget
+                .root()
+                .and_then(|r| r.downcast::<gtk::Window>().ok())
+                .map(|w| w.width())
+                .unwrap_or(0);
+            if win_w > 0 && last_w.replace(win_w) != win_w {
+                let is_narrow = win_w < 850;
                 let show_detail = show_cell_ref.get();
                 split_ref.set_collapsed(is_narrow);
                 if is_narrow {
@@ -909,7 +912,7 @@ impl FeedPage {
         sender: ComponentSender<Self>,
     ) -> (gtk::ScrolledWindow, Option<gtk::Box>) {
         let detail_scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Automatic)
+            .hscrollbar_policy(gtk::PolicyType::Never)
             .vscrollbar_policy(gtk::PolicyType::Automatic)
             .vexpand(true)
             .hexpand(true)
@@ -1148,10 +1151,9 @@ impl FeedPage {
     ) -> gtk::Widget {
         let split = adw::OverlaySplitView::builder()
             .sidebar_position(gtk::PackType::Start)
-            .min_sidebar_width(200.0)
-            .max_sidebar_width(260.0)
+            .min_sidebar_width(220.0)
+            .max_sidebar_width(280.0)
             .sidebar_width_fraction(0.24)
-            .collapsed(true)
             .enable_show_gesture(true)
             .enable_hide_gesture(true)
             .css_classes(vec!["master-split-view".to_string()])
@@ -1287,9 +1289,13 @@ impl FeedPage {
         let back_box_ref = back_box_opt;
         let show_cell_ref = show_cell;
         split.add_tick_callback(move |widget, _| {
-            let avail_w = widget.width();
-            if avail_w > 0 && last_w.replace(avail_w) != avail_w {
-                let is_narrow = avail_w < 620;
+            let win_w = widget
+                .root()
+                .and_then(|r| r.downcast::<gtk::Window>().ok())
+                .map(|w| w.width())
+                .unwrap_or(0);
+            if win_w > 0 && last_w.replace(win_w) != win_w {
+                let is_narrow = win_w < 850;
                 let show_detail = show_cell_ref.get();
                 split_ref.set_collapsed(is_narrow);
                 if is_narrow {
@@ -1324,7 +1330,7 @@ impl FeedPage {
 
         // 2. Detail Content
         let detail_scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Automatic)
+            .hscrollbar_policy(gtk::PolicyType::Never)
             .vscrollbar_policy(gtk::PolicyType::Automatic)
             .vexpand(true)
             .hexpand(true)

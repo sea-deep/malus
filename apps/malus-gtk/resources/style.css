@@ -502,25 +502,20 @@ flowboxchild {
 }
 
 /* --- Artist and Genre Master-Detail Layout --- */
-.master-split-view,
-.master-split-view > *,
-.master-split-view > * > *,
-.master-split-view sheet,
-.master-split-view .artist-master-list,
-.master-split-view .genre-master-list {
-    background-color: transparent !important;
-    background-image: none !important;
-    box-shadow: none !important;
-    border-radius: 0 !important;
+.master-split-view {
+    background-color: transparent;
+    background-image: none;
+    box-shadow: none;
+    border-radius: 0;
 }
 
 .master-split-view .artist-master-list,
 .master-split-view .genre-master-list {
-    background-color: transparent !important;
-    background-image: none !important;
+    background-color: transparent;
+    background-image: none;
     border-right: 1px solid alpha(currentColor, 0.08);
-    border-radius: 0 !important;
-    box-shadow: none !important;
+    border-radius: 0;
+    box-shadow: none;
     padding-top: 12px;
     padding-bottom: 12px;
 }

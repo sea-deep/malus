@@ -199,7 +199,7 @@ impl PlayerBar {
                 let centered_available = width - 2 * side_needed - 32;
                 let absolute_max_center = (width - left_width - right_width - 32).max(120);
 
-                let center_width = if target_center_max > 0 && width >= 680 {
+                let center_width = if target_center_max > 0 && width >= 560 {
                     if centered_available >= 160 {
                         centered_available.min(target_center_max)
                     } else {
