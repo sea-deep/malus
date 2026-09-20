@@ -24,28 +24,33 @@ pub enum PageRoute {
     Home,
     New,
     Radio,
+    Search,
     LibraryRecentlyAdded,
     LibrarySongs,
     LibraryAlbums,
+    LibraryGenres,
     LibraryArtists,
     LibraryPlaylists,
     LibraryMadeForYou,
     Album(String),
     Artist(String),
     Playlist(String),
+    Curator(String),
     Replay(u16),
 }
 
 impl PageRoute {
-    /// Parse from a canonical route string (e.g. "home", "library:songs", "album:123").
+    /// Parse from a canonical route string (e.g. "home", "search", "library:songs", "album:123").
     pub fn parse(route: &str) -> Option<Self> {
         match route {
             "home" => Some(Self::Home),
             "new" => Some(Self::New),
             "radio" => Some(Self::Radio),
+            "search" | "search:" => Some(Self::Search),
             "library:recently-added" => Some(Self::LibraryRecentlyAdded),
             "library:songs" => Some(Self::LibrarySongs),
             "library:albums" => Some(Self::LibraryAlbums),
+            "library:genres" => Some(Self::LibraryGenres),
             "library:artists" => Some(Self::LibraryArtists),
             "library:playlists" => Some(Self::LibraryPlaylists),
             "library:made-for-you" => Some(Self::LibraryMadeForYou),
@@ -65,6 +70,11 @@ impl PageRoute {
                 {
                     return Some(Self::Playlist(id.to_string()));
                 }
+                if let Some(id) = route.strip_prefix("curator:")
+                    && !id.is_empty()
+                {
+                    return Some(Self::Curator(id.to_string()));
+                }
                 if let Some(year_str) = route.strip_prefix("replay:")
                     && let Ok(year) = year_str.parse::<u16>()
                 {
@@ -81,16 +91,31 @@ impl PageRoute {
             Self::Home => "home".to_string(),
             Self::New => "new".to_string(),
             Self::Radio => "radio".to_string(),
+            Self::Search => "search".to_string(),
             Self::LibraryRecentlyAdded => "library:recently-added".to_string(),
             Self::LibrarySongs => "library:songs".to_string(),
             Self::LibraryAlbums => "library:albums".to_string(),
+            Self::LibraryGenres => "library:genres".to_string(),
             Self::LibraryArtists => "library:artists".to_string(),
             Self::LibraryPlaylists => "library:playlists".to_string(),
             Self::LibraryMadeForYou => "library:made-for-you".to_string(),
             Self::Album(id) => format!("album:{id}"),
             Self::Artist(id) => format!("artist:{id}"),
             Self::Playlist(id) => format!("playlist:{id}"),
+            Self::Curator(id) => format!("curator:{id}"),
             Self::Replay(year) => format!("replay:{year}"),
+        }
+    }
+
+    /// Return the canonical Apple Music web share URL if applicable.
+    pub fn web_url(&self) -> Option<String> {
+        match self {
+            Self::Album(id) => Some(format!("https://music.apple.com/album/{id}")),
+            Self::Artist(id) => Some(format!("https://music.apple.com/artist/{id}")),
+            Self::Playlist(id) => Some(format!("https://music.apple.com/playlist/{id}")),
+            Self::Curator(id) => Some(format!("https://music.apple.com/curator/{id}")),
+            Self::Replay(year) => Some(format!("https://replay.music.apple.com/{year}")),
+            _ => None,
         }
     }
 }
@@ -118,6 +143,8 @@ mod tests {
         assert_eq!(PageRoute::parse("home"), Some(PageRoute::Home));
         assert_eq!(PageRoute::parse("new"), Some(PageRoute::New));
         assert_eq!(PageRoute::parse("radio"), Some(PageRoute::Radio));
+        assert_eq!(PageRoute::parse("search"), Some(PageRoute::Search));
+        assert_eq!(PageRoute::parse("search:"), Some(PageRoute::Search));
         assert_eq!(
             PageRoute::parse("library:recently-added"),
             Some(PageRoute::LibraryRecentlyAdded)
@@ -129,6 +156,10 @@ mod tests {
         assert_eq!(
             PageRoute::parse("library:albums"),
             Some(PageRoute::LibraryAlbums)
+        );
+        assert_eq!(
+            PageRoute::parse("library:genres"),
+            Some(PageRoute::LibraryGenres)
         );
         assert_eq!(
             PageRoute::parse("library:artists"),
@@ -151,12 +182,16 @@ mod tests {
             Some(PageRoute::Artist("456".to_string()))
         );
         assert_eq!(
-            PageRoute::parse("playlist:pl.789"),
-            Some(PageRoute::Playlist("pl.789".to_string()))
+            PageRoute::parse("playlist:pl.123"),
+            Some(PageRoute::Playlist("pl.123".to_string()))
         );
         assert_eq!(
-            PageRoute::parse("replay:2026"),
-            Some(PageRoute::Replay(2026))
+            PageRoute::parse("curator:982307152"),
+            Some(PageRoute::Curator("982307152".to_string()))
+        );
+        assert_eq!(
+            PageRoute::parse("replay:2024"),
+            Some(PageRoute::Replay(2024))
         );
 
         // Rejected obsolete prefixes

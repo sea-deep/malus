@@ -28,6 +28,15 @@ mod tests {
             .unwrap();
         let decoded: ClientRequest = decode_message(&frame).unwrap();
         assert_eq!(req, decoded);
+
+        let req = ClientRequest::SetAutoplay { autoplay: true };
+        let encoded = encode_message(&req).unwrap();
+        let mut buf = encoded;
+        let frame = decode_frame(&mut buf, DEFAULT_MAX_PAYLOAD_BYTES)
+            .unwrap()
+            .unwrap();
+        let decoded: ClientRequest = decode_message(&frame).unwrap();
+        assert_eq!(req, decoded);
     }
 
     #[test]
@@ -45,6 +54,9 @@ mod tests {
             muted: false,
             shuffle: false,
             repeat: RepeatMode::Off,
+            autoplay: false,
+            timeline_id: 1,
+            sequence: 1,
         });
         let encoded = encode_message(&res).unwrap();
         let mut buf = encoded;
@@ -92,6 +104,7 @@ mod tests {
             kinds: vec![SearchKindWire::Album, SearchKindWire::Track],
             limit: Some(15),
             cursor: Some("token-1".to_string()),
+            scope: Some(SearchScopeWire::Catalog),
         };
         let encoded = encode_message(&search_req).unwrap();
         let mut buf = encoded;
@@ -116,6 +129,7 @@ mod tests {
             )),
             artists: None,
             playlists: None,
+            ..Default::default()
         });
         let encoded = encode_message(&search_res).unwrap();
         let mut buf = encoded;

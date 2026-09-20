@@ -21,8 +21,12 @@ test('zero volume and completed identity agree for direct and event reads',()=>{
     const event=events.filter(e=>e.kind==='status').at(-1);
     assert.equal(direct.status.volume,0);
     assert.equal(direct.status.track.id,'song-a');
-    assert.equal(direct.status.positionMs,24000);
-    assert.deepEqual(event.data,JSON.parse(JSON.stringify(direct.status)));
+    assert.equal(direct.status.positionMs,0);
+    assert.equal(direct.status.timelineId, event.data.timelineId);
+    assert.equal(direct.status.sequence, event.data.sequence + 1);
+    const {sequence: _s1, ...directRest} = direct.status;
+    const {sequence: _s2, ...eventRest} = event.data;
+    assert.deepEqual(eventRest, JSON.parse(JSON.stringify(directRest)));
     music.queue.items=[];music.queue.position=-1;
     assert.equal(window.__malusPlaybackSnapshot().status.track,null);
 });
@@ -39,4 +43,14 @@ test('MusicKit errors retain their source',()=>{
     const {listeners,events}=fixture();
     listeners.mediaPlaybackError({error:{message:'Playback rejected'}});
     assert.deepEqual(events.at(-1),{kind:'error',source:'mediaPlaybackError',message:'Playback rejected'});
+});
+test('autoplay state and autoplayStartIndex are captured in snapshot',()=>{
+    const {music,window}=fixture();
+    const item2 = {id:'song-b',attributes:{name:'Song B',durationInMillis:20000}};
+    music.queue.items = [music.queue.items[0], item2];
+    music.autoplayEnabled=true;
+    music.queue.autoplayItems=[item2];
+    const direct=window.__malusPlaybackSnapshot();
+    assert.equal(direct.status.autoplay,true);
+    assert.equal(direct.queue.autoplayStartIndex,1);
 });

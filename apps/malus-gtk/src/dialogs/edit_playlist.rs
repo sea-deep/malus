@@ -28,7 +28,10 @@ pub fn show_edit_playlist_dialog<F>(
     let toolbar_view = adw::ToolbarView::new();
     let header = adw::HeaderBar::new();
 
-    let btn_cancel = gtk::Button::builder().label("Cancel").build();
+    let btn_cancel = gtk::Button::builder()
+        .label("Cancel")
+        .focus_on_click(false)
+        .build();
     let w_cancel = window.clone();
     btn_cancel.connect_clicked(move |_| {
         w_cancel.close();
@@ -38,6 +41,7 @@ pub fn show_edit_playlist_dialog<F>(
     let btn_save = gtk::Button::builder()
         .label("Save")
         .css_classes(["suggested-action"])
+        .focus_on_click(false)
         .build();
     header.pack_end(&btn_save);
 
@@ -145,6 +149,11 @@ pub fn show_edit_playlist_dialog<F>(
     let do_save_enter = do_save.clone();
     title_entry.connect_entry_activated(move |_| {
         do_save_enter();
+    });
+
+    let do_save_desc = do_save.clone();
+    desc_entry.connect_entry_activated(move |_| {
+        do_save_desc();
     });
 
     toolbar_view.set_content(Some(&content_box));

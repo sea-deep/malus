@@ -6,7 +6,7 @@ use malus_ipc::{
     client::{ClientRequest, ClientResponse},
     wire::{
         CatalogItemWire, LibraryKindWire, LibraryPageWire, NavigationWire, PageWire,
-        SearchKindWire, SearchResultsWire,
+        SearchKindWire, SearchResultsWire, SearchScopeWire,
     },
 };
 use malus_model::{MediaRef, PageRoute, Queue, Rating};
@@ -180,6 +180,12 @@ enum Commands {
     /// Display current player status
     Status,
 
+    /// Turn autoplay on or off
+    Autoplay {
+        #[arg(help = "Autoplay state ('on' or 'off')")]
+        state: String,
+    },
+
     /// Watch live player events
     Watch {
         /// Output events as raw JSON lines
@@ -213,6 +219,10 @@ enum Commands {
         /// Opaque pagination cursor
         #[arg(short = 'c', long = "cursor")]
         cursor: Option<String>,
+
+        /// Search personal library instead of catalog
+        #[arg(long)]
+        library: bool,
 
         /// Output raw JSON
         #[arg(long)]
@@ -555,8 +565,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                     println!("Shuffle:    {}", s.shuffle);
                     println!("Repeat:     {:?}", s.repeat);
+                    println!("Autoplay:   {}", if s.autoplay { "on" } else { "off" });
                 }
                 other => print_response(&other),
+            }
+        }
+        Commands::Autoplay { state } => {
+            let autoplay = match state.to_lowercase().as_str() {
+                "on" | "true" | "1" | "enable" | "yes" => true,
+                "off" | "false" | "0" | "disable" | "no" => false,
+                _ => {
+                    eprintln!(
+                        "Error: Invalid autoplay state '{}'. Expected 'on' or 'off'.",
+                        state
+                    );
+                    std::process::exit(1);
+                }
+            };
+            let resp = client.set_autoplay(autoplay).await;
+            match resp {
+                Ok(()) => {
+                    println!("Autoplay turned {}.", if autoplay { "on" } else { "off" });
+                }
+                Err(e) => {
+                    eprintln!("Error setting autoplay: {e}");
+                    std::process::exit(1);
+                }
             }
         }
         Commands::Queue { action, json } => match action {
@@ -663,6 +697,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             r#type,
             limit,
             cursor,
+            library,
             json,
         } => {
             let kinds = match r#type.as_deref() {
@@ -670,13 +705,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some("album" | "albums") => vec![SearchKindWire::Album],
                 Some("artist" | "artists") => vec![SearchKindWire::Artist],
                 Some("playlist" | "playlists") => vec![SearchKindWire::Playlist],
+                Some("station" | "stations") => vec![SearchKindWire::Station],
                 Some(unknown) => {
                     eprintln!(
-                        "Unknown type '{unknown}'. Valid types: track, album, artist, playlist"
+                        "Unknown type '{unknown}'. Valid types: track, album, artist, playlist, station"
                     );
                     return Ok(());
                 }
                 None => vec![],
+            };
+
+            let scope = if library {
+                Some(SearchScopeWire::Library)
+            } else {
+                Some(SearchScopeWire::Catalog)
             };
 
             let resp = client
@@ -685,6 +727,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     kinds,
                     limit,
                     cursor,
+                    scope,
                 })
                 .await?;
 
@@ -1014,6 +1057,9 @@ fn display_queue(queue: &Queue, json: bool) -> Result<(), Box<dyn std::error::Er
 
     println!("Queue\n");
     for (idx, track) in queue.items.iter().enumerate() {
+        if queue.autoplay_start_index == Some(idx) {
+            println!("\nAutoplay (similar music)");
+        }
         let marker = if queue.current_index == Some(idx) {
             ">"
         } else {

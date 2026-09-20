@@ -12,6 +12,7 @@ pub fn apple_navigation() -> NavigationWire {
                 "discover",
                 Some("Discover".to_string()),
                 vec![
+                    NavEntryWire::with_icon(PageRoute::Search, "Search", "magnifying-glass"),
                     NavEntryWire::with_icon(PageRoute::Home, "Home", "house"),
                     NavEntryWire::with_icon(PageRoute::New, "New", "compass"),
                     NavEntryWire::with_icon(PageRoute::Radio, "Radio", "radio"),
@@ -28,8 +29,9 @@ pub fn apple_navigation() -> NavigationWire {
                     ),
                     NavEntryWire::with_icon(PageRoute::LibraryArtists, "Artists", "music-mic"),
                     NavEntryWire::with_icon(PageRoute::LibraryAlbums, "Albums", "record-vinyl"),
+                    NavEntryWire::with_icon(PageRoute::LibraryGenres, "Genres", "tag"),
                     NavEntryWire::with_icon(PageRoute::LibrarySongs, "Songs", "music-note"),
-                    NavEntryWire::with_icon(PageRoute::LibraryMadeForYou, "Made for You", "star"),
+                    NavEntryWire::with_icon(PageRoute::LibraryMadeForYou, "Made for You", "person"),
                 ],
             ),
             NavGroupWire::new(
@@ -64,13 +66,15 @@ mod tests {
 
         // Discover
         assert_eq!(nav.groups[0].id, "discover");
-        assert_eq!(nav.groups[0].entries.len(), 3);
-        assert_eq!(nav.groups[0].entries[0].route, PageRoute::Home);
-        assert_eq!(nav.groups[0].entries[0].label, "Home");
+        assert_eq!(nav.groups[0].entries.len(), 4);
+        assert_eq!(nav.groups[0].entries[0].route, PageRoute::Search);
+        assert_eq!(nav.groups[0].entries[0].label, "Search");
+        assert_eq!(nav.groups[0].entries[1].route, PageRoute::Home);
+        assert_eq!(nav.groups[0].entries[1].label, "Home");
 
         // Library
         assert_eq!(nav.groups[1].id, "library");
-        assert_eq!(nav.groups[1].entries.len(), 5);
+        assert_eq!(nav.groups[1].entries.len(), 6);
         assert_eq!(
             nav.groups[1].entries[0].route,
             PageRoute::LibraryRecentlyAdded

@@ -10,6 +10,7 @@ pub mod media_ref;
 pub mod page_route;
 pub mod playback;
 pub mod player;
+pub mod presentation_clock;
 pub mod queue;
 
 pub use account::{AccountMediaState, Rating};
@@ -20,6 +21,7 @@ pub use media_ref::{MediaRef, MediaRefError};
 pub use page_route::{PageRoute, ParseRouteError};
 pub use playback::{PlaybackState, RepeatMode};
 pub use player::PlayerStatus;
+pub use presentation_clock::{PlaybackSample, PresentationClock};
 pub use queue::Queue;
 
 #[cfg(test)]

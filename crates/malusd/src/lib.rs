@@ -4,6 +4,7 @@
 //! playback, queue management, and catalog lookups.
 
 pub mod engine;
+pub mod logger;
 pub mod server;
 
 pub use engine::Engine;

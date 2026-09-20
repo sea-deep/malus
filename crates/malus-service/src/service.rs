@@ -228,6 +228,10 @@ impl AppleService {
         self.session.set_repeat(repeat).await
     }
 
+    pub async fn set_autoplay(&self, autoplay: bool) -> Result<(), AppleError> {
+        self.session.set_autoplay(autoplay).await
+    }
+
     /// Skip to next track.
     pub async fn skip_to_next(&self) -> Result<(), AppleError> {
         self.session.skip_to_next().await
@@ -279,6 +283,16 @@ impl AppleService {
         self.session.get_status().await
     }
 
+    /// Fetch the user's recently played track from Apple Music history.
+    pub async fn get_recently_played_track(&self) -> Result<Option<Track>, AppleError> {
+        let tracks = self
+            .api
+            .get_recently_played_tracks(1)
+            .await
+            .map_err(AppleError::from)?;
+        Ok(tracks.into_iter().next())
+    }
+
     /// Fast catalog search over native HTTP.
     pub async fn search(
         &self,
@@ -289,6 +303,20 @@ impl AppleService {
     ) -> Result<SearchResultsWire, AppleError> {
         self.api
             .search(query, kinds, limit, cursor)
+            .await
+            .map_err(AppleError::from)
+    }
+
+    /// Search the user's personal Apple Music library over native HTTP.
+    pub async fn search_library(
+        &self,
+        query: &str,
+        kinds: &[SearchKindWire],
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<SearchResultsWire, AppleError> {
+        self.api
+            .search_library(query, kinds, limit, cursor)
             .await
             .map_err(AppleError::from)
     }

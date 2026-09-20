@@ -10,7 +10,11 @@ pub fn parse_apple_artwork(art: &Value) -> Option<Artwork> {
     let raw_url = art["url"].as_str()?;
     let width = art["width"].as_u64().map(|w| w as u32);
     let height = art["height"].as_u64().map(|h| h as u32);
-    let url = raw_url.replace("{w}", "600").replace("{h}", "600");
+    let url = raw_url
+        .replace("{w}", "600")
+        .replace("{h}", "600")
+        .replace("{c}", "")
+        .replace("{f}", "jpg");
     Some(Artwork { url, width, height })
 }
 
@@ -49,7 +53,12 @@ pub fn parse_apple_track(item: &Value) -> Option<Track> {
             .or_else(|| item["artist"].as_str())
         && !name.is_empty()
     {
-        artists.push(ArtistRef::named(name));
+        let id = attrs["artistUrl"]
+            .as_str()
+            .or_else(|| item["artistUrl"].as_str())
+            .and_then(extract_artist_id_from_url)
+            .map(MediaRef::Artist);
+        artists.push(ArtistRef::new(id, name));
     }
 
     let album = if let Some(alb_arr) = item["relationships"]["albums"]["data"].as_array()
@@ -68,7 +77,12 @@ pub fn parse_apple_track(item: &Value) -> Option<Track> {
         .or_else(|| item["album"].as_str())
     {
         if !title.is_empty() {
-            Some(AlbumRef::titled(title))
+            let id = attrs["url"]
+                .as_str()
+                .or_else(|| item["url"].as_str())
+                .and_then(extract_album_id_from_url)
+                .map(MediaRef::Album);
+            Some(AlbumRef::new(id, title))
         } else {
             None
         }
@@ -212,4 +226,67 @@ pub fn parse_apple_playlist(item: &Value) -> Option<Playlist> {
         can_edit,
         can_delete,
     })
+}
+
+/// Extract album ID from Apple Music URL (e.g. `https://music.apple.com/in/album/dnd/1716611384?i=1716611387`).
+pub fn extract_album_id_from_url(url: &str) -> Option<String> {
+    let clean = url.split('?').next()?.trim_end_matches('/');
+    if let Some(idx) = clean.find("/album/") {
+        let after = &clean[idx + "/album/".len()..];
+        let segs: Vec<&str> = after.split('/').filter(|s| !s.is_empty()).collect();
+        if let Some(last) = segs.last()
+            && (last.chars().all(|c| c.is_ascii_digit()) || last.starts_with("l."))
+        {
+            return Some(last.to_string());
+        }
+        if let Some(first) = segs.first()
+            && (first.chars().all(|c| c.is_ascii_digit()) || first.starts_with("l."))
+        {
+            return Some(first.to_string());
+        }
+    }
+    None
+}
+
+/// Extract artist ID from Apple Music URL (e.g. `https://music.apple.com/in/artist/marcgotiq/1684307524`).
+pub fn extract_artist_id_from_url(url: &str) -> Option<String> {
+    let clean = url.split('?').next()?.trim_end_matches('/');
+    if let Some(idx) = clean.find("/artist/") {
+        let after = &clean[idx + "/artist/".len()..];
+        let segs: Vec<&str> = after.split('/').filter(|s| !s.is_empty()).collect();
+        if let Some(last) = segs.last()
+            && (last.chars().all(|c| c.is_ascii_digit()) || last.starts_with("r."))
+        {
+            return Some(last.to_string());
+        }
+        if let Some(first) = segs.first()
+            && (first.chars().all(|c| c.is_ascii_digit()) || first.starts_with("r."))
+        {
+            return Some(first.to_string());
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_url_ids() {
+        assert_eq!(
+            extract_album_id_from_url(
+                "https://music.apple.com/in/album/dnd/1716611384?i=1716611387"
+            ),
+            Some("1716611384".to_string())
+        );
+        assert_eq!(
+            extract_album_id_from_url("https://music.apple.com/album/1716611384"),
+            Some("1716611384".to_string())
+        );
+        assert_eq!(
+            extract_artist_id_from_url("https://music.apple.com/in/artist/marcgotiq/1684307524"),
+            Some("1684307524".to_string())
+        );
+    }
 }

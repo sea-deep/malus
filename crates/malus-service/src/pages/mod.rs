@@ -10,6 +10,11 @@
 //! - Playlist detail (header, curator, track list)
 //! - Replay (year in review, top songs, albums, artists)
 
+pub mod artist;
+pub mod categories_data;
+pub mod curator;
+pub mod groupings;
+pub mod home;
 pub mod manifest;
 pub mod mapper;
 
@@ -17,7 +22,7 @@ use malus_ipc::wire::{
     PageActionWire, PageBadgeWire, PageContinuationWire, PageCursorWire, PageHeaderWire,
     PageItemWire, PageSectionWire, PageWire,
 };
-use malus_model::{MediaRef, PageRoute};
+use malus_model::{Artwork, PageRoute};
 use serde_json::Value;
 
 use crate::{api::OfficialAppleMusicApi, error::AppleError};
@@ -31,15 +36,20 @@ pub async fn get_apple_page(
         PageRoute::Home => build_home(api).await,
         PageRoute::New => build_new(api).await,
         PageRoute::Radio => build_radio(api).await,
+        PageRoute::Search => build_search_landing(api).await,
         PageRoute::LibraryRecentlyAdded => build_library_recently_added(api).await,
         PageRoute::LibrarySongs => build_library_songs(api).await,
         PageRoute::LibraryAlbums => build_library_albums(api).await,
+        PageRoute::LibraryGenres => build_library_genres(api).await,
         PageRoute::LibraryArtists => build_library_artists(api).await,
         PageRoute::LibraryPlaylists => build_library_playlists(api).await,
         PageRoute::LibraryMadeForYou => build_library_made_for_you(api).await,
         PageRoute::Album(id) => build_album_detail(api, id).await,
         PageRoute::Artist(id) => build_artist_detail(api, id).await,
         PageRoute::Playlist(id) => build_playlist_detail(api, id).await,
+        PageRoute::Curator(id) => curator::build_curator_page(id, api)
+            .await
+            .map_err(Into::into),
         PageRoute::Replay(year) => build_replay(api, *year).await,
     }
 }
@@ -58,6 +68,13 @@ pub async fn continue_apple_page(
         next_url.push(sep);
         next_url.push_str("include=catalog");
     }
+    if (next_url.contains("/v1/me/library/") || next_url.contains("/me/library/"))
+        && !next_url.contains("extend=")
+    {
+        let sep = if next_url.contains('?') { '&' } else { '?' };
+        next_url.push(sep);
+        next_url.push_str("extend=inFavorites");
+    }
 
     let resp = api.send_request(&next_url, &[]).await?;
 
@@ -68,6 +85,7 @@ pub async fn continue_apple_page(
                 route,
                 PageRoute::LibrarySongs
                     | PageRoute::LibraryAlbums
+                    | PageRoute::LibraryGenres
                     | PageRoute::LibraryArtists
                     | PageRoute::LibraryPlaylists
                     | PageRoute::LibraryRecentlyAdded
@@ -86,7 +104,7 @@ pub async fn continue_apple_page(
             continuation: next,
         })
     } else {
-        let sections = mapper::map_recommendations_to_sections(&resp);
+        let sections = home::map_listen_now_response(&resp);
         let next = extract_next_cursor(&resp, None);
         Ok(PageContinuationWire::Sections {
             sections,
@@ -95,176 +113,56 @@ pub async fn continue_apple_page(
     }
 }
 
-// ──────────────────────── HOME ────────────────────────
-
-fn determine_top_pick_overline(group_title: &str, item_name: &str) -> String {
-    let lower = group_title.to_lowercase();
-    if lower.starts_with("more from") {
-        group_title.to_string()
-    } else if lower.contains("fans like") || lower.contains("fans also like") {
-        if let Some(artist) = group_title.split(" Fans").next() {
-            format!("Featuring {artist}")
-        } else {
-            "Featuring".to_string()
-        }
-    } else if lower.contains("new release") {
-        "New Release".to_string()
-    } else if lower.contains("made for you") {
-        "Made for You".to_string()
-    } else if lower.contains("station") {
-        if item_name.contains("& Similar Artists") {
-            let artist = item_name
-                .replace("& Similar Artists", "")
-                .trim()
-                .to_string();
-            format!("Featuring {artist}")
-        } else if item_name.to_lowercase().contains("station") {
-            "Made for You".to_string()
-        } else {
-            "Station".to_string()
-        }
-    } else if lower.contains("recently played") || lower.contains("heavy rotation") {
-        "Listen Again".to_string()
-    } else {
-        group_title.to_string()
-    }
-}
+// ──────────────────────── HOME (LISTEN NOW) ────────────────────────
 
 async fn build_home(api: &OfficialAppleMusicApi) -> Result<PageWire, AppleError> {
     let mut page = PageWire::new("home", "Home");
 
-    // Fetch recommendations, recently played, and heavy rotation sequentially
-    let rec_res = api
-        .send_request("/v1/me/recommendations", &[("limit", "10")])
-        .await;
-    let rp_res = api
-        .send_request("/v1/me/recent/played", &[("limit", "10")])
-        .await;
-    let hr_res = api
-        .send_request("/v1/me/history/heavy-rotation", &[("limit", "10")])
-        .await;
+    let storefront = api.storefront();
+    let locale = home::get_locale_for_storefront(&storefront);
+    let tz_offset = home::get_local_timezone_offset();
+    let query_params = home::build_listen_now_query(&tz_offset, &locale);
+    let query_refs: Vec<(&str, &str)> =
+        query_params.iter().map(|(k, v)| (*k, v.as_str())).collect();
 
-    let mut top_picks: Vec<PageItemWire> = Vec::new();
-    let mut rec_sections: Vec<PageSectionWire> = Vec::new();
-    let mut rec_continuation = None;
+    let resp = api
+        .send_request(home::CANONICAL_LISTEN_NOW_URL, &query_refs)
+        .await?;
 
-    // Process recommendations
-    if let Ok(rec_data) = rec_res {
-        let _ = tokio::fs::write(
-            "/tmp/rec_data.json",
-            serde_json::to_string_pretty(&rec_data).unwrap_or_default(),
-        )
-        .await;
+    let sections = home::map_listen_now_response(&resp);
+    page.sections = sections;
 
-        if let Some(next) = rec_data.get("next").and_then(|n| n.as_str()) {
-            rec_continuation = Some(PageCursorWire::new(encode_cursor(next)));
-        }
-
-        if let Some(groups) = rec_data.get("data").and_then(|d| d.as_array()) {
-            let mut sampled_groups: Vec<Vec<PageItemWire>> = Vec::new();
-
-            for group in groups {
-                let title = group
-                    .get("attributes")
-                    .and_then(|a| a.get("title"))
-                    .and_then(|t| t.get("stringForDisplay"))
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("Recommendations");
-
-                if let Some(contents) = group
-                    .get("relationships")
-                    .and_then(|r| r.get("contents"))
-                    .and_then(|c| c.get("data"))
-                    .and_then(|d| d.as_array())
-                {
-                    let mut group_items: Vec<PageItemWire> = Vec::new();
-                    for item in contents {
-                        if let Some(mut page_item) = mapper::map_apple_resource_to_item(item) {
-                            let overline = determine_top_pick_overline(title, &page_item.title);
-                            page_item.tertiary_text = Some(overline);
-                            group_items.push(page_item);
-                        }
-                    }
-                    if !group_items.is_empty() {
-                        sampled_groups.push(group_items);
-                    }
-                }
-            }
-
-            // Interleave items across sampled groups (round-robin) up to 12 items
-            for round in 0..3 {
-                for group in &sampled_groups {
-                    if top_picks.len() >= 12 {
-                        break;
-                    }
-                    if let Some(item) = group
-                        .get(round)
-                        .filter(|item| !top_picks.iter().any(|existing| existing.id == item.id))
-                    {
-                        top_picks.push(item.clone());
-                    }
-                }
-            }
-
-            rec_sections = mapper::map_recommendations_to_sections(&rec_data);
-        }
-    }
-
-    // Top Picks for You Shelf at top of Home
-    if !top_picks.is_empty() {
-        let section = PageSectionWire::new(
-            "top-picks",
-            Some("Top Picks for You".to_string()),
-            top_picks,
-        )
-        .with_hint("top-picks-shelf");
-        page.sections.push(section);
-    }
-
-    // Recently Played
-    if let Ok(rp_data) = rp_res {
-        let items = mapper::map_apple_data_to_items(&rp_data);
-        if !items.is_empty() {
-            let mut section = PageSectionWire::new(
-                "recently-played",
-                Some("Recently Played".to_string()),
-                items,
-            )
-            .with_hint("shelf");
-            if let Some(next) = rp_data.get("next").and_then(|n| n.as_str()) {
-                section.continuation = Some(PageCursorWire::section(
-                    "recently-played",
-                    encode_cursor(next),
-                ));
-            }
-            page.sections.push(section);
-        }
-    }
-
-    // Recommendations Shelves
-    page.sections.extend(rec_sections);
-    page.continuation = rec_continuation;
-
-    // Heavy Rotation
-    if let Ok(hr_data) = hr_res {
-        let items = mapper::map_apple_data_to_items(&hr_data);
-        if !items.is_empty() {
-            let section =
-                PageSectionWire::new("heavy-rotation", Some("Heavy Rotation".to_string()), items)
-                    .with_hint("shelf");
-            page.sections.push(section);
-        }
+    if let Some(next) = resp.get("next").and_then(|n| n.as_str()) {
+        page.continuation = Some(PageCursorWire::new(encode_cursor(next)));
     }
 
     Ok(page)
 }
 
-// ──────────────────────── NEW (CHARTS) ────────────────────────
+// ──────────────────────── NEW (BROWSE) ────────────────────────
 
 async fn build_new(api: &OfficialAppleMusicApi) -> Result<PageWire, AppleError> {
     let mut page = PageWire::new("new", "Browse");
     page.subtitle = Some("Charts and new releases".to_string());
 
+    let storefront = api.storefront();
+    let locale = home::get_locale_for_storefront(&storefront);
+    let query_params = groupings::build_grouping_query("music", &locale);
+    let query_refs: Vec<(&str, &str)> = query_params.iter().map(|(k, v)| (*k, *v)).collect();
+
+    // Canonical Apple Editorial Groupings for Browse
+    if let Ok(resp) = api
+        .send_request(groupings::CANONICAL_GROUPING_URL, &query_refs)
+        .await
+    {
+        let sections = groupings::map_groupings_response(&resp, "music");
+        if !sections.is_empty() {
+            page.sections = sections;
+            return Ok(page);
+        }
+    }
+
+    // Fallback to catalog charts if grouping is unavailable
     let charts_data = api
         .send_request(
             "/v1/catalog/{storefront}/charts",
@@ -294,13 +192,9 @@ async fn build_new(api: &OfficialAppleMusicApi) -> Result<PageWire, AppleError> 
                         } else {
                             "grid"
                         };
-                        let mut section =
+                        let section =
                             PageSectionWire::new(&section_id, Some(chart_name.to_string()), items)
                                 .with_hint(hint);
-                        if let Some(next) = chart.get("next").and_then(|n| n.as_str()) {
-                            section.continuation =
-                                Some(PageCursorWire::section(&section_id, encode_cursor(next)));
-                        }
                         page.sections.push(section);
                     }
                 }
@@ -316,75 +210,140 @@ async fn build_new(api: &OfficialAppleMusicApi) -> Result<PageWire, AppleError> 
 async fn build_radio(api: &OfficialAppleMusicApi) -> Result<PageWire, AppleError> {
     let mut page = PageWire::new("radio", "Radio");
 
-    // Recent Radio Stations
-    match api
-        .send_request("/v1/me/recent/radio-stations", &[("limit", "20")])
+    let storefront = api.storefront();
+    let locale = home::get_locale_for_storefront(&storefront);
+    let query_params = groupings::build_grouping_query("radio", &locale);
+    let query_refs: Vec<(&str, &str)> = query_params.iter().map(|(k, v)| (*k, *v)).collect();
+
+    // Canonical Apple Radio Editorial Grouping (Apple Music 1, Hits, Country, On Air Now, Shows, Interviews)
+    let grouping_res = api
+        .send_request(groupings::CANONICAL_GROUPING_URL, &query_refs)
+        .await;
+
+    let mut sections = match grouping_res {
+        Ok(resp) => groupings::map_groupings_response(&resp, "radio"),
+        Err(e) => {
+            tracing::warn!("Failed to fetch Radio editorial groupings: {e}");
+            Vec::new()
+        }
+    };
+
+    // Personalized Recent Stations
+    if let Ok(recent_data) = api
+        .send_request("/v1/me/recent/radio-stations", &[("limit", "10")])
         .await
     {
-        Ok(data) => {
-            let items = mapper::map_apple_data_to_items(&data);
-            if !items.is_empty() {
-                let mut section = PageSectionWire::new(
-                    "recent-stations",
-                    Some("Recent Stations".to_string()),
-                    items,
-                )
-                .with_hint("shelf");
-                if let Some(next) = data.get("next").and_then(|n| n.as_str()) {
-                    section.continuation = Some(PageCursorWire::section(
-                        "recent-stations",
-                        encode_cursor(next),
-                    ));
-                }
-                page.sections.push(section);
-            }
+        let recent_items = mapper::map_apple_data_to_items(&recent_data);
+        if !recent_items.is_empty() {
+            let recent_shelf = PageSectionWire::new(
+                "recent-stations",
+                Some("Recently Played".to_string()),
+                recent_items,
+            )
+            .with_hint("stations-shelf");
+
+            // User hierarchy: Live Stations -> On Air Now -> Recent Stations -> Shows
+            let insert_pos = if sections.len() >= 2 {
+                2
+            } else if sections.len() == 1 {
+                1
+            } else {
+                0
+            };
+            sections.insert(insert_pos, recent_shelf);
         }
-        Err(e) => tracing::warn!("Failed to fetch recent radio stations: {e}"),
     }
 
-    // Live Stations (Apple Music 1, Hits, Country, etc.)
-    match api
+    page.sections = sections;
+    Ok(page)
+}
+
+// ──────────────────────── SEARCH (STOREFRONT LANDING) ────────────────────────
+
+async fn build_search_landing(api: &OfficialAppleMusicApi) -> Result<PageWire, AppleError> {
+    let mut page = PageWire::new("search", "Search");
+    page.subtitle = Some("Explore by Category".to_string());
+
+    let storefront = api.storefront();
+    let locale = home::get_locale_for_storefront(&storefront);
+
+    let query_params = [
+        ("name", "search-landing"),
+        ("l", locale.as_str()),
+        ("platform", "web"),
+    ];
+
+    let personal_url = format!(
+        "https://amp-api.music.apple.com/v1/recommendations/{storefront}/personal-recommendation"
+    );
+
+    let mut sections = Vec::new();
+
+    // 1. Try official dynamic search-landing recommendations
+    let rec_res = match api
         .send_request(
-            "/v1/catalog/{storefront}/search",
-            &[
-                ("term", "Apple Music"),
-                ("types", "stations"),
-                ("limit", "10"),
-            ],
+            "https://amp-api.music.apple.com/v1/me/recommendations",
+            &query_params,
         )
         .await
     {
-        Ok(data) => {
-            if let Some(stations) = data
-                .get("results")
-                .and_then(|r| r.get("stations"))
-                .and_then(|s| s.get("data"))
+        Ok(resp) => Ok(resp),
+        Err(_) => api.send_request(&personal_url, &query_params).await,
+    };
+
+    if let Ok(resp) = rec_res
+        && let Some(data) = resp.get("data").and_then(|d| d.as_array())
+    {
+        let mut dynamic_items = Vec::new();
+        for rec in data {
+            if let Some(contents) = rec
+                .get("relationships")
+                .and_then(|r| r.get("contents"))
+                .and_then(|c| c.get("data"))
                 .and_then(|d| d.as_array())
             {
-                let live_items: Vec<_> = stations
-                    .iter()
-                    .filter(|s| {
-                        s.get("attributes")
-                            .and_then(|a| a.get("isLive"))
-                            .and_then(|l| l.as_bool())
-                            .unwrap_or(false)
-                    })
-                    .filter_map(mapper::map_apple_resource_to_item)
-                    .collect();
-                if !live_items.is_empty() {
-                    let section = PageSectionWire::new(
-                        "live-stations",
-                        Some("Live Stations".to_string()),
-                        live_items,
-                    )
-                    .with_hint("shelf");
-                    page.sections.push(section);
+                for item in contents {
+                    if let Some(mut page_item) = mapper::map_apple_resource_to_item(item) {
+                        page_item.presentation_hint = Some("category-brick".to_string());
+                        dynamic_items.push(page_item);
+                    }
                 }
             }
         }
-        Err(e) => tracing::warn!("Failed to search for live stations: {e}"),
+
+        if !dynamic_items.is_empty() {
+            let section = PageSectionWire::new(
+                "browse-categories",
+                Some("Browse Categories".to_string()),
+                dynamic_items,
+            )
+            .with_hint("grid");
+            sections.push(section);
+        }
     }
 
+    // 2. Fallback to comprehensive 50 official BROWSE_CATEGORIES if dynamic returned nothing (or offline)
+    if sections.is_empty() {
+        let mut category_items = Vec::with_capacity(malus_ipc::wire::BROWSE_CATEGORIES.len());
+        for cat in malus_ipc::wire::BROWSE_CATEGORIES {
+            let mut item = PageItemWire::new(format!("category:{}", cat.id), cat.title);
+            item.artwork = Some(Artwork::new(cat.artwork_url).with_dimensions(640, 360));
+            item.open_route = PageRoute::parse(cat.route);
+            item.bg_color = Some(cat.bg_color.to_string());
+            item.presentation_hint = Some("category-brick".to_string());
+            category_items.push(item);
+        }
+
+        let section = PageSectionWire::new(
+            "browse-categories",
+            Some("Browse Categories".to_string()),
+            category_items,
+        )
+        .with_hint("grid");
+        sections.push(section);
+    }
+
+    page.sections = sections;
     Ok(page)
 }
 
@@ -419,6 +378,17 @@ async fn build_library_albums(api: &OfficialAppleMusicApi) -> Result<PageWire, A
         "Albums",
         "/v1/me/library/albums",
         "grid",
+    )
+    .await
+}
+
+async fn build_library_genres(api: &OfficialAppleMusicApi) -> Result<PageWire, AppleError> {
+    build_library_list(
+        api,
+        "library:genres",
+        "Genres",
+        "/v1/me/library/albums",
+        "genre-list",
     )
     .await
 }
@@ -499,7 +469,11 @@ async fn build_library_list(
         "100"
     };
     let include = "catalog";
-    let mut query = vec![("limit", limit), ("include", include)];
+    let mut query = vec![
+        ("limit", limit),
+        ("include", include),
+        ("extend", "inFavorites"),
+    ];
     // Default to time-based sorting (most recently added first) for endpoints supporting it
     if endpoint != "/v1/me/library/artists" && endpoint != "/v1/me/library/recently-added" {
         query.push(("sort", "-dateAdded"));
@@ -530,8 +504,21 @@ async fn build_album_detail(
         return build_library_album_detail(api, album_id).await;
     }
 
-    let path = format!("/v1/catalog/{{storefront}}/albums/{album_id}");
-    let catalog_res = api.send_request(&path, &[("include", "tracks")]).await;
+    let path =
+        format!("https://amp-api.music.apple.com/v1/catalog/{{storefront}}/albums/{album_id}");
+    let catalog_res = api
+        .send_request(
+            &path,
+            &[
+                ("include", "tracks,artists,record-labels"),
+                (
+                    "views",
+                    "more-by-artist,other-versions,appears-on,related-videos,you-might-also-like",
+                ),
+                ("extend", "editorialArtwork,editorialVideo,editorialNotes"),
+            ],
+        )
+        .await;
 
     let data = match catalog_res {
         Ok(d) => d,
@@ -568,9 +555,37 @@ async fn build_album_detail(
     } else {
         Some(artist.to_string())
     };
+    let artist_id = album
+        .get("relationships")
+        .and_then(|r| r.get("artists"))
+        .and_then(|a| a.get("data"))
+        .and_then(|d| d.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|art| art.get("id"))
+        .and_then(|i| i.as_str())
+        .or_else(|| {
+            attrs
+                .get("artistUrl")
+                .and_then(|u| u.as_str())
+                .and_then(|url| url.trim_end_matches('/').rsplit('/').next())
+        });
+    if let Some(art_id) = artist_id
+        && !art_id.is_empty()
+    {
+        header.subtitle_route = Some(PageRoute::Artist(art_id.to_string()));
+    }
     header.artwork = attrs
         .get("artwork")
         .and_then(crate::api::parse::parse_apple_artwork);
+
+    if let Some(notes) = attrs.get("editorialNotes") {
+        header.description = notes
+            .get("standard")
+            .or_else(|| notes.get("short"))
+            .and_then(|s| s.as_str())
+            .map(str::to_string);
+    }
+
     if let Some(release) = attrs.get("releaseDate").and_then(|r| r.as_str()) {
         header.metadata.push(release.to_string());
     }
@@ -609,6 +624,41 @@ async fn build_album_detail(
             section.continuation = Some(PageCursorWire::section("tracks", encode_cursor(next)));
         }
         page.sections.push(section);
+    }
+
+    // Related views appended below tracklist
+    if let Some(views) = album.get("views").and_then(|v| v.as_object()) {
+        let view_order = [
+            ("more-by-artist", "More by Artist", "shelf"),
+            ("you-might-also-like", "You Might Also Like", "shelf"),
+            ("appears-on", "Featured On", "shelf"),
+            ("other-versions", "Other Versions", "shelf"),
+            ("related-videos", "Music Videos", "video-shelf"),
+        ];
+        for (view_key, fallback_title, hint) in view_order {
+            if let Some(view) = views.get(view_key) {
+                let view_title = view
+                    .get("attributes")
+                    .and_then(|a| a.get("title").and_then(|t| t.as_str()))
+                    .unwrap_or(fallback_title);
+                if let Some(view_data) = view.get("data").and_then(|d| d.as_array()) {
+                    if view_data.is_empty() {
+                        continue;
+                    }
+                    let items: Vec<_> = view_data
+                        .iter()
+                        .filter_map(mapper::map_apple_resource_to_item)
+                        .collect();
+                    if !items.is_empty() {
+                        let section_id = format!("view:{view_key}");
+                        page.sections.push(
+                            PageSectionWire::new(section_id, Some(view_title.to_string()), items)
+                                .with_hint(hint),
+                        );
+                    }
+                }
+            }
+        }
     }
 
     Ok(page)
@@ -712,218 +762,7 @@ async fn build_artist_detail(
     api: &OfficialAppleMusicApi,
     artist_id: &str,
 ) -> Result<PageWire, AppleError> {
-    if artist_id.starts_with("r.") || artist_id.starts_with("l.") {
-        return build_library_artist_detail(api, artist_id).await;
-    }
-
-    let path = format!("/v1/catalog/{{storefront}}/artists/{artist_id}");
-    let catalog_res = api
-        .send_request(
-            &path,
-            &[(
-                "views",
-                "top-songs,full-albums,singles,similar-artists,latest-release",
-            )],
-        )
-        .await;
-
-    let data = match catalog_res {
-        Ok(d) => d,
-        Err(e) => {
-            if matches!(e, crate::api::AppleApiError::NotFound(_)) {
-                return build_library_artist_detail(api, artist_id).await;
-            }
-            return Err(e.into());
-        }
-    };
-
-    let artist = data
-        .get("data")
-        .and_then(|d| d.as_array())
-        .and_then(|a| a.first())
-        .ok_or_else(|| AppleError::NotFound(format!("Artist {artist_id} not found")))?;
-
-    let attrs = artist.get("attributes").unwrap_or(artist);
-    let name = attrs
-        .get("name")
-        .and_then(|n| n.as_str())
-        .unwrap_or("Artist");
-    let page_id = format!("artist:{artist_id}");
-
-    let mut page = PageWire::new(&page_id, name);
-    let mut header = PageHeaderWire::new(name);
-    header.actions = mapper::map_detail_actions(artist);
-    header.artwork = attrs
-        .get("artwork")
-        .and_then(crate::api::parse::parse_apple_artwork);
-    if let Some(genres) = attrs.get("genreNames").and_then(|g| g.as_array()) {
-        for g in genres.iter().take(3) {
-            if let Some(s) = g.as_str() {
-                header.metadata.push(s.to_string());
-            }
-        }
-    }
-    page.header = Some(header);
-
-    // Views
-    if let Some(views) = artist.get("views").and_then(|v| v.as_object()) {
-        let view_order = [
-            "top-songs",
-            "latest-release",
-            "full-albums",
-            "singles",
-            "similar-artists",
-        ];
-        for view_key in &view_order {
-            if let Some(view) = views.get(*view_key) {
-                let view_title = view
-                    .get("attributes")
-                    .and_then(|a| a.get("title").and_then(|t| t.as_str()))
-                    .unwrap_or(view_key);
-
-                if let Some(view_data) = view.get("data").and_then(|d| d.as_array()) {
-                    if view_data.is_empty() {
-                        continue;
-                    }
-                    let items: Vec<_> = view_data
-                        .iter()
-                        .filter_map(mapper::map_apple_resource_to_item)
-                        .collect();
-                    let hint = if *view_key == "top-songs" {
-                        "track-list"
-                    } else {
-                        "shelf"
-                    };
-                    let section_id = format!("view:{view_key}");
-                    let mut section =
-                        PageSectionWire::new(&section_id, Some(view_title.to_string()), items)
-                            .with_hint(hint);
-                    if let Some(next) = view.get("next").and_then(|n| n.as_str()) {
-                        section.continuation =
-                            Some(PageCursorWire::section(&section_id, encode_cursor(next)));
-                    }
-                    page.sections.push(section);
-                }
-            }
-        }
-    }
-
-    Ok(page)
-}
-
-async fn build_library_artist_detail(
-    api: &OfficialAppleMusicApi,
-    artist_id: &str,
-) -> Result<PageWire, AppleError> {
-    let path = format!("/v1/me/library/artists/{artist_id}");
-    let data = api
-        .send_request(&path, &[("include", "catalog,albums")])
-        .await?;
-
-    let artist = data
-        .get("data")
-        .and_then(|d| d.as_array())
-        .and_then(|a| a.first())
-        .ok_or_else(|| AppleError::NotFound(format!("Library artist {artist_id} not found")))?;
-
-    let attrs = artist.get("attributes").unwrap_or(artist);
-    let name = attrs
-        .get("name")
-        .and_then(|n| n.as_str())
-        .unwrap_or("Artist");
-    let page_id = format!("artist:{artist_id}");
-
-    let mut page = PageWire::new(&page_id, name);
-    let mut header = PageHeaderWire::new(name);
-
-    let catalog_art = artist
-        .get("relationships")
-        .and_then(|r| r.get("catalog"))
-        .and_then(|c| c.get("data"))
-        .and_then(|d| d.as_array())
-        .and_then(|a| a.first())
-        .and_then(|cat| cat.get("attributes"))
-        .and_then(|a| a.get("artwork"));
-
-    let first_album_art = artist
-        .get("relationships")
-        .and_then(|r| r.get("albums"))
-        .and_then(|a| a.get("data"))
-        .and_then(|d| d.as_array())
-        .and_then(|a| a.first())
-        .and_then(|alb| alb.get("attributes"))
-        .and_then(|a| a.get("artwork"));
-
-    header.artwork = attrs
-        .get("artwork")
-        .or(catalog_art)
-        .or(first_album_art)
-        .and_then(crate::api::parse::parse_apple_artwork);
-
-    let cat_id = artist
-        .get("relationships")
-        .and_then(|r| r.get("catalog"))
-        .and_then(|c| c.get("data"))
-        .and_then(|d| d.as_array())
-        .and_then(|a| a.first())
-        .and_then(|e| e.get("id"))
-        .and_then(|i| i.as_str());
-
-    if let Some(cid) = cat_id {
-        header.metadata.push(format!("catalog_id:{cid}"));
-        header
-            .actions
-            .push(PageActionWire::Play(MediaRef::Artist(cid.to_string())));
-        header
-            .actions
-            .push(PageActionWire::Favorite(MediaRef::Artist(cid.to_string())));
-    }
-    // Library-only artists have no catalog top-songs endpoint. Their albums
-    // remain playable below; do not advertise an invalid catalog action.
-
-    page.header = Some(header);
-
-    // Only albums from user library
-    let mut items = Vec::new();
-    if let Some(albums) = artist
-        .get("relationships")
-        .and_then(|r| r.get("albums"))
-        .and_then(|a| a.get("data"))
-        .and_then(|d| d.as_array())
-    {
-        for alb in albums {
-            if let Some(mut it) = mapper::map_apple_resource_to_item(alb) {
-                it.in_library = Some(true);
-                it.actions
-                    .retain(|a| !matches!(a, PageActionWire::AddToLibrary(_)));
-                items.push(it);
-            }
-        }
-    }
-
-    if items.is_empty() {
-        let albums_path = format!("/v1/me/library/artists/{artist_id}/albums");
-        if let Ok(albums_data) = api
-            .send_request(&albums_path, &[("limit", "100"), ("include", "catalog")])
-            .await
-        {
-            let mut fetched = mapper::map_apple_data_to_items(&albums_data);
-            for it in &mut fetched {
-                it.in_library = Some(true);
-                it.actions
-                    .retain(|a| !matches!(a, PageActionWire::AddToLibrary(_)));
-            }
-            items = fetched;
-        }
-    }
-
-    if !items.is_empty() {
-        let section =
-            PageSectionWire::new("albums", Some("Albums".to_string()), items).with_hint("grid");
-        page.sections.push(section);
-    }
-
-    Ok(page)
+    artist::build_artist_page(api, artist_id).await
 }
 
 // ──────────────────────── PLAYLIST DETAIL ────────────────────────
@@ -936,8 +775,24 @@ async fn build_playlist_detail(
         return build_library_playlist_detail(api, playlist_id).await;
     }
 
-    let path = format!("/v1/catalog/{{storefront}}/playlists/{playlist_id}");
-    let catalog_res = api.send_request(&path, &[("include", "tracks")]).await;
+    let path = format!(
+        "https://amp-api.music.apple.com/v1/catalog/{{storefront}}/playlists/{playlist_id}"
+    );
+    let catalog_res = api
+        .send_request(
+            &path,
+            &[
+                ("include", "tracks,curator"),
+                ("views", "featured-artists,more-by-curator"),
+                ("extend", "editorialArtwork,editorialVideo"),
+                ("relate", "library"),
+                (
+                    "fields[playlists]",
+                    "name,description,artwork,curatorName,inLibrary,inFavorites,isFavorite,canEdit,canDelete",
+                ),
+            ],
+        )
+        .await;
 
     let data = match catalog_res {
         Ok(d) => d,
@@ -968,15 +823,16 @@ async fn build_playlist_detail(
     header.artwork = attrs
         .get("artwork")
         .and_then(crate::api::parse::parse_apple_artwork);
+
     if let Some(curator) = attrs.get("curatorName").and_then(|c| c.as_str()) {
         header.subtitle = Some(curator.to_string());
     }
     if let Some(desc) = attrs
         .get("description")
-        .and_then(|d| d.get("short").or_else(|| d.get("standard")))
+        .and_then(|d| d.get("standard").or_else(|| d.get("short")))
         .and_then(|s| s.as_str())
     {
-        header.metadata.push(desc.to_string());
+        header.description = Some(desc.to_string());
     }
     let can_edit = attrs["canEdit"].as_bool().unwrap_or(false);
     header.can_edit = can_edit;
@@ -1006,6 +862,38 @@ async fn build_playlist_detail(
         page.sections.push(section);
     }
 
+    // Related discovery appended below tracklist
+    if let Some(views) = playlist.get("views").and_then(|v| v.as_object()) {
+        let view_order = [
+            ("featured-artists", "Featured Artists", "artist-shelf"),
+            ("more-by-curator", "More by Curator", "shelf"),
+        ];
+        for (view_key, fallback_title, hint) in view_order {
+            if let Some(view) = views.get(view_key) {
+                let view_title = view
+                    .get("attributes")
+                    .and_then(|a| a.get("title").and_then(|t| t.as_str()))
+                    .unwrap_or(fallback_title);
+                if let Some(view_data) = view.get("data").and_then(|d| d.as_array()) {
+                    if view_data.is_empty() {
+                        continue;
+                    }
+                    let items: Vec<_> = view_data
+                        .iter()
+                        .filter_map(mapper::map_apple_resource_to_item)
+                        .collect();
+                    if !items.is_empty() {
+                        let section_id = format!("view:{view_key}");
+                        page.sections.push(
+                            PageSectionWire::new(section_id, Some(view_title.to_string()), items)
+                                .with_hint(hint),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     Ok(page)
 }
 
@@ -1015,7 +903,16 @@ async fn build_library_playlist_detail(
 ) -> Result<PageWire, AppleError> {
     let path = format!("/v1/me/library/playlists/{playlist_id}");
     let data = api
-        .send_request(&path, &[("include", "tracks,catalog")])
+        .send_request(
+            &path,
+            &[
+                ("include", "tracks,catalog"),
+                (
+                    "fields[library-playlists]",
+                    "name,description,artwork,canEdit,canDelete,inFavorites,isFavorite,playParams,dateAdded",
+                ),
+            ],
+        )
         .await?;
 
     let playlist = data

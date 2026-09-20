@@ -14,6 +14,7 @@ pub struct MediaCard {
     pub overline: Option<String>,
     pub entity: Option<MediaRef>,
     pub open_route: Option<PageRoute>,
+    pub subtitle_route: Option<PageRoute>,
     pub is_circular: bool,
     pub size: i32,
     artwork_loaded: bool,
@@ -31,6 +32,7 @@ pub struct MediaCardInit {
     pub artwork_url: Option<String>,
     pub entity: Option<MediaRef>,
     pub open_route: Option<PageRoute>,
+    pub subtitle_route: Option<PageRoute>,
     pub size: i32,
     pub is_circular: bool,
     pub artwork_service: ArtworkService,
@@ -42,12 +44,14 @@ pub enum MediaCardInput {
     Clicked,
     PlayClicked,
     LoadArtwork,
+    RightClicked(f64, f64),
 }
 
 #[derive(Debug, Clone)]
 pub enum MediaCardOutput {
     Navigate(PageRoute),
     Play(MediaRef),
+    CopyLink(String),
 }
 
 #[relm4::component(pub)]
@@ -79,6 +83,7 @@ impl Component for MediaCard {
                     add_css_class: "card-play-overlay",
                     set_icon_name: ICON_PLAY,
                     set_tooltip_text: Some("Play"),
+                    set_focus_on_click: false,
                     set_halign: gtk::Align::End,
                     set_valign: gtk::Align::End,
                     set_margin_end: 8,
@@ -120,6 +125,7 @@ impl Component for MediaCard {
                     set_text: &model.title,
                 },
 
+                #[name(subtitle_lbl)]
                 gtk::Label {
                     #[watch]
                     set_xalign: if model.is_circular { 0.5 } else { 0.0 },
@@ -153,6 +159,7 @@ impl Component for MediaCard {
             overline: init.overline,
             entity: init.entity,
             open_route: init.open_route,
+            subtitle_route: init.subtitle_route,
             is_circular: init.is_circular,
             size: init.size,
             artwork_loaded: false,
@@ -177,13 +184,39 @@ impl Component for MediaCard {
             );
         }
 
-        // Card gesture click
+        // Clickable subtitle navigation (e.g. artist)
+        if let Some(route) = model.subtitle_route.clone() {
+            widgets.subtitle_lbl.add_css_class("metadata-link");
+            widgets.subtitle_lbl.set_cursor_from_name(Some("pointer"));
+            let s_sub = sender.clone();
+            let sub_gesture = gtk::GestureClick::new();
+            sub_gesture.connect_released(move |g, n_press, _x, _y| {
+                if n_press == 1 {
+                    g.set_state(gtk::EventSequenceState::Claimed);
+                    let _ = s_sub.output(MediaCardOutput::Navigate(route.clone()));
+                }
+            });
+            widgets.subtitle_lbl.add_controller(sub_gesture);
+        }
+
+        // Card gesture click (primary button)
         let s = sender.clone();
         let gesture = gtk::GestureClick::new();
+        gesture.set_button(gtk::gdk::BUTTON_PRIMARY);
         gesture.connect_released(move |_gesture, _n_press, _x, _y| {
             s.input(MediaCardInput::Clicked);
         });
         root.add_controller(gesture);
+
+        // Secondary click (right-click) for context menu
+        let s_rc = sender.clone();
+        let rc_gesture = gtk::GestureClick::new();
+        rc_gesture.set_button(gtk::gdk::BUTTON_SECONDARY);
+        rc_gesture.connect_pressed(move |g, _n_press, x, y| {
+            g.set_state(gtk::EventSequenceState::Claimed);
+            s_rc.input(MediaCardInput::RightClicked(x, y));
+        });
+        root.add_controller(rc_gesture);
 
         // Focus controller: load artwork on keyboard navigation focus if deferred
         let s_focus = sender.clone();
@@ -197,7 +230,7 @@ impl Component for MediaCard {
         root.update_property(&[gtk::accessible::Property::Label(&model.title)]);
         let key = gtk::EventControllerKey::new();
         key.connect_key_pressed(move |_, key, _, _| {
-            if key == gtk::gdk::Key::Return || key == gtk::gdk::Key::space {
+            if key == gtk::gdk::Key::Return || key == gtk::gdk::Key::KP_Enter {
                 sender.input(MediaCardInput::Clicked);
                 gtk::glib::Propagation::Stop
             } else {
@@ -247,6 +280,88 @@ impl Component for MediaCard {
                     let _ = sender.output(MediaCardOutput::Play(entity.clone()));
                 }
             }
+            MediaCardInput::RightClicked(_, _) => {}
         }
+    }
+
+    fn update_with_view(
+        &mut self,
+        widgets: &mut Self::Widgets,
+        message: Self::Input,
+        sender: ComponentSender<Self>,
+        root: &Self::Root,
+    ) {
+        if let MediaCardInput::RightClicked(x, y) = message {
+            let link = self
+                .open_route
+                .as_ref()
+                .and_then(|r| r.web_url())
+                .or_else(|| self.entity.as_ref().and_then(|e| e.web_url()));
+
+            if self.entity.is_some() || self.open_route.is_some() || link.is_some() {
+                let popover = gtk::Popover::new();
+                let box_menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
+                box_menu.set_margin_top(4);
+                box_menu.set_margin_bottom(4);
+                box_menu.set_margin_start(4);
+                box_menu.set_margin_end(4);
+
+                if let Some(ref entity) = self.entity {
+                    let btn = gtk::Button::with_label("Play");
+                    btn.add_css_class("flat");
+                    btn.set_focus_on_click(false);
+                    btn.set_halign(gtk::Align::Start);
+                    let s = sender.clone();
+                    let ent = entity.clone();
+                    let p = popover.clone();
+                    btn.connect_clicked(move |_| {
+                        p.popdown();
+                        let _ = s.output(MediaCardOutput::Play(ent.clone()));
+                    });
+                    box_menu.append(&btn);
+                }
+
+                if let Some(ref route) = self.open_route {
+                    let btn = gtk::Button::with_label("Open");
+                    btn.add_css_class("flat");
+                    btn.set_focus_on_click(false);
+                    btn.set_halign(gtk::Align::Start);
+                    let s = sender.clone();
+                    let rt = route.clone();
+                    let p = popover.clone();
+                    btn.connect_clicked(move |_| {
+                        p.popdown();
+                        let _ = s.output(MediaCardOutput::Navigate(rt.clone()));
+                    });
+                    box_menu.append(&btn);
+                }
+
+                if let Some(url) = link {
+                    let btn = gtk::Button::with_label("Copy Link");
+                    btn.add_css_class("flat");
+                    btn.set_focus_on_click(false);
+                    btn.set_halign(gtk::Align::Start);
+                    let s = sender.clone();
+                    let p = popover.clone();
+                    btn.connect_clicked(move |_| {
+                        p.popdown();
+                        let _ = s.output(MediaCardOutput::CopyLink(url.clone()));
+                    });
+                    box_menu.append(&btn);
+                }
+
+                popover.set_child(Some(&box_menu));
+                popover.set_parent(root);
+                popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+                popover.connect_closed(|p| {
+                    p.unparent();
+                });
+                popover.popup();
+                return;
+            }
+        }
+
+        self.update(message, sender.clone(), root);
+        self.update_view(widgets, sender);
     }
 }

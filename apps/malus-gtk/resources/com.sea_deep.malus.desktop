@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Malus
+GenericName=Music Player
+Comment=Apple Music client for Linux
+Exec=malus-gtk
+Icon=com.sea_deep.malus
+Terminal=false
+Categories=Audio;Music;Player;GTK;
+Keywords=music;apple;streaming;player;
+StartupWMClass=com.sea_deep.malus

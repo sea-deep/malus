@@ -10,7 +10,7 @@ use malus_gtk::{
     app::{AppInput, MalusApp},
     navigation::AppDestination,
     pages::now_playing::NowPlayingPage,
-    services::DecodedImage,
+    services::{ArtworkService, DecodedImage},
     state::{NowPlayingMode, PlayerPresentation},
     widgets::player_controls::{CommandHandler, MenuHandler},
 };
@@ -111,7 +111,7 @@ fn test_memory_plateau_under_navigation_and_playback_cycles() {
     });
 
     let client = MalusClient::new(path);
-    let app_handle = MalusApp::builder().launch(client).detach();
+    let app_handle = MalusApp::builder().launch(client.clone()).detach();
     pump(Duration::from_millis(200));
 
     let initial_rss = get_rss_kb();
@@ -163,7 +163,18 @@ fn test_memory_plateau_under_navigation_and_playback_cycles() {
     let player = Rc::new(RefCell::new(PlayerPresentation::default()));
     let send: CommandHandler = Rc::new(|_| {});
     let menu: MenuHandler = Rc::new(|_| {});
-    let now_playing = NowPlayingPage::new(&player, &send, &menu, || {}, || {}, || {});
+    let now_playing = NowPlayingPage::new(
+        client.clone(),
+        ArtworkService::new(),
+        &player,
+        &send,
+        &menu,
+        || {},
+        || {},
+        || {},
+        || {},
+        |_| {},
+    );
 
     let mut track_samples = Vec::new();
     for i in 0..20 {

@@ -416,6 +416,8 @@ impl FruitPalette {
              @define-color sidebar_fg_color {};\n\
              @define-color borders {};\n\
              @define-color shade_color {};\n\
+             @define-color slider_bg_color #ffffff;\n\
+             @define-color slider_border_color alpha(currentColor, 0.15);\n\
              button.suggested-action {{ background-color: @accent_bg_color; color: @accent_fg_color; }}\n",
             self.accent_color,
             self.accent_bg_color,
@@ -441,6 +443,82 @@ impl FruitPalette {
     }
 }
 
+fn soft_surfaces_css(is_dark: bool) -> &'static str {
+    if is_dark {
+        "\n/* Bespoke Soft Surfaces (Dark Mode) */\n\
+         .player-bar {\n\
+             background-color: alpha(mix(@headerbar_bg_color, @view_bg_color, 0.35), 0.84);\n\
+             background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, transparent 70%);\n\
+             border-top: 1px solid rgba(255, 255, 255, 0.08);\n\
+             transition: background-color 200ms ease;\n\
+         }\n\
+         .sidebar {\n\
+             background-color: alpha(mix(@window_bg_color, @view_bg_color, 0.30), 0.82);\n\
+             border-right: 1px solid rgba(255, 255, 255, 0.06);\n\
+             transition: background-color 200ms ease;\n\
+         }\n\
+         .sidebar-search {\n\
+             background-color: alpha(currentColor, 0.055);\n\
+             border: 1px solid alpha(currentColor, 0.06);\n\
+         }\n\
+         .utility-pane {\n\
+             background-color: alpha(mix(@window_bg_color, @view_bg_color, 0.30), 0.82);\n\
+             border-left: 1px solid rgba(255, 255, 255, 0.06);\n\
+             transition: background-color 200ms ease;\n\
+         }\n\
+         .malus-window headerbar {\n\
+             background-color: alpha(@headerbar_bg_color, 0.84);\n\
+             background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, transparent 80%);\n\
+             border-bottom: 1px solid rgba(255, 255, 255, 0.06);\n\
+             transition: background-color 200ms ease;\n\
+         }\n\
+         .malus-window headerbar button:hover {\n\
+             background-color: alpha(currentColor, 0.08);\n\
+         }\n\
+         popover contents {\n\
+             border-radius: 14px;\n\
+             background-color: alpha(@popover_bg_color, 0.92);\n\
+             border: 1px solid rgba(255, 255, 255, 0.08);\n\
+         }\n"
+    } else {
+        "\n/* Bespoke Soft Surfaces (Light Mode) */\n\
+         .player-bar {\n\
+             background-color: alpha(mix(@headerbar_bg_color, @view_bg_color, 0.35), 0.88);\n\
+             background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.50) 0%, transparent 70%);\n\
+             border-top: 1px solid rgba(0, 0, 0, 0.08);\n\
+             transition: background-color 200ms ease;\n\
+         }\n\
+         .sidebar {\n\
+             background-color: alpha(mix(@window_bg_color, @view_bg_color, 0.30), 0.86);\n\
+             border-right: 1px solid rgba(0, 0, 0, 0.07);\n\
+             transition: background-color 200ms ease;\n\
+         }\n\
+         .sidebar-search {\n\
+             background-color: alpha(currentColor, 0.045);\n\
+             border: 1px solid alpha(currentColor, 0.06);\n\
+         }\n\
+         .utility-pane {\n\
+             background-color: alpha(mix(@window_bg_color, @view_bg_color, 0.30), 0.86);\n\
+             border-left: 1px solid rgba(0, 0, 0, 0.07);\n\
+             transition: background-color 200ms ease;\n\
+         }\n\
+         .malus-window headerbar {\n\
+             background-color: alpha(@headerbar_bg_color, 0.88);\n\
+             background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.55) 0%, transparent 80%);\n\
+             border-bottom: 1px solid rgba(0, 0, 0, 0.07);\n\
+             transition: background-color 200ms ease;\n\
+         }\n\
+         .malus-window headerbar button:hover {\n\
+             background-color: alpha(currentColor, 0.07);\n\
+         }\n\
+         popover contents {\n\
+             border-radius: 14px;\n\
+             background-color: alpha(@popover_bg_color, 0.95);\n\
+             border: 1px solid rgba(0, 0, 0, 0.08);\n\
+         }\n"
+    }
+}
+
 fn apply_palette_and_rules(is_dark: bool, accent_idx: u32, corner_idx: u32, translucent: bool) {
     let mut css = String::new();
 
@@ -460,13 +538,9 @@ fn apply_palette_and_rules(is_dark: bool, accent_idx: u32, corner_idx: u32, tran
         ".card-artwork, .track-artwork, .player-artwork {{ border-radius: {radius}; }}\n"
     ));
 
-    // 3. Translucency (independent from palette selection)
+    // 3. Bespoke soft surfaces (independent from palette selection)
     if translucent {
-        css.push_str(
-            ".player-bar, .sidebar, .utility-pane {\n\
-                background-color: alpha(@headerbar_bg_color, 0.85);\n\
-            }\n",
-        );
+        css.push_str(soft_surfaces_css(is_dark));
     }
 
     with_css_provider(|provider| {

@@ -17,7 +17,7 @@ use malus_model::{
 };
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
 use serde_json::Value;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::api::{
     credentials::{AppleCredentials, TokenProvider},
@@ -71,6 +71,22 @@ impl OfficialAppleMusicApi {
         }
     }
 
+    /// Retrieve the active storefront identifier, preferring environment overrides then user credentials.
+    pub fn storefront(&self) -> String {
+        if let Ok(env_sf) = std::env::var("MALUS_APPLE_STOREFRONT") {
+            let env_sf = env_sf.trim().to_lowercase();
+            if !env_sf.is_empty() {
+                return env_sf;
+            }
+        }
+        if let Ok(creds) = self.token_provider.get_credentials()
+            && !creds.storefront.is_empty()
+        {
+            return creds.storefront.to_lowercase();
+        }
+        "us".to_string()
+    }
+
     /// Build the full URL for an API path or cursor.
     fn build_url(&self, path_or_url: &str, storefront: &str) -> String {
         let sf = if let Ok(env_sf) = std::env::var("MALUS_APPLE_STOREFRONT") {
@@ -89,6 +105,35 @@ impl OfficialAppleMusicApi {
         };
 
         let resolved = path_or_url.replace("{storefront}", &sf);
+
+        // When testing with a mock base URL (e.g. http://127.0.0.1:...), rewrite
+        // absolute Apple Music URLs to the mock server to prevent hitting real Apple servers.
+        let is_mock_base = !self.base_url.contains("apple.com");
+        if is_mock_base {
+            let path = if let Some(stripped) =
+                resolved.strip_prefix("https://amp-api.music.apple.com/v1")
+            {
+                stripped
+            } else if let Some(stripped) =
+                resolved.strip_prefix("https://amp-api-edge.music.apple.com/v1")
+            {
+                stripped
+            } else if let Some(stripped) =
+                resolved.strip_prefix("https://amp-api-edge.media.apple.com/v1")
+            {
+                stripped
+            } else if let Some(stripped) = resolved.strip_prefix("https://api.music.apple.com/v1") {
+                stripped
+            } else if let Some(stripped) = resolved.strip_prefix("http://") {
+                stripped.split_once('/').map(|(_, p)| p).unwrap_or("")
+            } else if let Some(stripped) = resolved.strip_prefix("https://") {
+                stripped.split_once('/').map(|(_, p)| p).unwrap_or("")
+            } else {
+                resolved.as_str()
+            };
+            let clean_path = path.strip_prefix("/v1").unwrap_or(path);
+            return format!("{}/{}", self.base_url, clean_path.trim_start_matches('/'));
+        }
 
         if resolved.starts_with("http://") || resolved.starts_with("https://") {
             return resolved;
@@ -110,12 +155,13 @@ impl OfficialAppleMusicApi {
             })?,
         );
 
-        headers.insert(
-            "music-user-token",
-            HeaderValue::from_str(&creds.music_user_token).map_err(|e| {
+        if !creds.music_user_token.is_empty() {
+            let user_token_hdr = HeaderValue::from_str(&creds.music_user_token).map_err(|e| {
                 AppleApiError::AuthRequired(format!("Invalid characters in music user token: {e}"))
-            })?,
-        );
+            })?;
+            headers.insert("music-user-token", user_token_hdr.clone());
+            headers.insert("media-user-token", user_token_hdr);
+        }
 
         headers.insert(
             "origin",
@@ -124,6 +170,10 @@ impl OfficialAppleMusicApi {
         headers.insert(
             "referer",
             HeaderValue::from_static("https://music.apple.com/"),
+        );
+        headers.insert(
+            "x-apple-client-version",
+            HeaderValue::from_static("2638.7.0-external"),
         );
         headers.insert(USER_AGENT, HeaderValue::from_static(DEFAULT_USER_AGENT));
 
@@ -215,13 +265,23 @@ impl OfficialAppleMusicApi {
         let status = resp.status();
         let elapsed = start.elapsed();
 
-        info!(
-            method = %method,
-            path = %path_or_url,
-            status = %status.as_u16(),
-            elapsed_ms = %elapsed.as_millis(),
-            "Apple Music API request completed"
-        );
+        if status == reqwest::StatusCode::NOT_FOUND && path_or_url.contains("/v1/me/ratings/") {
+            debug!(
+                method = %method,
+                path = %path_or_url,
+                status = %status.as_u16(),
+                elapsed_ms = %elapsed.as_millis(),
+                "Apple Music API request completed (unrated item)"
+            );
+        } else {
+            info!(
+                method = %method,
+                path = %path_or_url,
+                status = %status.as_u16(),
+                elapsed_ms = %elapsed.as_millis(),
+                "Apple Music API request completed"
+            );
+        }
 
         if status.is_success() {
             if status == reqwest::StatusCode::NO_CONTENT {
@@ -288,6 +348,7 @@ impl OfficialAppleMusicApi {
         match reference {
             MediaRef::Song(_) => Ok("songs"),
             MediaRef::Album(_) => Ok("albums"),
+            MediaRef::Playlist(id) if id.starts_with("p.") => Ok("library-playlists"),
             MediaRef::Playlist(_) => Ok("playlists"),
             MediaRef::Artist(_) => Ok("artists"),
             MediaRef::Station(_) => Err(AppleApiError::Other(
@@ -433,6 +494,9 @@ impl OfficialAppleMusicApi {
 
     /// Suggest less for an item (negative rating -1).
     pub async fn suggest_less(&self, reference: &MediaRef) -> Result<(), AppleApiError> {
+        if matches!(reference, MediaRef::Playlist(id) if id.starts_with("p.")) {
+            return Ok(());
+        }
         let resolved = self.catalog_reference(reference).await?;
         let reference = &resolved;
         let kind = Self::media_kind_plural(reference)?;
@@ -448,6 +512,9 @@ impl OfficialAppleMusicApi {
 
     /// Clear rating (set to neutral).
     pub async fn clear_rating(&self, reference: &MediaRef) -> Result<(), AppleApiError> {
+        if matches!(reference, MediaRef::Playlist(id) if id.starts_with("p.")) {
+            return Ok(());
+        }
         let resolved = self.catalog_reference(reference).await?;
         let reference = &resolved;
         let kind = Self::media_kind_plural(reference)?;
@@ -459,6 +526,12 @@ impl OfficialAppleMusicApi {
 
     /// Add an item (song, album, playlist) to the user's library.
     pub async fn add_to_library(&self, reference: &MediaRef) -> Result<(), AppleApiError> {
+        if matches!(reference, MediaRef::Playlist(id) if id.starts_with("p."))
+            || matches!(reference, MediaRef::Song(id) if id.starts_with("i."))
+            || matches!(reference, MediaRef::Album(id) if id.starts_with("l."))
+        {
+            return Ok(());
+        }
         let resolved = self.catalog_reference(reference).await?;
         let reference = &resolved;
         let kind = match reference {
@@ -594,9 +667,47 @@ impl OfficialAppleMusicApi {
         Ok(())
     }
 
+    pub async fn resolve_library_playlist_id(
+        &self,
+        catalog_or_lib_id: &str,
+    ) -> Result<String, AppleApiError> {
+        if catalog_or_lib_id.starts_with("p.") {
+            return Ok(catalog_or_lib_id.to_string());
+        }
+        let mut next_url = Some("/v1/me/library/playlists?limit=100".to_string());
+        let mut pages = 0;
+        while let Some(url) = next_url {
+            if pages >= 5 {
+                break;
+            }
+            pages += 1;
+            let res = self.send_request(&url, &[]).await?;
+            if let Some(arr) = res.get("data").and_then(|d| d.as_array()) {
+                for item in arr {
+                    let lib_id = item.get("id").and_then(|i| i.as_str());
+                    let global_id = item
+                        .pointer("/attributes/playParams/globalId")
+                        .or_else(|| item.pointer("/attributes/playParams/catalogId"))
+                        .or_else(|| item.pointer("/relationships/catalog/data/0/id"))
+                        .and_then(|g| g.as_str());
+                    if (global_id == Some(catalog_or_lib_id) || lib_id == Some(catalog_or_lib_id))
+                        && let Some(lid) = lib_id
+                    {
+                        return Ok(lid.to_string());
+                    }
+                }
+            }
+            next_url = res.get("next").and_then(|n| n.as_str()).map(str::to_string);
+        }
+        Err(AppleApiError::NotFound(format!(
+            "Playlist {catalog_or_lib_id} is not in library"
+        )))
+    }
+
     /// Delete an existing user library playlist.
     pub async fn delete_playlist(&self, playlist: &MediaRef) -> Result<(), AppleApiError> {
-        let playlist_id = playlist.id();
+        let raw_id = playlist.id();
+        let playlist_id = self.resolve_library_playlist_id(raw_id).await?;
         let url = format!("https://amp-api.music.apple.com/v1/me/library/playlists/{playlist_id}");
         self.send_request_with_method(reqwest::Method::DELETE, &url, &[], None)
             .await?;
@@ -781,6 +892,32 @@ impl OfficialAppleMusicApi {
             }
         };
 
+        if kind == "library-playlists" {
+            let lib_path = format!("/v1/me/library/playlists/{}", reference.id());
+            let mut favorite = false;
+            if let Ok(val) = self
+                .send_request(
+                    &lib_path,
+                    &[("fields[library-playlists]", "inFavorites,isFavorite")],
+                )
+                .await
+                && let Some(data) = val.get("data").and_then(|d| d.as_array())
+                && let Some(first) = data.first()
+            {
+                favorite = first
+                    .get("attributes")
+                    .and_then(|a| a.get("inFavorites").or_else(|| a.get("isFavorite")))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+            }
+            return Ok(AccountMediaState::new(
+                original_reference.clone(),
+                true,
+                favorite,
+                Rating::Neutral,
+            ));
+        }
+
         let cat_path = format!(
             "https://amp-api.music.apple.com/v1/catalog/{{storefront}}/{kind}/{}",
             reference.id()
@@ -871,6 +1008,9 @@ impl OfficialAppleMusicApi {
             if kinds.is_empty() || kinds.contains(&SearchKindWire::Playlist) {
                 types.push("playlists");
             }
+            if kinds.is_empty() || kinds.contains(&SearchKindWire::Station) {
+                types.push("stations");
+            }
 
             let types_str = types.join(",");
             let limit_str = limit.to_string();
@@ -878,6 +1018,7 @@ impl OfficialAppleMusicApi {
                 ("term", query),
                 ("types", &types_str),
                 ("limit", &limit_str),
+                ("with", "topResults"),
             ];
 
             if let Some(offset) = cursor {
@@ -889,6 +1030,14 @@ impl OfficialAppleMusicApi {
         };
 
         let results = res.get("results").unwrap_or(&res);
+
+        let top_results = results.get("topResults").and_then(|sec| {
+            sec.get("data").and_then(|d| d.as_array()).map(|arr| {
+                arr.iter()
+                    .filter_map(crate::pages::mapper::map_apple_resource_to_item)
+                    .collect::<Vec<_>>()
+            })
+        });
 
         let tracks = results.get("songs").map(|sec| {
             let items: Vec<Track> = sec
@@ -930,12 +1079,147 @@ impl OfficialAppleMusicApi {
             PagedListWire::new(items, next)
         });
 
+        let stations = results.get("stations").map(|sec| {
+            let items: Vec<_> = sec
+                .get("data")
+                .and_then(|d| d.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(crate::pages::mapper::map_apple_resource_to_item)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let next = sec.get("next").and_then(|v| v.as_str()).map(str::to_string);
+            PagedListWire::new(items, next)
+        });
+
         Ok(SearchResultsWire {
+            top_results,
             tracks,
             albums,
             artists,
             playlists,
+            stations,
         })
+    }
+
+    /// Search the user's personal Apple Music library (`/v1/me/library/search`).
+    pub async fn search_library(
+        &self,
+        query: &str,
+        kinds: &[SearchKindWire],
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<SearchResultsWire, AppleApiError> {
+        let res = if let Some(c) = cursor
+            && (c.starts_with("/v1/") || c.starts_with("http://") || c.starts_with("https://"))
+        {
+            self.send_request(c, &[]).await?
+        } else {
+            let mut types = Vec::new();
+            if kinds.is_empty() || kinds.contains(&SearchKindWire::Track) {
+                types.push("library-songs");
+            }
+            if kinds.is_empty() || kinds.contains(&SearchKindWire::Album) {
+                types.push("library-albums");
+            }
+            if kinds.is_empty() || kinds.contains(&SearchKindWire::Artist) {
+                types.push("library-artists");
+            }
+            if kinds.is_empty() || kinds.contains(&SearchKindWire::Playlist) {
+                types.push("library-playlists");
+            }
+
+            let types_str = types.join(",");
+            let limit_str = limit.to_string();
+            let mut query_params = vec![
+                ("term", query),
+                ("types", &types_str),
+                ("limit", &limit_str),
+            ];
+
+            if let Some(offset) = cursor {
+                query_params.push(("offset", offset));
+            }
+
+            self.send_request("/v1/me/library/search", &query_params)
+                .await?
+        };
+
+        let results = res.get("results").unwrap_or(&res);
+
+        let tracks = results.get("library-songs").map(|sec| {
+            let items: Vec<Track> = sec
+                .get("data")
+                .and_then(|d| d.as_array())
+                .map(|arr| arr.iter().filter_map(parse_apple_track).collect())
+                .unwrap_or_default();
+            let next = sec.get("next").and_then(|v| v.as_str()).map(str::to_string);
+            PagedListWire::new(items, next)
+        });
+
+        let albums = results.get("library-albums").map(|sec| {
+            let items: Vec<Album> = sec
+                .get("data")
+                .and_then(|d| d.as_array())
+                .map(|arr| arr.iter().filter_map(parse_apple_album).collect())
+                .unwrap_or_default();
+            let next = sec.get("next").and_then(|v| v.as_str()).map(str::to_string);
+            PagedListWire::new(items, next)
+        });
+
+        let artists = results.get("library-artists").map(|sec| {
+            let items: Vec<Artist> = sec
+                .get("data")
+                .and_then(|d| d.as_array())
+                .map(|arr| arr.iter().filter_map(parse_apple_artist).collect())
+                .unwrap_or_default();
+            let next = sec.get("next").and_then(|v| v.as_str()).map(str::to_string);
+            PagedListWire::new(items, next)
+        });
+
+        let playlists = results.get("library-playlists").map(|sec| {
+            let items: Vec<Playlist> = sec
+                .get("data")
+                .and_then(|d| d.as_array())
+                .map(|arr| arr.iter().filter_map(parse_apple_playlist).collect())
+                .unwrap_or_default();
+            let next = sec.get("next").and_then(|v| v.as_str()).map(str::to_string);
+            PagedListWire::new(items, next)
+        });
+
+        Ok(SearchResultsWire {
+            top_results: None,
+            tracks,
+            albums,
+            artists,
+            playlists,
+            stations: None,
+        })
+    }
+
+    /// Fetch official curator details and editorial grouping for an Apple Curator.
+    pub async fn get_curator_grouping(&self, curator_id: &str) -> Result<Value, AppleApiError> {
+        let params = [
+            ("ids[apple-curators]", curator_id),
+            ("ids[curators]", curator_id),
+            ("include", "grouping,playlists"),
+            ("format[resources]", "map"),
+            ("art[url]", "f"),
+            ("extend", "editorialArtwork,seoDescription,seoTitle"),
+            ("extend[apple-curators]", "playlistCount"),
+            ("extend[curators]", "playlistCount"),
+            (
+                "fields[albums]",
+                "artistName,artistUrl,artwork,contentRating,editorialArtwork,name,playParams,releaseDate,url",
+            ),
+            ("platform", "web"),
+        ];
+        self.send_request(
+            "https://amp-api.music.apple.com/v1/catalog/{storefront}",
+            &params,
+        )
+        .await
     }
 
     /// Fetch a single catalog or library item by MediaRef.
@@ -1116,5 +1400,59 @@ impl OfficialAppleMusicApi {
                 Ok(LibraryPageWire::Playlists(PagedListWire::new(items, next)))
             }
         }
+    }
+
+    /// Fetch the user's recently played tracks from `/v1/me/recent/played/tracks`.
+    ///
+    /// If no tracks are returned (e.g. tracks history was cleared or not populated),
+    /// falls back to inspecting `/v1/me/recent/played` for recently played containers (albums/playlists).
+    pub async fn get_recently_played_tracks(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<Track>, AppleApiError> {
+        let limit_str = limit.max(1).to_string();
+        let res = self
+            .send_request("/v1/me/recent/played/tracks", &[("limit", &limit_str)])
+            .await;
+
+        if let Ok(val) = res
+            && let Some(arr) = val.get("data").and_then(|d| d.as_array())
+        {
+            let tracks: Vec<Track> = arr.iter().filter_map(parse_apple_track).collect();
+            if !tracks.is_empty() {
+                return Ok(tracks);
+            }
+        }
+
+        // Fallback to recently played containers (albums/playlists)
+        let container_res = self
+            .send_request("/v1/me/recent/played", &[("limit", "1")])
+            .await?;
+
+        if let Some(data) = container_res.get("data").and_then(|d| d.as_array())
+            && let Some(first) = data.first()
+        {
+            let typ = first.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            let id = first.get("id").and_then(|i| i.as_str()).unwrap_or("");
+            if typ == "albums" || typ == "library-albums" {
+                let mref = MediaRef::Album(id.to_string());
+                if let Ok(PagedListWire { items, .. }) =
+                    self.get_collection_items(&mref, 1, None).await
+                    && !items.is_empty()
+                {
+                    return Ok(items);
+                }
+            } else if typ == "playlists" || typ == "library-playlists" {
+                let mref = MediaRef::Playlist(id.to_string());
+                if let Ok(PagedListWire { items, .. }) =
+                    self.get_collection_items(&mref, 1, None).await
+                    && !items.is_empty()
+                {
+                    return Ok(items);
+                }
+            }
+        }
+
+        Ok(Vec::new())
     }
 }

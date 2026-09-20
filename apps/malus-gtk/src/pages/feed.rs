@@ -34,6 +34,12 @@ use crate::widgets::track_row::{TrackRow, TrackRowInit, TrackRowOutput};
 use crate::widgets::virtual_track_list::VirtualTrackList;
 
 use crate::widgets::media_shelf::ShelfSenders;
+use crate::widgets::{
+    FeaturedBannerCard, FeaturedBannerCardInit, FeaturedBannerCardOutput, LiveStationPill,
+    LiveStationPillInit, LiveStationPillOutput, MultiRowEpisodeRow, MultiRowEpisodeRowInit,
+    MultiRowEpisodeRowOutput, MultiRowTrackRow, MultiRowTrackRowInit, MultiRowTrackRowOutput,
+    StationCard, StationCardInit, StationCardOutput,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LibrarySortMethod {
@@ -53,6 +59,7 @@ pub(crate) enum MountedSection {
         spinner: SectionSpinner,
         playlist_ctx: Option<MediaRef>,
         collection_ref: Option<MediaRef>,
+        show_artwork: bool,
     },
     Grid {
         flow: gtk::FlowBox,
@@ -82,6 +89,11 @@ pub struct FeedPage {
     error_message: Option<String>,
     card_controllers: Vec<Controller<MediaCard>>,
     track_controllers: Vec<Controller<TrackRow>>,
+    station_card_controllers: Vec<Controller<StationCard>>,
+    live_station_controllers: Vec<Controller<LiveStationPill>>,
+    featured_banner_controllers: Vec<Controller<FeaturedBannerCard>>,
+    compact_track_controllers: Vec<Controller<MultiRowTrackRow>>,
+    compact_episode_controllers: Vec<Controller<MultiRowEpisodeRow>>,
     selected_artist_id: Option<String>,
     artist_detail: Option<PageWire>,
     show_artist_detail: bool,
@@ -93,6 +105,10 @@ pub struct FeedPage {
     active_artist_spinner: Option<gtk::Box>,
     virtual_track_list: Option<VirtualTrackList>,
     library_subtitle_lbl: Option<gtk::Label>,
+    artist_search_query: String,
+    selected_genre: Option<String>,
+    genre_search_query: String,
+    show_genre_detail: bool,
 }
 
 #[derive(Debug)]
@@ -101,7 +117,11 @@ pub enum FeedInput {
     LoadRoute(PageRoute),
     ChangeSort(LibrarySortMethod),
     SelectArtist(String),
+    ArtistSearchChanged(String),
     BackToArtistList,
+    SelectGenre(Option<String>),
+    GenreSearchChanged(String),
+    BackToGenreList,
     Reload,
     RetryContinuation,
 }
@@ -163,6 +183,7 @@ pub enum FeedOutput {
         track_index: usize,
         expected_track: MediaRef,
     },
+    CopyLink(String),
 }
 
 #[relm4::component(pub)]
@@ -292,6 +313,11 @@ impl Component for FeedPage {
             error_message: None,
             card_controllers: Vec::new(),
             track_controllers: Vec::new(),
+            station_card_controllers: Vec::new(),
+            live_station_controllers: Vec::new(),
+            featured_banner_controllers: Vec::new(),
+            compact_track_controllers: Vec::new(),
+            compact_episode_controllers: Vec::new(),
             selected_artist_id: None,
             artist_detail: None,
             show_artist_detail: false,
@@ -303,6 +329,10 @@ impl Component for FeedPage {
             active_artist_spinner: None,
             virtual_track_list: None,
             library_subtitle_lbl: None,
+            artist_search_query: String::new(),
+            selected_genre: None,
+            genre_search_query: String::new(),
+            show_genre_detail: false,
         };
 
         let widgets = view_output!();
@@ -385,9 +415,23 @@ impl Component for FeedPage {
                         .iter_mut()
                         .flat_map(|section| &mut section.items)
                     {
-                        if item.entity.as_ref() == Some(&state.reference) {
+                        let matches = item.id == state.reference.id()
+                            || item.entity.as_ref() == Some(&state.reference)
+                            || item.entity.as_ref().map(|e| e.id()) == Some(state.reference.id());
+                        if matches {
                             item.is_favorite = Some(state.favorite);
                             item.in_library = Some(state.in_library);
+                            for action in &mut item.actions {
+                                match action {
+                                    PageActionWire::Favorite(r) if state.favorite => {
+                                        *action = PageActionWire::Unfavorite(r.clone());
+                                    }
+                                    PageActionWire::Unfavorite(r) if !state.favorite => {
+                                        *action = PageActionWire::Favorite(r.clone());
+                                    }
+                                    _ => {}
+                                }
+                            }
                         }
                     }
                 }
@@ -425,13 +469,30 @@ impl Component for FeedPage {
                     self.show_artist_detail = true;
                 }
             }
+            FeedInput::ArtistSearchChanged(query) => {
+                self.artist_search_query = query;
+            }
             FeedInput::BackToArtistList => {
                 self.show_artist_detail = false;
+            }
+            FeedInput::SelectGenre(genre) => {
+                self.selected_genre = genre;
+                self.show_genre_detail = true;
+            }
+            FeedInput::GenreSearchChanged(query) => {
+                self.genre_search_query = query;
+            }
+            FeedInput::BackToGenreList => {
+                self.show_genre_detail = false;
             }
             FeedInput::LoadRoute(route) => {
                 if self.route != route || (self.page_data.is_none() && !self.is_loading) {
                     self.route = route;
                     self.current_sort = LibrarySortMethod::RecentlyAdded;
+                    self.artist_search_query.clear();
+                    self.genre_search_query.clear();
+                    self.selected_genre = None;
+                    self.show_genre_detail = false;
                     self.load_page(&sender);
                 }
             }
@@ -605,12 +666,16 @@ impl Component for FeedPage {
             &message,
             FeedInput::SelectArtist(_) | FeedInput::BackToArtistList
         );
+        let is_genre_nav = matches!(
+            &message,
+            FeedInput::SelectGenre(_) | FeedInput::BackToGenreList
+        );
         self.update(message, sender.clone(), root);
         self.update_view(widgets, sender.clone());
         if route_changes {
             widgets.scrolled_window.vadjustment().set_value(0.0);
         }
-        if is_sort_change || is_artist_nav {
+        if is_sort_change || is_artist_nav || is_genre_nav {
             self.render_content(widgets, sender);
         }
     }

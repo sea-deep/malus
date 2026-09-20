@@ -1253,6 +1253,7 @@ dependencies = [
  "async-trait",
  "base64",
  "directories",
+ "futures",
  "malus-ipc",
  "malus-model",
  "malus-wpe",

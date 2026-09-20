@@ -6,7 +6,7 @@
 //! - Sets `open_route` for navigational drill-down (`PageRoute`).
 //! - Normalizes artwork, durations, badges, and presentation hints.
 
-use malus_ipc::wire::{PageActionWire, PageBadgeWire, PageItemWire, PageSectionWire};
+use malus_ipc::wire::{PageActionWire, PageBadgeWire, PageItemWire};
 use malus_model::{MediaRef, PageRoute};
 use serde_json::Value;
 
@@ -26,7 +26,12 @@ pub(super) fn map_detail_actions(resource: &Value) -> Vec<PageActionWire> {
     }
     let favorite = resource
         .pointer("/attributes/isFavorite")
-        .and_then(Value::as_bool);
+        .and_then(Value::as_bool)
+        .or_else(|| {
+            resource
+                .pointer("/attributes/inFavorites")
+                .and_then(Value::as_bool)
+        });
     if favorite == Some(true) {
         for action in &mut actions {
             if let PageActionWire::Favorite(reference) = action {
@@ -35,6 +40,34 @@ pub(super) fn map_detail_actions(resource: &Value) -> Vec<PageActionWire> {
         }
     }
     actions
+}
+
+fn extract_genre_names(attrs: &Value, catalog_item: Option<&Value>) -> Vec<String> {
+    let mut genres = Vec::new();
+    let genre_source = attrs
+        .get("genreNames")
+        .and_then(|g| g.as_array())
+        .or_else(|| {
+            catalog_item
+                .and_then(|c| c.get("attributes"))
+                .and_then(|a| a.get("genreNames"))
+                .and_then(|g| g.as_array())
+        });
+    if let Some(arr) = genre_source {
+        for g in arr {
+            if let Some(s) = g.as_str() {
+                let trimmed = s.trim();
+                if !trimmed.is_empty()
+                    && !genres
+                        .iter()
+                        .any(|e: &String| e.eq_ignore_ascii_case(trimmed))
+                {
+                    genres.push(trimmed.to_string());
+                }
+            }
+        }
+    }
+    genres
 }
 
 /// Map a single Apple Music resource JSON object into a PageItemWire.
@@ -83,8 +116,16 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
                 .and_then(|r| r.as_i64())
                 .map(|r| r == 1)
                 .or_else(|| attrs.get("inFavorites").and_then(|b| b.as_bool()))
+                .or_else(|| attrs.get("isFavorite").and_then(|b| b.as_bool()))
+                .or_else(|| {
+                    catalog_item
+                        .and_then(|c| c.get("attributes"))
+                        .and_then(|a| a.get("inFavorites").or_else(|| a.get("isFavorite")))
+                        .and_then(|b| b.as_bool())
+                })
                 .unwrap_or(false);
             page_item.is_favorite = Some(is_fav);
+            page_item.genres = extract_genre_names(attrs, catalog_item);
 
             let mut actions = vec![
                 PageActionWire::Play(mref.clone()),
@@ -111,6 +152,46 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
                 let mins = dur / 60_000;
                 let secs = (dur % 60_000) / 1000;
                 page_item.metadata.push(format!("{mins}:{secs:02}"));
+            }
+
+            let artist_id = item
+                .get("relationships")
+                .and_then(|r| r.get("artists"))
+                .and_then(|a| a.get("data"))
+                .and_then(|d| d.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|art| art.get("id"))
+                .and_then(|i| i.as_str())
+                .or_else(|| {
+                    attrs
+                        .get("artistUrl")
+                        .and_then(|u| u.as_str())
+                        .and_then(|url| url.trim_end_matches('/').rsplit('/').next())
+                });
+            if let Some(art_id) = artist_id
+                && !art_id.is_empty()
+            {
+                page_item.artist_route = Some(PageRoute::Artist(art_id.to_string()));
+            }
+
+            let album_id = item
+                .get("relationships")
+                .and_then(|r| r.get("albums"))
+                .and_then(|a| a.get("data"))
+                .and_then(|d| d.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|alb| alb.get("id"))
+                .and_then(|i| i.as_str())
+                .or_else(|| {
+                    attrs.get("url").and_then(|u| u.as_str()).and_then(|url| {
+                        let path = url.split('?').next().unwrap_or(url);
+                        path.trim_end_matches('/').rsplit('/').next()
+                    })
+                });
+            if let Some(alb_id) = album_id
+                && !alb_id.is_empty()
+            {
+                page_item.album_route = Some(PageRoute::Album(alb_id.to_string()));
             }
 
             if attrs.get("contentRating").and_then(|r| r.as_str()) == Some("explicit") {
@@ -150,6 +231,20 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
                     .unwrap_or(false);
             page_item.in_library = Some(is_library);
 
+            let is_fav = attrs
+                .get("inFavorites")
+                .and_then(|b| b.as_bool())
+                .or_else(|| attrs.get("isFavorite").and_then(|b| b.as_bool()))
+                .or_else(|| {
+                    catalog_item
+                        .and_then(|c| c.get("attributes"))
+                        .and_then(|a| a.get("inFavorites").or_else(|| a.get("isFavorite")))
+                        .and_then(|b| b.as_bool())
+                })
+                .unwrap_or(false);
+            page_item.is_favorite = Some(is_fav);
+            page_item.genres = extract_genre_names(attrs, catalog_item);
+
             let mut actions = vec![
                 PageActionWire::Play(mref.clone()),
                 PageActionWire::PlayNext(mref.clone()),
@@ -158,9 +253,33 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
             if !is_library {
                 actions.push(PageActionWire::AddToLibrary(mref.clone()));
             }
-            actions.push(PageActionWire::Favorite(mref));
+            if is_fav {
+                actions.push(PageActionWire::Unfavorite(mref));
+            } else {
+                actions.push(PageActionWire::Favorite(mref));
+            }
             page_item.actions = actions;
             page_item.presentation_hint = Some("card".to_string());
+
+            let artist_id = item
+                .get("relationships")
+                .and_then(|r| r.get("artists"))
+                .and_then(|a| a.get("data"))
+                .and_then(|d| d.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|art| art.get("id"))
+                .and_then(|i| i.as_str())
+                .or_else(|| {
+                    attrs
+                        .get("artistUrl")
+                        .and_then(|u| u.as_str())
+                        .and_then(|url| url.trim_end_matches('/').rsplit('/').next())
+                });
+            if let Some(art_id) = artist_id
+                && !art_id.is_empty()
+            {
+                page_item.artist_route = Some(PageRoute::Artist(art_id.to_string()));
+            }
 
             if attrs.get("contentRating").and_then(|r| r.as_str()) == Some("explicit") {
                 page_item
@@ -206,6 +325,13 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
             page_item.open_route = Some(PageRoute::Artist(open_id.to_string()));
             page_item.presentation_hint = Some("circle-card".to_string());
 
+            let is_fav = attrs
+                .get("inFavorites")
+                .and_then(|b| b.as_bool())
+                .or_else(|| attrs.get("isFavorite").and_then(|b| b.as_bool()))
+                .unwrap_or(false);
+            page_item.is_favorite = Some(is_fav);
+
             Some(page_item)
         }
 
@@ -235,6 +361,19 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
             page_item.can_edit = attrs["canEdit"].as_bool().unwrap_or(false);
             page_item.can_delete = attrs["canDelete"].as_bool().unwrap_or(false);
 
+            let is_fav = attrs
+                .get("inFavorites")
+                .and_then(|b| b.as_bool())
+                .or_else(|| attrs.get("isFavorite").and_then(|b| b.as_bool()))
+                .or_else(|| {
+                    catalog_item
+                        .and_then(|c| c.get("attributes"))
+                        .and_then(|a| a.get("inFavorites").or_else(|| a.get("isFavorite")))
+                        .and_then(|b| b.as_bool())
+                })
+                .unwrap_or(false);
+            page_item.is_favorite = Some(is_fav);
+
             let mut actions = vec![
                 PageActionWire::Play(mref.clone()),
                 PageActionWire::PlayNext(mref.clone()),
@@ -243,7 +382,11 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
             if !is_library {
                 actions.push(PageActionWire::AddToLibrary(mref.clone()));
             }
-            actions.push(PageActionWire::Favorite(mref));
+            if is_fav {
+                actions.push(PageActionWire::Unfavorite(mref));
+            } else {
+                actions.push(PageActionWire::Favorite(mref));
+            }
             page_item.actions = actions;
             page_item.presentation_hint = Some("card".to_string());
 
@@ -256,11 +399,39 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
                 .and_then(|n| n.as_str())
                 .unwrap_or("Station");
             let mut page_item = PageItemWire::new(id, title);
-            page_item.subtitle = attrs
-                .get("stationProviderName")
-                .and_then(|p| p.as_str())
+            let subtitle = attrs
+                .get("plainEditorialNotes")
+                .and_then(|p| p.get("short").or_else(|| p.get("tagline")))
+                .and_then(|s| s.as_str())
+                .or_else(|| attrs.get("stationProviderName").and_then(|p| p.as_str()))
                 .map(str::to_string);
-            page_item.artwork = attrs.get("artwork").and_then(parse_apple_artwork);
+            page_item.subtitle = subtitle;
+            if let Some(genre) = title.strip_suffix(" Station") {
+                page_item.tertiary_text = Some(genre.to_string());
+            } else {
+                page_item.tertiary_text = Some(title.to_string());
+            }
+            let bg_color = attrs
+                .get("artwork")
+                .and_then(|a| a.get("bgColor"))
+                .and_then(|c| c.as_str())
+                .map(|hex| {
+                    if hex.starts_with('#') {
+                        hex.to_string()
+                    } else {
+                        format!("#{hex}")
+                    }
+                });
+            page_item.bg_color = bg_color;
+            page_item.artwork = attrs
+                .get("artwork")
+                .or_else(|| {
+                    attrs.get("editorialArtwork").and_then(|ea| {
+                        ea.get("subscriptionCover")
+                            .or_else(|| ea.get("subscriptionHero"))
+                    })
+                })
+                .and_then(parse_apple_artwork);
             let mref = MediaRef::Station(id.to_string());
             page_item.entity = Some(mref.clone());
             page_item.actions = vec![PageActionWire::Play(mref)];
@@ -279,6 +450,33 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
             Some(page_item)
         }
 
+        "apple-curators" | "curators" => {
+            let title = attrs.get("name").and_then(|n| n.as_str()).unwrap_or("Show");
+            let mut page_item = PageItemWire::new(id, title);
+            page_item.subtitle = attrs
+                .get("plainEditorialNotes")
+                .and_then(|p| p.get("short").or_else(|| p.get("tagline")))
+                .and_then(|s| s.as_str())
+                .map(str::to_string);
+            page_item.artwork = attrs.get("artwork").and_then(parse_apple_artwork);
+            page_item.presentation_hint = Some("card".to_string());
+            page_item.open_route = Some(PageRoute::Curator(id.to_string()));
+            let bg_color = attrs
+                .get("artwork")
+                .and_then(|a| a.get("bgColor"))
+                .and_then(|c| c.as_str())
+                .map(|hex| {
+                    if hex.starts_with('#') {
+                        hex.to_string()
+                    } else {
+                        format!("#{hex}")
+                    }
+                });
+            page_item.bg_color = bg_color;
+
+            Some(page_item)
+        }
+
         _ => None,
     }
 }
@@ -290,51 +488,6 @@ pub fn map_apple_data_to_items(resp: &Value) -> Vec<PageItemWire> {
     } else {
         Vec::new()
     }
-}
-
-/// Map Apple recommendations response (`/v1/me/recommendations`) into structured shelves.
-pub fn map_recommendations_to_sections(resp: &Value) -> Vec<PageSectionWire> {
-    let mut sections = Vec::new();
-
-    if let Some(groups) = resp.get("data").and_then(|d| d.as_array()) {
-        for group in groups {
-            let group_id = group.get("id").and_then(|i| i.as_str()).unwrap_or("group");
-            let attrs = group.get("attributes");
-            let title = attrs
-                .and_then(|a| a.get("title"))
-                .and_then(|t| t.get("stringForDisplay").or_else(|| t.get("value")))
-                .and_then(|s| s.as_str())
-                .unwrap_or("Featured");
-            let subtitle = attrs
-                .and_then(|a| a.get("reason"))
-                .and_then(|r| r.get("stringForDisplay").or_else(|| r.get("value")))
-                .and_then(|s| s.as_str())
-                .map(str::to_string);
-
-            let items = if let Some(contents) = group
-                .get("relationships")
-                .and_then(|r| r.get("contents"))
-                .and_then(|c| c.get("data"))
-                .and_then(|d| d.as_array())
-            {
-                contents
-                    .iter()
-                    .filter_map(map_apple_resource_to_item)
-                    .collect()
-            } else {
-                Vec::new()
-            };
-
-            if !items.is_empty() {
-                let mut section = PageSectionWire::new(group_id, Some(title.to_string()), items)
-                    .with_hint("shelf");
-                section.subtitle = subtitle;
-                sections.push(section);
-            }
-        }
-    }
-
-    sections
 }
 
 /// Map an Apple Music Replay period summary item into a PageItemWire.

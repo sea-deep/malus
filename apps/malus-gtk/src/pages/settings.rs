@@ -128,7 +128,7 @@ impl Component for SettingsPage {
                         #[name(translucent_row)]
                         adw::SwitchRow {
                             set_title: "Soft surfaces",
-                            set_subtitle: "Subtle translucent styling for player bar and sidebar",
+                            set_subtitle: "Bespoke translucent depth for player bar, sidebar, and chrome",
                             #[watch]
                             set_active: model.is_translucent,
                             connect_active_notify[sender] => move |row| {
@@ -148,8 +148,8 @@ impl Component for SettingsPage {
                     },
                     // Account Preferences Group
                     adw::PreferencesGroup {
-                        set_title: "Apple Music Account",
-                        set_description: Some("Manage your Apple Music sign-in"),
+                        set_title: "Account",
+                        set_description: Some("Manage your sign-in and subscription"),
 
                         adw::ActionRow {
                             set_title: "Status",
@@ -348,10 +348,10 @@ impl SettingsPage {
 
     fn auth_state_description(&self) -> String {
         if self.is_loading {
-            return "Checking Apple Music…".into();
+            return "Checking account…".into();
         }
         match self.auth_status.as_ref().map(|s| s.state) {
-            Some(AuthStateWire::Authenticated) => "Signed in to Apple Music".to_string(),
+            Some(AuthStateWire::Authenticated) => "Signed in".to_string(),
             Some(AuthStateWire::Authenticating) => "Authenticating in progress...".to_string(),
             Some(AuthStateWire::Checking) => "Checking session credentials...".to_string(),
             Some(AuthStateWire::NeedsAuth) => "Sign-in required".to_string(),

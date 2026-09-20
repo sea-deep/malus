@@ -1,4 +1,5 @@
 use super::*;
+use crate::widgets::square_artwork::SquareArtwork;
 
 impl FeedPage {
     pub(super) fn build_hero_header(
@@ -6,6 +7,106 @@ impl FeedPage {
         header: &PageHeaderWire,
         sender: ComponentSender<Self>,
     ) -> gtk::Box {
+        // Only catalog artists (not library artists, albums, or playlists) render a wide banner hero.
+        // Albums and playlists always keep their classic, proper square artwork hero.
+        let is_catalog_artist = matches!(
+            self.route,
+            PageRoute::Artist(ref id) if !id.starts_with("r.") && !id.starts_with("l.")
+        );
+        if is_catalog_artist && let Some(ref banner) = header.banner_artwork {
+            let root = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .spacing(SPACING_MD)
+                .margin_bottom(SPACING_LG)
+                .build();
+
+            let overlay = gtk::Overlay::builder()
+                .css_classes(vec!["hero-banner-container".to_string()])
+                .height_request(BANNER_HERO_HEIGHT)
+                .build();
+
+            let pic = gtk::Picture::builder()
+                .can_shrink(true)
+                .content_fit(gtk::ContentFit::Cover)
+                .height_request(BANNER_HERO_HEIGHT)
+                .css_classes(vec!["hero-banner-picture".to_string()])
+                .build();
+            bind_artwork(&pic, &self.artwork_service, Some(banner.url.clone()), 1400);
+            overlay.set_child(Some(&pic));
+
+            let scrim = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .spacing(SPACING_XS)
+                .valign(gtk::Align::End)
+                .hexpand(true)
+                .css_classes(vec!["hero-banner-scrim".to_string()])
+                .build();
+
+            let title_label = gtk::Label::builder()
+                .label(&header.title)
+                .xalign(0.0)
+                .wrap(true)
+                .wrap_mode(gtk::pango::WrapMode::WordChar)
+                .css_classes(vec!["hero-banner-title".to_string()])
+                .build();
+            scrim.append(&title_label);
+
+            if let Some(ref sub) = header.subtitle {
+                let sub_label = gtk::Label::builder()
+                    .label(sub)
+                    .xalign(0.0)
+                    .wrap(true)
+                    .wrap_mode(gtk::pango::WrapMode::WordChar)
+                    .css_classes(vec!["hero-banner-metadata".to_string()])
+                    .build();
+                if let Some(ref route) = header.subtitle_route {
+                    sub_label.add_css_class("metadata-link");
+                    sub_label.set_cursor_from_name(Some("pointer"));
+                    let s = sender.clone();
+                    let rt = route.clone();
+                    let g = gtk::GestureClick::new();
+                    g.connect_released(move |g, n, _, _| {
+                        if n == 1 {
+                            g.set_state(gtk::EventSequenceState::Claimed);
+                            let _ = s.output(FeedOutput::Navigate(rt.clone()));
+                        }
+                    });
+                    sub_label.add_controller(g);
+                }
+                scrim.append(&sub_label);
+            }
+
+            if !header.metadata.is_empty() {
+                let meta_str = header
+                    .metadata
+                    .iter()
+                    .filter(|value| !value.starts_with("catalog_id:"))
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" • ");
+                if !meta_str.is_empty() {
+                    let meta_label = gtk::Label::builder()
+                        .label(&meta_str)
+                        .xalign(0.0)
+                        .wrap(true)
+                        .css_classes(vec!["hero-banner-metadata".to_string()])
+                        .build();
+                    scrim.append(&meta_label);
+                }
+            }
+
+            overlay.add_overlay(&scrim);
+            root.append(&overlay);
+
+            let actions_host = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            actions_host.append(&self.build_header_actions(header, sender));
+            root.append(&actions_host);
+            self.header_actions_host = Some(actions_host);
+
+            return root;
+        }
+
+        let is_artist = matches!(self.route, PageRoute::Artist(_));
         let root = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(28)
@@ -18,6 +119,9 @@ impl FeedPage {
                 ARTWORK_HERO_SIZE,
                 "hero-artwork",
             );
+            if is_artist {
+                art.add_css_class("card-artwork-circular");
+            }
             bind_artwork(
                 art.picture(),
                 &self.artwork_service,
@@ -56,6 +160,20 @@ impl FeedPage {
                 .wrap_mode(gtk::pango::WrapMode::WordChar)
                 .css_classes(vec!["hero-subtitle".to_string()])
                 .build();
+            if let Some(ref route) = header.subtitle_route {
+                sub_label.add_css_class("metadata-link");
+                sub_label.set_cursor_from_name(Some("pointer"));
+                let s = sender.clone();
+                let rt = route.clone();
+                let g = gtk::GestureClick::new();
+                g.connect_released(move |g, n, _, _| {
+                    if n == 1 {
+                        g.set_state(gtk::EventSequenceState::Claimed);
+                        let _ = s.output(FeedOutput::Navigate(rt.clone()));
+                    }
+                });
+                sub_label.add_controller(g);
+            }
             details.append(&sub_label);
         }
 
@@ -131,6 +249,7 @@ impl FeedPage {
                         let button = page_action_button(label, icon);
                         button.add_css_class(if shuffle { "flat" } else { "suggested-action" });
                         button.add_css_class("hero-play-btn");
+                        button.set_focus_on_click(false);
                         let reference = reference.clone();
                         let sender = sender.clone();
                         button.connect_clicked(move |_| {
@@ -155,6 +274,7 @@ impl FeedPage {
                     button.update_property(&[gtk::accessible::Property::Label(label)]);
                     button.add_css_class("flat");
                     button.add_css_class("hero-action-btn");
+                    button.set_focus_on_click(false);
                     if matches!(action, PageActionWire::Unfavorite(_)) {
                         button.add_css_class("favorite-active");
                     }
@@ -180,6 +300,7 @@ impl FeedPage {
             button.set_tooltip_text(Some("More actions"));
             button.add_css_class("flat");
             button.add_css_class("hero-action-btn");
+            button.set_focus_on_click(false);
             let s = sender.clone();
             let popover = crate::widgets::actions_menu::build_action_popover_with_actions(
                 reference,
@@ -193,10 +314,32 @@ impl FeedPage {
                     .any(|a| matches!(a, PageActionWire::AddToLibrary(_))),
                 false,
                 &header.actions,
-                move |command| {
-                    if let crate::widgets::actions_menu::ActionMenuCommand::Action(action) = command
-                    {
+                move |command| match command {
+                    crate::widgets::actions_menu::ActionMenuCommand::Action(action) => {
                         let _ = s.output(FeedOutput::Action(action));
+                    }
+                    crate::widgets::actions_menu::ActionMenuCommand::ViewCredits(reference) => {
+                        let _ = s.output(FeedOutput::ViewCredits(reference));
+                    }
+                    crate::widgets::actions_menu::ActionMenuCommand::AddToPlaylist(reference) => {
+                        let _ = s.output(FeedOutput::ShowAddToPlaylist(reference));
+                    }
+                    crate::widgets::actions_menu::ActionMenuCommand::RemoveFromPlaylist {
+                        playlist,
+                        track_index,
+                        expected_track,
+                    } => {
+                        let _ = s.output(FeedOutput::RemoveTrackFromPlaylist {
+                            playlist,
+                            track_index,
+                            expected_track,
+                        });
+                    }
+                    crate::widgets::actions_menu::ActionMenuCommand::Navigate(route) => {
+                        let _ = s.output(FeedOutput::Navigate(route));
+                    }
+                    crate::widgets::actions_menu::ActionMenuCommand::CopyLink(url) => {
+                        let _ = s.output(FeedOutput::CopyLink(url));
                     }
                 },
             );
@@ -209,6 +352,7 @@ impl FeedPage {
                 .icon_name("document-edit-symbolic")
                 .css_classes(vec!["flat".to_string(), "hero-action-btn".to_string()])
                 .tooltip_text("Edit Playlist")
+                .focus_on_click(false)
                 .build();
             let s = sender.clone();
             let pl_ref = match self.route {
@@ -232,6 +376,7 @@ impl FeedPage {
                 .icon_name("user-trash-symbolic")
                 .css_classes(vec!["flat".to_string(), "hero-action-btn".to_string()])
                 .tooltip_text("Delete Playlist")
+                .focus_on_click(false)
                 .build();
             let s = sender.clone();
             let pl_ref = match self.route {
@@ -311,11 +456,19 @@ impl FeedPage {
             }
         }
 
+        if section.id == "view:latest-release" && items.len() == 1 {
+            let item = &items[0];
+            let card = self.build_latest_release_card(item, sender);
+            root.append(&card);
+            return root;
+        }
+
         match section.presentation_hint.as_deref().unwrap_or("shelf") {
             "track-list" => {
                 let track_list = gtk::Box::builder()
                     .orientation(gtk::Orientation::Vertical)
                     .spacing(2)
+                    .valign(gtk::Align::Start)
                     .build();
 
                 let playlist_ctx = match (
@@ -335,6 +488,8 @@ impl FeedPage {
                     _ => None,
                 };
 
+                let show_artwork = !matches!(self.route, PageRoute::Album(_));
+
                 for (idx, item) in items.iter().enumerate() {
                     let track = self.item_to_track(item);
                     let coll_clone = collection_ref.clone();
@@ -342,12 +497,14 @@ impl FeedPage {
                         .launch(TrackRowInit {
                             track,
                             index: Some(idx),
-                            show_artwork: false,
+                            show_artwork,
                             is_favorite: item.is_favorite(),
                             in_library: item.in_library(),
                             actions: item.actions.clone(),
                             artwork_service: self.artwork_service.clone(),
                             playlist_context: playlist_ctx.as_ref().map(|p| (p.clone(), idx)),
+                            album_route: item.album_route.clone(),
+                            artist_route: item.artist_route.clone(),
                         })
                         .forward(sender.output_sender(), move |out| match out {
                             TrackRowOutput::Play(r) => FeedOutput::PlayTrack {
@@ -367,6 +524,8 @@ impl FeedPage {
                                 track_index,
                                 expected_track,
                             },
+                            TrackRowOutput::Navigate(r) => FeedOutput::Navigate(r),
+                            TrackRowOutput::CopyLink(u) => FeedOutput::CopyLink(u),
                         });
                     track_list.append(row.widget());
                     self.track_controllers.push(row);
@@ -387,6 +546,7 @@ impl FeedPage {
                         spinner: std::rc::Rc::new(std::cell::RefCell::new(spinner)),
                         playlist_ctx,
                         collection_ref,
+                        show_artwork,
                     },
                 );
                 root.append(&track_list);
@@ -415,6 +575,7 @@ impl FeedPage {
                             id: item.id.clone(),
                             title: item.title.clone(),
                             subtitle: item.subtitle.clone(),
+                            subtitle_route: item.artist_route.clone(),
                             overline: item.tertiary_text.clone(),
                             artwork_url: item.artwork.as_ref().map(|a| a.url.clone()),
                             entity: item.entity.clone(),
@@ -427,6 +588,7 @@ impl FeedPage {
                         .forward(sender.output_sender(), |out| match out {
                             MediaCardOutput::Navigate(r) => FeedOutput::Navigate(r),
                             MediaCardOutput::Play(r) => FeedOutput::Play(r),
+                            MediaCardOutput::CopyLink(u) => FeedOutput::CopyLink(u),
                         });
                     flow.append(card.widget());
                     if !eager {
@@ -472,6 +634,7 @@ impl FeedPage {
                             id: item.id.clone(),
                             title: item.title.clone(),
                             subtitle: item.subtitle.clone(),
+                            subtitle_route: item.artist_route.clone(),
                             overline: item.tertiary_text.clone(),
                             artwork_url: item.artwork.as_ref().map(|a| a.url.clone()),
                             entity: item.entity.clone(),
@@ -484,6 +647,7 @@ impl FeedPage {
                         .forward(sender.output_sender(), |out| match out {
                             MediaCardOutput::Navigate(r) => FeedOutput::Navigate(r),
                             MediaCardOutput::Play(r) => FeedOutput::Play(r),
+                            MediaCardOutput::CopyLink(u) => FeedOutput::CopyLink(u),
                         });
                     shelf_box.append(card.widget());
                     if !eager {
@@ -519,29 +683,243 @@ impl FeedPage {
                         .push((root.clone().upcast(), vert_senders));
                 }
             }
+            "live-stations-shelf" => {
+                let (scrolled, shelf_box) = create_shelf_container();
+                for item in items.iter() {
+                    let pill = LiveStationPill::builder()
+                        .launch(LiveStationPillInit {
+                            id: item.id.clone(),
+                            title: item.title.clone(),
+                            artwork_url: item.artwork.as_ref().map(|a| a.url.clone()),
+                            entity: item.entity.clone(),
+                            artwork_service: self.artwork_service.clone(),
+                        })
+                        .forward(sender.output_sender(), |out| match out {
+                            LiveStationPillOutput::Play(r) => FeedOutput::Play(r),
+                        });
+                    shelf_box.append(pill.widget());
+                    self.live_station_controllers.push(pill);
+                }
+                root.append(&scrolled);
+            }
+            "gradient-stations-shelf" => {
+                let (scrolled, shelf_box) = create_shelf_container();
+                for item in items.iter() {
+                    let genre_label = item.tertiary_text.clone().unwrap_or_else(|| {
+                        item.title
+                            .strip_suffix(" Station")
+                            .unwrap_or(&item.title)
+                            .to_string()
+                    });
+                    let card = StationCard::builder()
+                        .launch(StationCardInit {
+                            id: item.id.clone(),
+                            title: item.title.clone(),
+                            genre_label,
+                            subtitle: item.subtitle.clone(),
+                            bg_color: item.bg_color.clone(),
+                            entity: item.entity.clone(),
+                        })
+                        .forward(sender.output_sender(), |out| match out {
+                            StationCardOutput::Play(r) => FeedOutput::Play(r),
+                            StationCardOutput::Navigate(r) => FeedOutput::Navigate(r),
+                        });
+                    shelf_box.append(card.widget());
+                    self.station_card_controllers.push(card);
+                }
+                root.append(&scrolled);
+            }
+            "featured-banner-shelf" => {
+                let (scrolled, shelf_box) = create_shelf_container();
+                for (idx, item) in items.iter().enumerate() {
+                    let eager = idx < 4;
+                    let card = FeaturedBannerCard::builder()
+                        .launch(FeaturedBannerCardInit {
+                            id: item.id.clone(),
+                            title: item.title.clone(),
+                            subtitle: item.subtitle.clone(),
+                            eyebrow: item.tertiary_text.clone(),
+                            artwork_url: item.artwork.as_ref().map(|a| a.url.clone()),
+                            entity: item.entity.clone(),
+                            open_route: item.open_route.clone(),
+                            artwork_service: self.artwork_service.clone(),
+                            eager,
+                        })
+                        .forward(sender.output_sender(), |out| match out {
+                            FeaturedBannerCardOutput::Navigate(r) => FeedOutput::Navigate(r),
+                            FeaturedBannerCardOutput::Play(r) => FeedOutput::Play(r),
+                        });
+                    shelf_box.append(card.widget());
+                    self.featured_banner_controllers.push(card);
+                }
+                root.append(&scrolled);
+            }
+            "multi-row-track-shelf" => {
+                let (scrolled, shelf_box) = create_shelf_container();
+                let rows_per_col = 4;
+                for chunk in items.chunks(rows_per_col) {
+                    let col = gtk::Box::builder()
+                        .orientation(gtk::Orientation::Vertical)
+                        .spacing(SPACING_XXS)
+                        .css_classes(vec!["multirow-column".to_string()])
+                        .build();
+
+                    for item in chunk {
+                        let is_explicit = item
+                            .badges
+                            .iter()
+                            .any(|b| b.label == "Explicit" || b.label == "E");
+                        let row = MultiRowTrackRow::builder()
+                            .launch(MultiRowTrackRowInit {
+                                id: item.id.clone(),
+                                title: item.title.clone(),
+                                artist: item.subtitle.clone(),
+                                artwork_url: item.artwork.as_ref().map(|a| a.url.clone()),
+                                entity: item.entity.clone(),
+                                is_explicit,
+                                is_favorite: item.is_favorite(),
+                                in_library: item.in_library(),
+                                actions: item.actions.clone(),
+                                artwork_service: self.artwork_service.clone(),
+                                album_route: item.album_route.clone(),
+                                artist_route: item.artist_route.clone(),
+                            })
+                            .forward(sender.output_sender(), |out| match out {
+                                MultiRowTrackRowOutput::Play(r) => FeedOutput::Play(r),
+                                MultiRowTrackRowOutput::Action(a) => FeedOutput::Action(a),
+                                MultiRowTrackRowOutput::Navigate(r) => FeedOutput::Navigate(r),
+                                MultiRowTrackRowOutput::CopyLink(u) => FeedOutput::CopyLink(u),
+                            });
+                        col.append(row.widget());
+                        self.compact_track_controllers.push(row);
+                    }
+                    shelf_box.append(&col);
+                }
+                root.append(&scrolled);
+            }
+            "multi-row-episode-shelf" => {
+                let (scrolled, shelf_box) = create_shelf_container();
+                let rows_per_col = 3;
+                for chunk in items.chunks(rows_per_col) {
+                    let col = gtk::Box::builder()
+                        .orientation(gtk::Orientation::Vertical)
+                        .spacing(SPACING_XXS)
+                        .css_classes(vec!["multirow-column".to_string()])
+                        .build();
+
+                    for item in chunk {
+                        let row = MultiRowEpisodeRow::builder()
+                            .launch(MultiRowEpisodeRowInit {
+                                id: item.id.clone(),
+                                title: item.title.clone(),
+                                subtitle: item.subtitle.clone(),
+                                artwork_url: item.artwork.as_ref().map(|a| a.url.clone()),
+                                entity: item.entity.clone(),
+                                artwork_service: self.artwork_service.clone(),
+                            })
+                            .forward(sender.output_sender(), |out| match out {
+                                MultiRowEpisodeRowOutput::Play(r) => FeedOutput::Play(r),
+                            });
+                        col.append(row.widget());
+                        self.compact_episode_controllers.push(row);
+                    }
+                    shelf_box.append(&col);
+                }
+                root.append(&scrolled);
+            }
+            "explore-pills" => {
+                let (scrolled, shelf_box) = create_shelf_container();
+                shelf_box.add_css_class("explore-pills-container");
+                for item in items.iter() {
+                    let btn = gtk::Button::builder()
+                        .label(&item.title)
+                        .css_classes(vec!["flat".to_string(), "explore-pill-btn".to_string()])
+                        .focus_on_click(false)
+                        .build();
+                    btn.set_cursor_from_name(Some("pointer"));
+                    let s = sender.clone();
+                    btn.connect_clicked(move |_| {
+                        let _ = s.output(FeedOutput::Navigate(PageRoute::New));
+                    });
+                    shelf_box.append(&btn);
+                }
+                root.append(&scrolled);
+            }
             _ => {
+                // If section consists of songs and has at least 4 items, render as multi-row track shelf
+                let all_songs = items
+                    .iter()
+                    .all(|it| matches!(it.entity, Some(MediaRef::Song(_))));
+                if all_songs && items.len() >= 4 {
+                    let (scrolled, shelf_box) = create_shelf_container();
+                    let rows_per_col = 4;
+                    for chunk in items.chunks(rows_per_col) {
+                        let col = gtk::Box::builder()
+                            .orientation(gtk::Orientation::Vertical)
+                            .spacing(SPACING_XXS)
+                            .css_classes(vec!["multirow-column".to_string()])
+                            .build();
+
+                        for item in chunk {
+                            let is_explicit = item
+                                .badges
+                                .iter()
+                                .any(|b| b.label == "Explicit" || b.label == "E");
+                            let row = MultiRowTrackRow::builder()
+                                .launch(MultiRowTrackRowInit {
+                                    id: item.id.clone(),
+                                    title: item.title.clone(),
+                                    artist: item.subtitle.clone(),
+                                    artwork_url: item.artwork.as_ref().map(|a| a.url.clone()),
+                                    entity: item.entity.clone(),
+                                    is_explicit,
+                                    is_favorite: item.is_favorite(),
+                                    in_library: item.in_library(),
+                                    actions: item.actions.clone(),
+                                    artwork_service: self.artwork_service.clone(),
+                                    album_route: item.album_route.clone(),
+                                    artist_route: item.artist_route.clone(),
+                                })
+                                .forward(sender.output_sender(), |out| match out {
+                                    MultiRowTrackRowOutput::Play(r) => FeedOutput::Play(r),
+                                    MultiRowTrackRowOutput::Action(a) => FeedOutput::Action(a),
+                                    MultiRowTrackRowOutput::Navigate(r) => FeedOutput::Navigate(r),
+                                    MultiRowTrackRowOutput::CopyLink(u) => FeedOutput::CopyLink(u),
+                                });
+                            col.append(row.widget());
+                            self.compact_track_controllers.push(row);
+                        }
+                        shelf_box.append(&col);
+                    }
+                    root.append(&scrolled);
+                    return root;
+                }
                 // Shelf (horizontal scroll)
                 let (scrolled, shelf_box) = create_shelf_container();
                 let mut shelf_senders = Vec::new();
                 let mut vert_senders = Vec::new();
-                let is_artist = items
-                    .first()
-                    .and_then(|i| i.open_route.as_ref())
-                    .map(|r| matches!(r, PageRoute::Artist(_)))
-                    .unwrap_or(false);
+                let is_artist = section.presentation_hint.as_deref() == Some("artist-shelf")
+                    || items
+                        .first()
+                        .and_then(|i| i.open_route.as_ref())
+                        .map(|r| matches!(r, PageRoute::Artist(_)))
+                        .unwrap_or(false);
 
                 for (idx, item) in items.iter().enumerate() {
-                    let card_is_artist = item
-                        .open_route
-                        .as_ref()
-                        .map(|r| matches!(r, PageRoute::Artist(_)))
-                        .unwrap_or(is_artist);
+                    let card_is_artist = section.presentation_hint.as_deref()
+                        == Some("artist-shelf")
+                        || item
+                            .open_route
+                            .as_ref()
+                            .map(|r| matches!(r, PageRoute::Artist(_)))
+                            .unwrap_or(is_artist);
                     let eager = section_index < 3 && idx < 6;
                     let card = MediaCard::builder()
                         .launch(MediaCardInit {
                             id: item.id.clone(),
                             title: item.title.clone(),
                             subtitle: item.subtitle.clone(),
+                            subtitle_route: item.artist_route.clone(),
                             overline: item.tertiary_text.clone(),
                             artwork_url: item.artwork.as_ref().map(|a| a.url.clone()),
                             entity: item.entity.clone(),
@@ -554,6 +932,7 @@ impl FeedPage {
                         .forward(sender.output_sender(), |out| match out {
                             MediaCardOutput::Navigate(r) => FeedOutput::Navigate(r),
                             MediaCardOutput::Play(r) => FeedOutput::Play(r),
+                            MediaCardOutput::CopyLink(u) => FeedOutput::CopyLink(u),
                         });
                     shelf_box.append(card.widget());
                     if !eager {
@@ -590,10 +969,122 @@ impl FeedPage {
 
         root
     }
+
+    fn build_latest_release_card(
+        &self,
+        item: &PageItemWire,
+        sender: ComponentSender<Self>,
+    ) -> gtk::Box {
+        let card = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(SPACING_MD)
+            .css_classes(vec!["latest-release-card".to_string()])
+            .build();
+        card.set_cursor_from_name(Some("pointer"));
+
+        let pic = SquareArtwork::new(ARTWORK_LATEST_RELEASE_SIZE, "card-artwork");
+        bind_artwork(
+            pic.picture(),
+            &self.artwork_service,
+            item.artwork.as_ref().map(|a| a.url.clone()),
+            (ARTWORK_LATEST_RELEASE_SIZE * 2) as u32,
+        );
+        card.append(&pic);
+
+        let details = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(SPACING_XXS)
+            .valign(gtk::Align::Center)
+            .hexpand(true)
+            .build();
+
+        if let Some(ref overline) = item.tertiary_text {
+            let overline_lbl = gtk::Label::builder()
+                .label(overline)
+                .xalign(0.0)
+                .css_classes(vec!["card-overline".to_string()])
+                .build();
+            details.append(&overline_lbl);
+        }
+
+        let title_lbl = gtk::Label::builder()
+            .label(&item.title)
+            .xalign(0.0)
+            .wrap(true)
+            .wrap_mode(gtk::pango::WrapMode::WordChar)
+            .css_classes(vec!["latest-release-title".to_string()])
+            .build();
+        details.append(&title_lbl);
+
+        if let Some(ref sub) = item.subtitle {
+            let sub_lbl = gtk::Label::builder()
+                .label(sub)
+                .xalign(0.0)
+                .wrap(true)
+                .wrap_mode(gtk::pango::WrapMode::WordChar)
+                .css_classes(vec!["latest-release-subtitle".to_string()])
+                .build();
+            if let Some(ref route) = item.artist_route {
+                sub_lbl.add_css_class("metadata-link");
+                sub_lbl.set_cursor_from_name(Some("pointer"));
+                let s = sender.clone();
+                let rt = route.clone();
+                let g = gtk::GestureClick::new();
+                g.connect_released(move |g, n, _, _| {
+                    if n == 1 {
+                        g.set_state(gtk::EventSequenceState::Claimed);
+                        let _ = s.output(FeedOutput::Navigate(rt.clone()));
+                    }
+                });
+                sub_lbl.add_controller(g);
+            }
+            details.append(&sub_lbl);
+        }
+
+        if !item.metadata.is_empty() {
+            let meta_lbl = gtk::Label::builder()
+                .label(item.metadata.join(" • "))
+                .xalign(0.0)
+                .css_classes(vec!["latest-release-metadata".to_string()])
+                .build();
+            details.append(&meta_lbl);
+        }
+
+        card.append(&details);
+
+        if let Some(ref entity) = item.entity {
+            let play_btn = gtk::Button::from_icon_name(ICON_PLAY);
+            play_btn.set_tooltip_text(Some("Play"));
+            play_btn.add_css_class("suggested-action");
+            play_btn.add_css_class("circular");
+            play_btn.set_focus_on_click(false);
+            play_btn.set_valign(gtk::Align::Center);
+            play_btn.set_halign(gtk::Align::End);
+            let ent = entity.clone();
+            let s_play = sender.clone();
+            play_btn.connect_clicked(move |_| {
+                let _ = s_play.output(FeedOutput::Play(ent.clone()));
+            });
+            card.append(&play_btn);
+        }
+
+        if let Some(ref open_route) = item.open_route {
+            let r = open_route.clone();
+            let s = sender;
+            let gesture = gtk::GestureClick::new();
+            gesture.connect_released(move |_, _, _, _| {
+                let _ = s.output(FeedOutput::Navigate(r.clone()));
+            });
+            card.add_controller(gesture);
+        }
+
+        card
+    }
 }
 
 fn page_action_button(label: &str, icon: &str) -> gtk::Button {
     let button = gtk::Button::new();
+    button.set_focus_on_click(false);
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     content.set_halign(gtk::Align::Center);
     content.append(&gtk::Image::from_icon_name(icon));

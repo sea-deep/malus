@@ -370,11 +370,17 @@ impl WpeBackend {
         }
 
         // Production audio-only memory optimizations:
-        // Run JavaScriptCore in pure interpreter (LLInt) mode to eliminate JIT code buffer allocations.
-        // MusicKit JS executes only lightweight I/O, token validation, and chunk buffering.
-        cmd.env("JSC_useJIT", "false");
-        // Bound JavaScriptCore large heap baseline to 16MB to reduce initial heap retention.
-        cmd.env("JSC_largeHeapSize", "16777216");
+        // Configurable JIT mode: allow MALUS_JSC_JIT override or default to low-memory LLInt mode
+        let use_jit = std::env::var("MALUS_JSC_JIT")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        cmd.env("JSC_useJIT", if use_jit { "true" } else { "false" });
+
+        // Bound JavaScriptCore large heap baseline to 32MB (configurable via MALUS_JSC_HEAP_SIZE)
+        // to provide adequate headroom for MSE audio buffers and prevent synchronous GC sweeps from stalling playback.
+        let heap_size = std::env::var("MALUS_JSC_HEAP_SIZE").unwrap_or_else(|_| "33554432".into());
+        cmd.env("JSC_largeHeapSize", heap_size);
+
         // Eliminate Mesa llvmpipe worker threads in headless audio-only runtime.
         cmd.env("LP_NUM_THREADS", "0");
         // Limit glibc multi-arena sprawl in WPE worker threads to reduce private dirty fragmentation.
@@ -434,7 +440,7 @@ impl WpeBackend {
             tokio::spawn(async move {
                 let mut reader = BufReader::new(err_pipe).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
-                    tracing::warn!(target: "wpe_stderr", "[malus-wpe-host] {}", line);
+                    tracing::debug!(target: "wpe_stderr", "[malus-wpe-host] {}", line);
                     let mut guard = captured_for_task.lock().unwrap();
                     if guard.len() < 50 {
                         guard.push(line);
@@ -545,6 +551,8 @@ impl WpeBackend {
                                     }
                                 }
                             }
+                        } else {
+                            tracing::info!(target: "wpe_stdout", "[malus-wpe-host] {}", trimmed);
                         }
                     }
                     Err(e) => {

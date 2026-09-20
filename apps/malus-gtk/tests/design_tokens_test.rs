@@ -31,6 +31,11 @@ fn test_base_grid_alignment() {
         0,
         "Page padding must be an 8px multiple"
     );
+    assert_eq!(
+        BREAKPOINT_COLLAPSE_NAVIGATION as i32 % 4,
+        0,
+        "Navigation collapse breakpoint must be a 4px multiple"
+    );
 }
 
 #[test]

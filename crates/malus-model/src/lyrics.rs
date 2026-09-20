@@ -33,6 +33,9 @@ pub struct LyricLine {
     pub end_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub syllables: Option<Vec<LyricSyllable>>,
+    /// Singer/agent identifier from TTML `ttm:agent` (e.g. "v1", "v2").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 impl LyricLine {
@@ -42,6 +45,7 @@ impl LyricLine {
             start_ms: None,
             end_ms: None,
             syllables: None,
+            agent: None,
         }
     }
 

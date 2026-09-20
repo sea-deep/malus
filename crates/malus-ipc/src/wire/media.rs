@@ -47,6 +47,7 @@ pub enum SearchKindWire {
     Album,
     Artist,
     Playlist,
+    Station,
 }
 
 impl fmt::Display for SearchKindWire {
@@ -56,6 +57,25 @@ impl fmt::Display for SearchKindWire {
             Self::Album => write!(f, "album"),
             Self::Artist => write!(f, "artist"),
             Self::Playlist => write!(f, "playlist"),
+            Self::Station => write!(f, "station"),
+        }
+    }
+}
+
+/// Search scope: Apple Music catalog vs Personal Library.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchScopeWire {
+    #[default]
+    Catalog,
+    Library,
+}
+
+impl fmt::Display for SearchScopeWire {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Catalog => write!(f, "catalog"),
+            Self::Library => write!(f, "library"),
         }
     }
 }
@@ -64,6 +84,8 @@ impl fmt::Display for SearchKindWire {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchResultsWire {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_results: Option<Vec<super::page::PageItemWire>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracks: Option<PagedListWire<Track>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub albums: Option<PagedListWire<Album>>,
@@ -71,14 +93,21 @@ pub struct SearchResultsWire {
     pub artists: Option<PagedListWire<Artist>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub playlists: Option<PagedListWire<Playlist>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stations: Option<PagedListWire<super::page::PageItemWire>>,
 }
 
 impl SearchResultsWire {
     pub fn is_empty(&self) -> bool {
-        self.tracks
+        self.top_results
             .as_ref()
-            .map(|p| p.items.is_empty())
+            .map(|t| t.is_empty())
             .unwrap_or(true)
+            && self
+                .tracks
+                .as_ref()
+                .map(|p| p.items.is_empty())
+                .unwrap_or(true)
             && self
                 .albums
                 .as_ref()
@@ -91,6 +120,11 @@ impl SearchResultsWire {
                 .unwrap_or(true)
             && self
                 .playlists
+                .as_ref()
+                .map(|p| p.items.is_empty())
+                .unwrap_or(true)
+            && self
+                .stations
                 .as_ref()
                 .map(|p| p.items.is_empty())
                 .unwrap_or(true)
@@ -208,6 +242,7 @@ mod tests {
             )),
             artists: None,
             playlists: None,
+            ..Default::default()
         };
 
         let json = serde_json::to_string(&results).unwrap();

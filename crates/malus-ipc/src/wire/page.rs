@@ -114,7 +114,13 @@ pub struct PageHeaderWire {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtitle: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle_route: Option<PageRoute>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artwork: Option<Artwork>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub banner_artwork: Option<Artwork>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub metadata: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -132,7 +138,10 @@ impl PageHeaderWire {
         Self {
             title: title.into(),
             subtitle: None,
+            subtitle_route: None,
             artwork: None,
+            banner_artwork: None,
+            description: None,
             metadata: Vec::new(),
             badges: Vec::new(),
             actions: Vec::new(),
@@ -190,8 +199,14 @@ pub struct PageItemWire {
     pub entity: Option<MediaRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_route: Option<PageRoute>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist_route: Option<PageRoute>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub album_route: Option<PageRoute>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub metadata: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub genres: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub badges: Vec<PageBadgeWire>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -204,6 +219,8 @@ pub struct PageItemWire {
     pub is_favorite: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_library: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bg_color: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub can_edit: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -220,13 +237,17 @@ impl PageItemWire {
             artwork: None,
             entity: None,
             open_route: None,
+            artist_route: None,
+            album_route: None,
             metadata: Vec::new(),
+            genres: Vec::new(),
             badges: Vec::new(),
             actions: Vec::new(),
             presentation_hint: None,
             duration_ms: None,
             is_favorite: None,
             in_library: None,
+            bg_color: None,
             can_edit: false,
             can_delete: false,
         }

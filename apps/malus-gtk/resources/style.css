@@ -3,6 +3,9 @@
  * Inspired by Apple Music Tahoe & Native GTK4 / Libadwaita
  * ================================================================ */
 
+@define-color slider_bg_color #ffffff;
+@define-color slider_border_color alpha(currentColor, 0.15);
+
 /* --- Base Window Surface --- */
 window.malus-window {
     background-color: @window_bg_color;
@@ -38,32 +41,81 @@ window.malus-window {
 .player-play-btn:hover { background-color: shade(@accent_bg_color, 1.12); }
 .player-favorite-btn { min-width: 30px; min-height: 30px; padding: 5px; color: alpha(currentColor, 0.55); border-radius: 8px; }
 .player-favorite-btn:hover { background-color: alpha(currentColor, 0.06); color: currentColor; }
-.favorite-active { color: @accent_color; }
-.utility-active { background-color: alpha(currentColor, 0.12); color: currentColor; }
+/* Universal active & inactive toggle button states (matching favorite standard) */
+.control-active,
+.favorite-active,
+.utility-active {
+    color: @accent_color;
+    background: transparent;
+    background-color: transparent;
+}
+.control-inactive {
+    color: alpha(currentColor, 0.65);
+    background: transparent;
+    background-color: transparent;
+}
+.player-bar .control-active,
+.player-bar .favorite-active,
+.player-bar .utility-active {
+    color: @accent_color;
+    background: transparent;
+    background-color: transparent;
+}
+.player-bar .control-inactive {
+    color: alpha(currentColor, 0.65);
+    background: transparent;
+    background-color: transparent;
+}
 .seek-time-label { font-size: 11px; font-variant-numeric: tabular-nums; color: alpha(currentColor, 0.55); }
-scale.seek-bar { padding: 6px 0; min-height: 14px; }
-scale.volume-slider { padding: 6px 0; min-height: 14px; min-width: 60px; color: @window_fg_color; }
-scale.seek-bar trough, scale.volume-slider trough {
-    min-height: 4px; border-radius: 9999px; background-color: alpha(@window_fg_color, 0.14); box-shadow: none; border: none;
+/* ── Interactive Custom Sliders (DrawingArea) ──────────────────────────────
+   The widget draws its own trough, fill, and knob via Cairo.
+   Only `color` is needed — fill is painted with this colour at 100 % alpha,
+   trough at 14 % alpha, knob always white handle. No internal CSS nodes exist. */
+.interactive-slider {
+    min-height: 20px;
 }
-scale.seek-bar highlight {
-    min-height: 4px; border-radius: 9999px; background-color: @accent_color; box-shadow: none; border: none;
+.interactive-slider.seek-bar,
+drawingarea.seek-bar {
+    color: @accent_color;
 }
-.now-playing scale.seek-bar highlight {
-    background-color: alpha(white, 0.85);
+.interactive-slider.volume-slider,
+drawingarea.volume-slider {
+    color: alpha(@window_fg_color, 0.75);
 }
-scale.volume-slider highlight {
-    min-height: 4px; border-radius: 9999px; background-color: alpha(@window_fg_color, 0.75); color: @window_fg_color; box-shadow: none; border: none;
-}
-.now-playing scale.volume-slider highlight {
-    background-color: alpha(white, 0.75);
+.now-playing .interactive-slider.seek-bar,
+.now-playing drawingarea.seek-bar {
     color: white;
 }
-scale.seek-bar slider, scale.volume-slider slider {
-    min-width: 12px; min-height: 12px; margin: 0; padding: 0; border-radius: 50%;
-    background: currentColor; box-shadow: 0 2px 5px alpha(black, 0.25); border: none; opacity: 0.85;
+.now-playing .interactive-slider.volume-slider,
+.now-playing drawingarea.volume-slider {
+    color: alpha(white, 0.80);
 }
-scale.seek-bar:hover slider, scale.volume-slider:hover slider { opacity: 1; }
+/* Volume popover container + icon */
+popover.volume-popover contents {
+    padding: 8px 12px;
+    border-radius: 12px;
+}
+.volume-popover-icon {
+    color: alpha(currentColor, 0.55);
+}
+/* Volume popover slider — uses popover foreground colour */
+.volume-popover .interactive-slider.volume-slider,
+.volume-popover drawingarea.volume-slider {
+    min-width: 100px;
+    color: @popover_fg_color;
+}
+
+.player-more-btn {
+    min-width: 32px;
+    min-height: 32px;
+    padding: 5px;
+    border-radius: 8px;
+    color: alpha(currentColor, 0.75);
+}
+.player-more-btn:hover {
+    background-color: alpha(currentColor, 0.08);
+    color: currentColor;
+}
 
 /* --- Left Navigation Sidebar --- */
 .sidebar {
@@ -71,13 +123,20 @@ scale.seek-bar:hover slider, scale.volume-slider:hover slider { opacity: 1; }
     border-right: 1px solid alpha(currentColor, 0.07);
     color: @window_fg_color;
 }
+.sidebar-scrolled-window {
+    background: transparent;
+}
+
+.sidebar-brand-icon {
+    color: currentColor;
+}
 
 .sidebar-brand-title {
-    font-size: 29px;
-    font-weight: 800;
-    letter-spacing: -0.015em;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
     color: currentColor;
-    margin: 10px 10px 14px 10px;
+    margin: 6px 0 8px 0;
 }
 
 .sidebar-search {
@@ -123,19 +182,6 @@ scale.seek-bar:hover slider, scale.volume-slider:hover slider { opacity: 1; }
 .sidebar-row-active image {
     color: @accent_color;
 }
-
-.sidebar-profile-avatar {
-    color: @accent_color;
-    background-color: alpha(@accent_bg_color, 0.14);
-    border-radius: 9999px;
-    padding: 2px;
-}
-
-.sidebar-profile-label {
-    font-weight: 600;
-    font-size: 13px;
-}
-
 /* --- Content Surfaces and Typography --- */
 .feed-scrolled-window, .search-scrolled-window {
     background-color: @view_bg_color;
@@ -166,6 +212,97 @@ scale.seek-bar:hover slider, scale.volume-slider:hover slider { opacity: 1; }
 .section-subtitle {
     font-size: 13px;
     color: alpha(currentColor, 0.6);
+}
+
+/* --- Search Tabs & Lockup Cards --- */
+.search-tabs-box {
+    margin-bottom: 8px;
+}
+
+.search-tab-pill {
+    padding: 6px 16px;
+    border-radius: 9999px;
+    font-size: 13px;
+    font-weight: 600;
+    background-color: alpha(currentColor, 0.06);
+    color: alpha(currentColor, 0.75);
+    border: 1px solid transparent;
+    transition: background-color 120ms ease, color 120ms ease;
+}
+
+.search-tab-pill:hover {
+    background-color: alpha(currentColor, 0.11);
+    color: @view_fg_color;
+}
+
+.search-tab-pill.search-tab-pill-active {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+}
+
+.search-heading-btn {
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    outline: none;
+}
+
+.search-heading-btn:hover {
+    background: transparent;
+}
+
+.search-heading-btn:hover .section-title,
+.search-heading-btn:hover image {
+    color: @accent_color;
+}
+
+.search-lockup-grid {
+    margin-bottom: 16px;
+}
+
+.search-lockup-card {
+    padding: 8px 12px;
+    border-radius: 12px;
+    background-color: alpha(currentColor, 0.045);
+    border: 1px solid alpha(currentColor, 0.05);
+    transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.search-lockup-card:hover {
+    background-color: alpha(currentColor, 0.09);
+    border-color: alpha(currentColor, 0.10);
+}
+
+.search-lockup-artwork {
+    border-radius: 8px;
+    box-shadow: 0 4px 12px alpha(black, 0.15);
+}
+
+.search-lockup-artwork-circular {
+    border-radius: 9999px;
+    box-shadow: 0 4px 12px alpha(black, 0.15);
+}
+
+.search-lockup-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: @view_fg_color;
+}
+
+.search-lockup-subtitle {
+    font-size: 13px;
+    color: alpha(currentColor, 0.65);
+}
+
+.search-lockup-play {
+    opacity: 0;
+    transition: opacity 120ms ease;
+}
+
+.search-lockup-card:hover .search-lockup-play {
+    opacity: 1;
 }
 
 /* --- Hero Banner (Album, Artist, Playlist Header) --- */
@@ -207,6 +344,79 @@ scale.seek-bar:hover slider, scale.volume-slider:hover slider { opacity: 1; }
     padding: 8px 22px;
 }
 
+/* --- Hero Banner (Artist & Editorial Full-Width Hero) --- */
+.hero-banner-container {
+    border-radius: 18px;
+    background-color: alpha(currentColor, 0.04);
+    box-shadow: 0 8px 24px alpha(black, 0.20);
+}
+
+.hero-banner-picture {
+    border-radius: 18px;
+}
+
+.hero-banner-scrim {
+    background-image: linear-gradient(to top, rgba(0, 0, 0, 0.88) 0%, rgba(0, 0, 0, 0.45) 60%, transparent 100%);
+    padding: 24px 28px;
+    border-radius: 0 0 18px 18px;
+}
+
+.hero-banner-title {
+    font-size: 36px;
+    line-height: 42px;
+    font-weight: 800;
+    color: #ffffff;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+}
+
+.hero-banner-metadata {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.80);
+    font-weight: 500;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+/* --- Latest Release Feature Card --- */
+.latest-release-card {
+    padding: 16px;
+    border-radius: 16px;
+    background-color: alpha(currentColor, 0.04);
+    border: 1px solid alpha(currentColor, 0.06);
+    transition: background-color 140ms ease;
+}
+
+.latest-release-card:hover {
+    background-color: alpha(currentColor, 0.07);
+}
+
+.latest-release-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: @view_fg_color;
+}
+
+.latest-release-subtitle {
+    font-size: 14px;
+    color: alpha(currentColor, 0.75);
+}
+
+.latest-release-metadata {
+    font-size: 12px;
+    color: alpha(currentColor, 0.50);
+}
+
+/* --- Biography / About Section --- */
+.biography-section {
+    margin-top: 16px;
+    margin-bottom: 24px;
+}
+
+.biography-text {
+    font-size: 14px;
+    line-height: 22px;
+    color: alpha(currentColor, 0.80);
+}
+
 .hero-action-btn {
     min-width: 36px;
     min-height: 36px;
@@ -245,19 +455,25 @@ flowboxchild {
 .card-artwork-circular {
     border-radius: 9999px;
     background-color: alpha(currentColor, 0.06);
-    box-shadow: 0 4px 14px alpha(black, 0.16);
+    border: 1px solid alpha(currentColor, 0.08);
+    box-shadow: none;
 }
 
 .card-play-overlay {
     min-width: 40px;
     min-height: 40px;
     border-radius: 9999px;
-    background-color: alpha(black, 0.82);
+    background-color: alpha(black, 0.85);
     color: white;
-    border: none;
+    border: 1px solid alpha(white, 0.20);
     opacity: 0.0;
-    box-shadow: 0 4px 12px alpha(black, 0.35);
-    transition: opacity 160ms ease, transform 140ms ease;
+    box-shadow: none;
+    transition: opacity 160ms ease, transform 140ms ease, background-color 140ms ease;
+}
+
+.card-play-overlay:hover {
+    background-color: black;
+    border-color: alpha(white, 0.35);
 }
 
 .media-card:hover .card-play-overlay,
@@ -286,8 +502,9 @@ flowboxchild {
     line-height: 16px;
 }
 
-/* --- Artist Master-Detail Layout --- */
-.artist-master-list {
+/* --- Artist and Genre Master-Detail Layout --- */
+.artist-master-list,
+.genre-master-list {
     border-right: 1px solid alpha(currentColor, 0.08);
 }
 
@@ -302,20 +519,73 @@ flowboxchild {
 }
 
 .artist-row-active {
-    background-color: @accent_color;
-    color: #ffffff;
+    background-color: alpha(@accent_bg_color, 0.14);
+    color: @accent_color;
     border-radius: 8px;
 }
 
 .artist-row-active .card-title,
 .artist-row-active label {
-    color: @accent_fg_color;
-    font-weight: 700;
+    color: @accent_color;
+    font-weight: 650;
+}
+
+.genre-row {
+    padding: 8px 12px;
+    border-radius: 8px;
+    transition: background-color 100ms ease;
+}
+
+.genre-row:hover {
+    background-color: alpha(currentColor, 0.08);
+}
+
+.genre-row-active {
+    background-color: alpha(@accent_bg_color, 0.14);
+    color: @accent_color;
+    border-radius: 8px;
+}
+
+.genre-row-active label {
+    color: @accent_color;
+    font-weight: 650;
+}
+
+.genre-count-badge {
+    font-size: 11px;
+    opacity: 0.65;
+    padding: 1px 6px;
+    border-radius: 6px;
+    background-color: alpha(currentColor, 0.08);
+}
+
+.genre-row-active .genre-count-badge {
+    background-color: alpha(@accent_color, 0.18);
+    color: @accent_color;
+    opacity: 1.0;
+}
+
+.artist-title-btn {
+    padding: 2px 6px;
+    border-radius: 8px;
+    background: transparent;
+    border: none;
+    color: inherit;
+    transition: background-color 100ms ease;
+}
+
+.artist-title-btn:hover {
+    background-color: alpha(currentColor, 0.06);
+}
+
+.artist-title-btn:hover image {
+    color: @accent_color;
 }
 
 /* --- Track Rows --- */
 .track-row {
-    padding: 6px 10px;
+    min-height: 48px;
+    padding: 4px 10px;
     border-radius: 8px;
     transition: background-color 120ms ease;
 }
@@ -348,6 +618,21 @@ flowboxchild {
     line-height: 16px;
 }
 
+.metadata-link {
+    transition: color 150ms ease, opacity 150ms ease;
+}
+
+.metadata-link:hover {
+    color: @accent_color;
+    opacity: 1.0;
+}
+
+.metadata-link:focus-visible {
+    outline: 2px solid @accent_color;
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
 .track-artwork {
     min-width: 40px;
     min-height: 40px;
@@ -376,11 +661,30 @@ flowboxchild {
     padding: 4px;
     border-radius: 6px;
     color: alpha(currentColor, 0.58);
-    transition: color 120ms ease;
+    opacity: 0;
+    transition: opacity 120ms ease, color 120ms ease, background-color 120ms ease;
+}
+
+.track-row:hover .track-action-btn,
+.track-row:focus-within .track-action-btn,
+.track-action-btn:focus,
+.track-action-btn.favorite-active {
+    opacity: 1;
+}
+
+.track-action-btn.favorite-active {
+    color: @accent_color;
+    opacity: 1;
 }
 
 .track-action-btn:hover {
     color: currentColor;
+    background-color: alpha(currentColor, 0.08);
+}
+
+.track-action-btn.favorite-active:hover {
+    color: shade(@accent_color, 1.15);
+    background-color: alpha(@accent_color, 0.12);
 }
 
 listview.track-list-view {
@@ -419,16 +723,63 @@ listview.track-list-view > row:selected {
     color: alpha(currentColor, 0.7);
 }
 
+.utility-autoplay-btn {
+    font-size: 17px;
+    font-weight: 700;
+    min-width: 28px;
+    min-height: 28px;
+    padding: 0 4px;
+    border-radius: 6px;
+    background: transparent;
+    background-color: transparent;
+    color: alpha(currentColor, 0.65);
+}
+
+.utility-autoplay-btn:hover {
+    color: currentColor;
+    background-color: alpha(currentColor, 0.08);
+}
+
+.utility-autoplay-btn.control-active {
+    color: @accent_color;
+    background: transparent;
+    background-color: transparent;
+}
+
+.utility-autoplay-btn.control-active:hover {
+    color: @accent_color;
+    background-color: alpha(currentColor, 0.08);
+}
+
 .utility-empty-label {
     font-size: 14px;
     color: alpha(currentColor, 0.60);
 }
 
+.queue-section-header,
+.queue-sticky-header {
+    background-color: @window_bg_color;
+    padding: 7px 16px;
+    min-height: 28px;
+    border-bottom: 1px solid alpha(currentColor, 0.05);
+}
+
+.queue-sticky-header {
+    border-bottom: 1px solid alpha(currentColor, 0.08);
+    box-shadow: 0 1px 4px alpha(black, 0.06);
+}
+
 .queue-section-label {
     font-size: 11px;
     font-weight: 700;
-    letter-spacing: 0.06em;
-    color: alpha(currentColor, 0.60);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: alpha(currentColor, 0.55);
+}
+
+.queue-empty-subtext {
+    font-size: 12px;
+    color: alpha(currentColor, 0.45);
 }
 
 .queue-row {
@@ -441,6 +792,21 @@ listview.track-list-view > row:selected {
 }
 
 .queue-row-current {
+    background-color: alpha(currentColor, 0.08);
+}
+
+.queue-row-history {
+    opacity: 1.0;
+}
+
+.queue-popover-btn {
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.queue-popover-btn:hover {
     background-color: alpha(currentColor, 0.08);
 }
 
@@ -494,11 +860,14 @@ listview.track-list-view > row:selected {
 /* Immersive player: all color comes from the decoded artwork wash. */
 .now-playing { background: #171719; color: #ffffff; }
 .nowplaying-artwork { border-radius: 10px; background-color: alpha(white, 0.035); }
-.nowplaying-title { font-size: 21px; font-weight: 700; color: white; }
-.nowplaying-artist { font-size: 15px; color: alpha(white, 0.65); }
+.nowplaying-title { font-size: 24px; font-weight: 700; color: white; }
+.nowplaying-artist { font-size: 16px; color: alpha(white, 0.65); }
+.np-large .nowplaying-title { font-size: 32px; font-weight: 800; }
+.np-large .nowplaying-artist { font-size: 19px; }
 .now-playing .seek-time-label { font-size: 12px; color: alpha(white, 0.58); }
-.now-playing .seek-bar { padding: 6px 0; color: white; }
-.now-playing .volume-slider { color: alpha(white, 0.68); }
+.np-large .seek-time-label { font-size: 13px; }
+.now-playing .interactive-slider.seek-bar { color: white; }
+.now-playing .interactive-slider.volume-slider { color: alpha(white, 0.80); }
 .now-playing .np-control, .now-playing .player-favorite-btn {
     min-width: 30px; min-height: 30px; padding: 4px; border-radius: 8px;
     background: transparent; color: alpha(white, 0.76); box-shadow: none; border: none;
@@ -510,47 +879,236 @@ listview.track-list-view > row:selected {
 }
 .now-playing .np-play image { -gtk-icon-size: 36px; }
 .now-playing .np-play:hover, .now-playing .np-control:hover { background: alpha(white, 0.10); }
-.now-playing .control-active { color: white; background: alpha(white, 0.14); }
-.now-playing .favorite-active { color: @accent_color; background: alpha(@accent_bg_color, 0.14); }
-.immersive-lyrics { background: transparent; }
-.immersive-lyrics .lyric-line {
-    font-size: 32px; line-height: 1.4em; font-weight: 700; color: alpha(white, 0.34);
-    background: transparent; box-shadow: none;
-    padding: 4px 0;
-    transition: color 220ms ease, opacity 280ms ease;
+.now-playing .control-active,
+.now-playing .favorite-active,
+.now-playing .np-control.control-active {
+    color: @accent_color;
+    background: transparent;
+    background-color: transparent;
 }
-/* Active lyric: bigger and fully opaque */
+.now-playing .control-active:hover,
+.now-playing .favorite-active:hover,
+.now-playing .np-control.control-active:hover {
+    color: @accent_color;
+    background: alpha(white, 0.10);
+    background-color: alpha(white, 0.10);
+}
+.now-playing .control-inactive,
+.now-playing .np-control.control-inactive {
+    color: alpha(white, 0.70);
+    background: transparent;
+    background-color: transparent;
+}
+.immersive-lyrics { background: transparent; }
+.immersive-lyrics scrollbar,
+.immersive-lyrics scrollbar trough,
+.immersive-lyrics scrollbar slider {
+    opacity: 0;
+    min-width: 0;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    -gtk-icon-size: 0;
+}
+.now-playing .np-bottom-bar {
+    margin-bottom: 24px;
+    margin-right: 28px;
+}
+
+/* Immersive Queue in Now Playing (Apple Music iPad style) */
+.now-playing .utility-pane,
+.immersive-queue {
+    background: transparent;
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+}
+.now-playing.np-narrow .utility-pane {
+    background: transparent;
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+}
+.now-playing .utility-header {
+    padding: 0;
+    margin: 0;
+}
+.now-playing .utility-title {
+    font-size: 22px;
+    font-weight: 700;
+    color: #ffffff;
+}
+.now-playing .utility-action-btn {
+    font-size: 14px;
+    font-weight: 500;
+    color: alpha(white, 0.75);
+    padding: 4px 10px;
+    border-radius: 6px;
+}
+.now-playing .utility-action-btn:hover {
+    color: #ffffff;
+    background-color: alpha(white, 0.12);
+}
+.now-playing .utility-action-btn:disabled {
+    color: alpha(white, 0.25);
+}
+.now-playing .utility-autoplay-btn {
+    font-size: 18px;
+    font-weight: 700;
+    min-width: 30px;
+    min-height: 30px;
+    padding: 2px 6px;
+    border-radius: 8px;
+    background: transparent;
+    background-color: transparent;
+    color: alpha(white, 0.70);
+    box-shadow: none;
+    border: none;
+}
+.now-playing .utility-autoplay-btn:hover {
+    background: alpha(white, 0.10);
+    background-color: alpha(white, 0.10);
+    color: #ffffff;
+}
+.now-playing .utility-autoplay-btn.control-active {
+    color: @accent_color;
+    background: transparent;
+    background-color: transparent;
+}
+.now-playing .utility-autoplay-btn.control-active:hover {
+    color: @accent_color;
+    background: alpha(white, 0.10);
+    background-color: alpha(white, 0.10);
+}
+.now-playing .queue-section-header {
+    background: transparent;
+    background-color: transparent;
+    border-bottom: none;
+    padding: 16px 16px 6px 16px;
+}
+.now-playing .queue-sticky-header {
+    background: transparent;
+    background-color: transparent;
+    border: none;
+    border-bottom: none;
+    box-shadow: none;
+    padding: 6px 16px;
+    min-height: 24px;
+}
+.now-playing .queue-section-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: alpha(white, 0.55);
+}
+.now-playing .queue-row {
+    padding: 6px 8px;
+    border-radius: 8px;
+}
+.now-playing .queue-row:hover {
+    background-color: alpha(white, 0.08);
+}
+.now-playing .queue-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #ffffff;
+}
+.now-playing .queue-artist {
+    font-size: 12px;
+    color: alpha(white, 0.60);
+}
+.now-playing .queue-duration {
+    font-size: 12px;
+    color: alpha(white, 0.45);
+}
+.now-playing .queue-action-btn {
+    color: alpha(white, 0.50);
+}
+.now-playing .queue-action-btn:hover {
+    color: #ffffff;
+    background-color: alpha(white, 0.12);
+}
+.now-playing .utility-pane scrollbar,
+.now-playing .utility-pane scrollbar trough,
+.now-playing .immersive-queue scrollbar,
+.now-playing .immersive-queue scrollbar trough {
+    background: transparent;
+    border: none;
+}
+.now-playing .utility-pane scrollbar slider,
+.now-playing .immersive-queue scrollbar slider {
+    background-color: alpha(white, 0.2);
+    border-radius: 4px;
+    min-width: 6px;
+    min-height: 6px;
+    margin: 0;
+    padding: 0;
+}
+.now-playing .utility-pane scrollbar slider:hover,
+.now-playing .immersive-queue scrollbar slider:hover {
+    background-color: alpha(white, 0.35);
+}
+.immersive-lyrics .lyric-line {
+    font-size: 30px; line-height: 1.4em; font-weight: 700; color: alpha(white, 0.35);
+    background: transparent; box-shadow: none;
+    padding: 5px 0;
+    transition: color 220ms ease, opacity 280ms ease, font-size 220ms ease;
+}
+/* Active lyric: larger, bolder, pure white and prominent */
 .immersive-lyrics .lyric-active {
-    color: white;
+    font-size: 40px;
+    font-weight: 800;
+    color: #ffffff;
 }
 .immersive-lyrics .lyric-unsynced { color: white; }
-.immersive-lyrics .lyric-past { color: alpha(white, 0.43); }
+.immersive-lyrics .lyric-past { color: alpha(white, 0.40); }
 /* Progressive distance fade: lines farther from active get dimmer */
 .immersive-lyrics .lyric-dist-1 { opacity: 0.80; }
 .immersive-lyrics .lyric-dist-2 { opacity: 0.55; }
 .immersive-lyrics .lyric-dist-3 { opacity: 0.35; }
-.immersive-lyrics .lyric-dist-4 { opacity: 0.22; }
-.immersive-lyrics .lyric-line:hover { color: alpha(white, 0.90); opacity: 1.0; }
-.np-narrow .immersive-lyrics .lyric-line { font-size: 28px; }
-.np-narrow .immersive-lyrics .lyric-active { color: white; }
+.immersive-lyrics .lyric-dist-4 { opacity: 0.20; }
+/* Inactive lyric on hover: a bit grayer, subtle preview rather than active white */
+.immersive-lyrics .lyric-line:hover { color: alpha(white, 0.60); opacity: 0.88; }
+.immersive-lyrics .lyric-active:hover { color: #ffffff; opacity: 1.0; }
+
+/* Large display (e.g. 1x scaling full-screen): scale lyrics up to match large artwork */
+.np-large .immersive-lyrics .lyric-line { font-size: 38px; line-height: 1.45em; padding: 7px 0; }
+.np-large .immersive-lyrics .lyric-active { font-size: 50px; font-weight: 800; }
+
+.np-narrow .immersive-lyrics .lyric-line { font-size: 26px; }
+.np-narrow .immersive-lyrics .lyric-active { font-size: 34px; font-weight: 800; color: white; }
 .now-playing popover { color: @popover_fg_color; }
 
-/* Compact Now Playing: small header artwork, larger transport, wide volume */
-.np-narrow .nowplaying-title { font-size: 16px; }
-.np-narrow .nowplaying-artist { font-size: 13px; }
+/* Compact Now Playing (iOS style) */
+.now-playing.np-narrow .compact-mini-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #ffffff;
+    line-height: 1.25em;
+}
+.now-playing.np-narrow .compact-mini-artist {
+    font-size: 12px;
+    font-weight: 500;
+    color: alpha(white, 0.60);
+    line-height: 1.25em;
+}
+.now-playing.np-narrow .nowplaying-artwork {
+    border-radius: 14px;
+    box-shadow: 0 12px 40px alpha(black, 0.40);
+}
+.compact-mini-artwork {
+    border-radius: 8px;
+    box-shadow: 0 2px 8px alpha(black, 0.25);
+    transition: opacity 120ms ease;
+}
+.compact-mini-artwork:hover {
+    opacity: 0.85;
+}
 .np-volume-icon { color: alpha(white, 0.55); }
-.now-playing .compact-transport .player-icon-btn {
-    min-width: 44px; min-height: 44px; padding: 6px; border-radius: 10px;
-    color: white; background: transparent;
-}
-.now-playing .compact-transport .player-icon-btn image { -gtk-icon-size: 28px; }
-.now-playing .compact-transport .player-play-btn {
-    min-width: 60px; min-height: 60px; padding: 4px; border-radius: 14px;
-    background: transparent; color: white; box-shadow: none; border: none;
-}
-.now-playing .compact-transport .player-play-btn image { -gtk-icon-size: 42px; }
-.now-playing .compact-transport .player-play-btn:hover,
-.now-playing .compact-transport .player-icon-btn:hover { background: alpha(white, 0.10); }
 
 /* Credits Modal */
 .credits-track-title {
@@ -611,7 +1169,6 @@ listview.track-list-view > row:selected {
 .malus-window .status-surface { padding: 24px; border-radius: 18px; background: alpha(currentColor, 0.035); }
 .malus-window .connection-banner { background: alpha(@accent_bg_color, 0.12); }
 .malus-window .feed-eyebrow { font-size: 11px; letter-spacing: 0.12em; font-weight: 700; color: @accent_color; }
-.malus-window .sidebar-profile-row { border-top: 1px solid alpha(currentColor, 0.08); border-radius: 0; padding-top: 8px; }
 .malus-window .media-card:focus-within { background: alpha(currentColor, 0.06); }
 .malus-window .track-row:nth-child(even) { background-color: alpha(currentColor, 0.022); }
 .malus-window .track-row:hover { background-color: alpha(currentColor, 0.07); }
@@ -620,3 +1177,306 @@ listview.track-list-view > row:selected {
 toastoverlay > toast {
     margin-bottom: 96px;
 }
+
+/* --- Live Radio Station Pills (Marquee Shelf) --- */
+.live-station-pill {
+    min-width: 208px;
+    min-height: 64px;
+    border-radius: 12px;
+    background-color: alpha(currentColor, 0.05);
+    border: 1px solid alpha(currentColor, 0.08);
+    transition: transform 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
+    padding: 0;
+}
+
+.live-station-pill:hover {
+    background-color: alpha(currentColor, 0.09);
+    box-shadow: 0 4px 14px alpha(black, 0.16);
+    transform: translateY(-1px);
+}
+
+.live-station-picture {
+    border-radius: 12px;
+}
+
+/* --- Gradient Station & Genre Cards --- */
+.station-card {
+    padding: 6px;
+    border-radius: 16px;
+    transition: background-color 140ms ease;
+}
+
+.station-card:hover {
+    background-color: alpha(currentColor, 0.06);
+}
+
+.station-card-canvas {
+    border-radius: 12px;
+    box-shadow: 0 6px 18px alpha(black, 0.22);
+}
+
+.station-malus-logo {
+    opacity: 0.90;
+    margin: 10px 12px;
+    color: white;
+    -gtk-icon-style: symbolic;
+}
+
+.station-genre-label {
+    font-size: 20px;
+    font-weight: 800;
+    line-height: 24px;
+    color: #ffffff;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.55);
+    margin: 10px 12px;
+}
+
+/* --- Browse Hero Featured Banner Cards --- */
+.featured-banner-card {
+    padding: 6px;
+    border-radius: 16px;
+    transition: background-color 140ms ease;
+}
+
+.featured-banner-card:hover {
+    background-color: alpha(currentColor, 0.06);
+}
+
+.featured-banner-eyebrow {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: alpha(currentColor, 0.55);
+    margin-bottom: 2px;
+}
+
+.featured-banner-title {
+    font-size: 20px;
+    font-weight: 750;
+    line-height: 24px;
+    color: @view_fg_color;
+    margin-bottom: 2px;
+}
+
+.featured-banner-sub {
+    font-size: 14px;
+    font-weight: 500;
+    color: alpha(currentColor, 0.65);
+    margin-bottom: 8px;
+}
+
+.featured-banner-picture {
+    border-radius: 10px;
+    box-shadow: 0 6px 18px alpha(black, 0.20);
+    background-color: alpha(currentColor, 0.06);
+}
+
+/* --- Multi-Row Shelf Layout (Best New Songs, Top Songs, Episodes) --- */
+.multirow-column {
+    min-width: 296px;
+}
+
+.compact-track-row {
+    padding: 5px 8px;
+    border-radius: 8px;
+    transition: background-color 120ms ease;
+}
+
+.compact-track-row:hover {
+    background-color: alpha(currentColor, 0.07);
+}
+
+.compact-track-art {
+    border-radius: 6px;
+    background-color: alpha(currentColor, 0.06);
+    box-shadow: 0 2px 6px alpha(black, 0.12);
+}
+
+.compact-track-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    line-height: 17px;
+}
+
+.compact-track-sub {
+    font-size: 12px;
+    color: alpha(currentColor, 0.60);
+    line-height: 15px;
+}
+
+/* --- Category Exploration Navigation Pills --- */
+.explore-pills-container {
+    padding: 4px 0 12px 0;
+}
+
+.explore-pill-btn {
+    border-radius: 9999px;
+    padding: 6px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    background-color: alpha(currentColor, 0.06);
+    border: 1px solid alpha(currentColor, 0.08);
+    color: @view_fg_color;
+    transition: background-color 120ms ease, transform 120ms ease, color 120ms ease;
+}
+
+.explore-pill-btn:hover {
+    background-color: alpha(@accent_bg_color, 0.16);
+    color: @accent_color;
+    transform: translateY(-1px);
+}
+
+/* --- Search Page Entry Bar --- */
+.search-page-entry {
+    border-radius: 9999px;
+    background-color: alpha(currentColor, 0.07);
+    border: 1px solid alpha(currentColor, 0.12);
+    min-height: 38px;
+    padding: 0 8px;
+    font-size: 14px;
+    transition: border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
+}
+
+.search-page-entry:focus-within {
+    border-color: @accent_color;
+    box-shadow: 0 0 0 1px @accent_color;
+    background-color: alpha(currentColor, 0.10);
+}
+
+/* --- Search Scope Switcher (Apple Music vs Your Library) --- */
+.search-scope-switcher {
+    border-radius: 9999px;
+    background-color: alpha(currentColor, 0.06);
+    padding: 3px;
+}
+
+.search-scope-btn {
+    border-radius: 9999px;
+    padding: 5px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    color: alpha(currentColor, 0.75);
+    background: transparent;
+    border: none;
+    transition: background-color 120ms ease, color 120ms ease;
+}
+
+.search-scope-btn:checked {
+    background-color: @card_bg_color;
+    color: @card_fg_color;
+    box-shadow: 0 1px 3px alpha(black, 0.15);
+}
+
+/* --- Browse Category Brick Cards --- */
+.category-card {
+    min-width: 224px;
+    min-height: 126px;
+    border-radius: 12px;
+    transition: transform 140ms ease, box-shadow 140ms ease;
+    padding: 0;
+}
+
+.category-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px alpha(black, 0.28);
+}
+
+.category-card-picture {
+    border-radius: 12px;
+}
+
+.category-card-scrim {
+    border-radius: 12px;
+    background-image: linear-gradient(to top, rgba(0, 0, 0, 0.75) 0%, rgba(0, 0, 0, 0.20) 50%, transparent 100%);
+    padding: 12px 14px;
+}
+
+.category-card-title {
+    font-size: 17px;
+    font-weight: 800;
+    line-height: 22px;
+    color: #ffffff;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.65);
+}
+
+/* --- Recently Searched Section --- */
+.recent-search-card {
+    padding: 8px 12px;
+    border-radius: 10px;
+    background-color: alpha(currentColor, 0.04);
+    border: 1px solid alpha(currentColor, 0.06);
+    transition: background-color 120ms ease, transform 120ms ease;
+    min-width: 240px;
+}
+
+.recent-search-card:hover {
+    background-color: alpha(currentColor, 0.08);
+    transform: translateY(-1px);
+}
+
+.recent-search-thumb {
+    border-radius: 6px;
+    box-shadow: 0 2px 6px alpha(black, 0.15);
+}
+
+.recent-search-title {
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 18px;
+}
+
+.recent-search-sub {
+    font-size: 12px;
+    color: alpha(currentColor, 0.65);
+    line-height: 16px;
+}
+
+.recent-library-badge {
+    font-size: 10px;
+    font-weight: 700;
+    color: alpha(currentColor, 0.50);
+    letter-spacing: 0.4px;
+}
+
+.recent-clear-btn {
+    font-size: 13px;
+    font-weight: 600;
+    color: @accent_color;
+    background: transparent;
+    border: none;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: opacity 120ms ease;
+}
+
+.recent-clear-btn:hover {
+    opacity: 0.8;
+}
+
+/* --- Search Top Result Hero Card --- */
+.top-result-card {
+    padding: 16px;
+    border-radius: 14px;
+    background-color: alpha(currentColor, 0.04);
+    border: 1px solid alpha(currentColor, 0.06);
+    transition: background-color 120ms ease;
+}
+
+.top-result-card:hover {
+    background-color: alpha(currentColor, 0.08);
+}
+
+/* --- Media Shelf Scrolled Window --- */
+.media-shelf-scrolled scrollbar,
+.media-shelf-scrolled scrollbar trough,
+.media-shelf-scrolled scrollbar slider {
+    opacity: 0;
+    min-width: 0;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+}
+

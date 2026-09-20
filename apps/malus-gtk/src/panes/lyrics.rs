@@ -21,6 +21,8 @@ pub struct LyricsView {
     rendered: Cell<(u64, bool)>,
     active: Rc<Cell<Option<usize>>>,
     center_pending: Rc<Cell<bool>>,
+    pause_until: Rc<Cell<Instant>>,
+    seeking: Rc<Cell<bool>>,
     player: SharedPlayer,
     send: CommandHandler,
 }
@@ -28,7 +30,11 @@ impl LyricsView {
     pub fn new(player: &SharedPlayer, send: &CommandHandler, immersive: bool) -> Self {
         let root = gtk::ScrolledWindow::new();
         root.set_hscrollbar_policy(gtk::PolicyType::Never);
-        root.set_vscrollbar_policy(gtk::PolicyType::Automatic);
+        root.set_vscrollbar_policy(if immersive {
+            gtk::PolicyType::External
+        } else {
+            gtk::PolicyType::Automatic
+        });
         root.set_hexpand(true);
         root.set_vexpand(true);
         root.add_css_class(if immersive {
@@ -37,8 +43,8 @@ impl LyricsView {
             "pane-lyrics"
         });
         let content = gtk::Box::new(gtk::Orientation::Vertical, if immersive { 32 } else { 16 });
-        content.set_margin_start(if immersive { 12 } else { 24 });
-        content.set_margin_end(24);
+        content.set_margin_start(if immersive { 0 } else { 24 });
+        content.set_margin_end(if immersive { 0 } else { 24 });
         root.set_child(Some(&content));
         let rows = Rc::new(RefCell::new(Vec::<gtk::Widget>::new()));
         let active = Rc::new(Cell::new(None::<usize>));
@@ -68,17 +74,28 @@ impl LyricsView {
                 animation.pause();
             }
         });
+        let seeking = Rc::new(Cell::new(false));
         let p2 = pointer_down.clone();
         let pause1 = pause_until.clone();
+        let s2 = seeking.clone();
         gesture.connect_released(move |_, _, _, _| {
             p2.set(false);
-            pause1.set(Instant::now() + Duration::from_secs(3));
+            if s2.replace(false) {
+                pause1.set(Instant::now());
+            } else {
+                pause1.set(Instant::now() + Duration::from_secs(3));
+            }
         });
         let p3 = pointer_down.clone();
         let pause2 = pause_until.clone();
+        let s3 = seeking.clone();
         gesture.connect_cancel(move |_, _| {
             p3.set(false);
-            pause2.set(Instant::now() + Duration::from_secs(3));
+            if s3.replace(false) {
+                pause2.set(Instant::now());
+            } else {
+                pause2.set(Instant::now() + Duration::from_secs(3));
+            }
         });
         root.add_controller(gesture);
         let pointer = pointer_down.clone();
@@ -100,6 +117,7 @@ impl LyricsView {
         let c = content.clone();
         let last_geometry = Cell::new((0, false));
         let state = player.clone();
+        let tick_pause = pause_until.clone();
         root.add_tick_callback(move |scrolled, _| {
             let height = scrolled.height();
             let synced = state
@@ -121,7 +139,7 @@ impl LyricsView {
                 });
                 pending.set(true);
             }
-            if pending.get() && !pointer_down.get() && Instant::now() >= pause_until.get() {
+            if pending.get() && !pointer_down.get() && Instant::now() >= tick_pause.get() {
                 if let Some(index) = a.get() {
                     if let Some(row) = rs.borrow().get(index)
                         && row.height() > 0
@@ -166,6 +184,8 @@ impl LyricsView {
             rendered: Cell::new((u64::MAX, false)),
             active,
             center_pending,
+            pause_until,
+            seeking,
             player: player.clone(),
             send: send.clone(),
         }
@@ -182,23 +202,48 @@ impl LyricsView {
             self.rows.borrow_mut().clear();
             match &lyrics.content {
                 Some(text) if !text.lines.is_empty() => {
+                    // Determine the primary agent (first one encountered)
+                    let primary_agent = text.lines.iter().find_map(|l| l.agent.as_ref()).cloned();
                     for line in &text.lines {
                         let label = gtk::Label::new(Some(&line.text));
-                        label.set_xalign(0.0);
+                        // Right-align secondary singer lines
+                        let is_secondary = match (&line.agent, &primary_agent) {
+                            (Some(a), Some(p)) => a != p,
+                            _ => false,
+                        };
+                        label.set_xalign(if is_secondary { 1.0 } else { 0.0 });
+                        label.set_justify(if is_secondary {
+                            gtk::Justification::Right
+                        } else {
+                            gtk::Justification::Left
+                        });
                         label.set_wrap(true);
                         label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
                         label.set_hexpand(true);
-                        label.set_max_width_chars(28);
+                        label.set_halign(gtk::Align::Fill);
+                        label.set_max_width_chars(38);
+                        if is_secondary {
+                            label.add_css_class("lyric-secondary");
+                        }
                         let row: gtk::Widget = if text.synced
                             && let Some(start) = line.start_ms
                             && let Some(track) = &state.now.current_track
                         {
                             let button = gtk::Button::new();
                             button.add_css_class("flat");
+                            button.set_hexpand(true);
+                            button.set_halign(gtk::Align::Fill);
                             button.set_child(Some(&label));
                             let send = self.send.clone();
                             let id = track.id.clone();
+                            let pause = self.pause_until.clone();
+                            let pending = self.center_pending.clone();
+                            let seeking = self.seeking.clone();
                             button.connect_clicked(move |_| {
+                                // Mark as seek click and reset scroll pause so the view immediately follows
+                                seeking.set(true);
+                                pause.set(Instant::now());
+                                pending.set(true);
                                 send(PlayerCommand::Seek {
                                     track: id.clone(),
                                     position_ms: start,
@@ -211,6 +256,9 @@ impl LyricsView {
                         row.add_css_class("lyric-line");
                         if !text.synced {
                             row.add_css_class("lyric-unsynced");
+                        }
+                        if is_secondary {
+                            row.add_css_class("lyric-secondary");
                         }
                         self.content.append(&row);
                         self.rows.borrow_mut().push(row);

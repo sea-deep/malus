@@ -13,7 +13,7 @@ pub enum AppDestination {
 
 impl AppDestination {
     pub fn is_search(&self) -> bool {
-        matches!(self, Self::Search(_))
+        matches!(self, Self::Search(_) | Self::Page(PageRoute::Search))
     }
 
     pub fn page_route(&self) -> Option<&PageRoute> {

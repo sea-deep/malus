@@ -1,7 +1,7 @@
 //! Context action menu for tracks, albums, and playlists.
 
 use malus_ipc::wire::PageActionWire;
-use malus_model::MediaRef;
+use malus_model::{MediaRef, PageRoute};
 use relm4::gtk::{self, prelude::*};
 
 #[derive(Debug, Clone)]
@@ -14,11 +14,14 @@ pub enum ActionMenuCommand {
         track_index: usize,
         expected_track: MediaRef,
     },
+    Navigate(PageRoute),
+    CopyLink(String),
 }
 
 fn create_menu_btn(label_text: &str) -> gtk::Button {
     let btn = gtk::Button::new();
     btn.add_css_class("flat");
+    btn.set_focus_on_click(false);
     let label = gtk::Label::builder()
         .label(label_text)
         .xalign(0.0)
@@ -46,6 +49,8 @@ where
         is_track,
         &[],
         None,
+        None,
+        None,
         on_action,
     )
 }
@@ -69,11 +74,14 @@ where
         is_track,
         actions,
         None,
+        None,
+        None,
         on_action,
     )
 }
 
-/// Creates a GtkPopoverMenu supporting explicit actions and optional playlist context.
+/// Creates a GtkPopoverMenu supporting explicit actions, playlist context, and album/artist navigation.
+#[allow(clippy::too_many_arguments)]
 pub fn build_action_popover_full<F>(
     reference: &MediaRef,
     is_favorite: bool,
@@ -81,6 +89,8 @@ pub fn build_action_popover_full<F>(
     is_track: bool,
     actions: &[PageActionWire],
     playlist_context: Option<(MediaRef, usize)>,
+    album_route: Option<PageRoute>,
+    artist_route: Option<PageRoute>,
     on_action: F,
 ) -> gtk::Popover
 where
@@ -176,23 +186,10 @@ where
     }
 
     // Favorite / Unfavorite
-    let effective_favorite = if has_explicit_actions {
-        if actions
+    let effective_favorite = is_favorite
+        || actions
             .iter()
-            .any(|a| matches!(a, PageActionWire::Unfavorite(_)))
-        {
-            true
-        } else if actions
-            .iter()
-            .any(|a| matches!(a, PageActionWire::Favorite(_)))
-        {
-            false
-        } else {
-            is_favorite
-        }
-    } else {
-        is_favorite
-    };
+            .any(|a| matches!(a, PageActionWire::Unfavorite(_)));
 
     let fav_label = if effective_favorite {
         "Unfavorite"
@@ -290,6 +287,53 @@ where
             p.popdown();
         });
         box_container.append(&btn_credits);
+    }
+
+    // Navigation (View Album / View Artist)
+    if album_route.is_some() || artist_route.is_some() {
+        let separator3 = gtk::Separator::new(gtk::Orientation::Horizontal);
+        separator3.set_margin_top(4);
+        separator3.set_margin_bottom(4);
+        box_container.append(&separator3);
+
+        if let Some(route) = album_route {
+            let btn_album = create_menu_btn("Go to Album");
+            let cb = on_action.clone();
+            let p = popover.clone();
+            btn_album.connect_clicked(move |_| {
+                cb(ActionMenuCommand::Navigate(route.clone()));
+                p.popdown();
+            });
+            box_container.append(&btn_album);
+        }
+
+        if let Some(route) = artist_route {
+            let btn_artist = create_menu_btn("Go to Artist");
+            let cb = on_action.clone();
+            let p = popover.clone();
+            btn_artist.connect_clicked(move |_| {
+                cb(ActionMenuCommand::Navigate(route.clone()));
+                p.popdown();
+            });
+            box_container.append(&btn_artist);
+        }
+    }
+
+    // Copy Link
+    if let Some(url) = reference.web_url() {
+        let separator4 = gtk::Separator::new(gtk::Orientation::Horizontal);
+        separator4.set_margin_top(4);
+        separator4.set_margin_bottom(4);
+        box_container.append(&separator4);
+
+        let btn_copy = create_menu_btn("Copy Link");
+        let cb = on_action.clone();
+        let p = popover.clone();
+        btn_copy.connect_clicked(move |_| {
+            cb(ActionMenuCommand::CopyLink(url.clone()));
+            p.popdown();
+        });
+        box_container.append(&btn_copy);
     }
 
     popover.set_child(Some(&box_container));

@@ -6,7 +6,7 @@ use malus_ipc::{
     wire::{
         ActionResultWire, AuthStatusWire, CatalogItemWire, LibraryKindWire, LibraryPageWire,
         NavigationWire, PageActionWire, PageContinuationWire, PageCursorWire, PageWire,
-        PagedListWire, SearchKindWire, SearchResultsWire,
+        PagedListWire, SearchKindWire, SearchResultsWire, SearchScopeWire,
     },
 };
 use malus_model::{
@@ -331,6 +331,13 @@ impl MalusClient {
         }
     }
 
+    pub async fn set_autoplay(&self, autoplay: bool) -> Result<(), ClientError> {
+        match self.send(&ClientRequest::SetAutoplay { autoplay }).await? {
+            ClientResponse::Ok => Ok(()),
+            other => Err(ClientError::UnexpectedResponse(Box::new(other))),
+        }
+    }
+
     pub async fn get_auth_status(&self) -> Result<AuthStatusWire, ClientError> {
         match self.send(&ClientRequest::GetAuthStatus).await? {
             ClientResponse::AuthStatus(s) => Ok(s),
@@ -359,12 +366,25 @@ impl MalusClient {
         limit: Option<usize>,
         cursor: Option<String>,
     ) -> Result<SearchResultsWire, ClientError> {
+        self.search_with_scope(query, kinds, limit, cursor, SearchScopeWire::Catalog)
+            .await
+    }
+
+    pub async fn search_with_scope(
+        &self,
+        query: &str,
+        kinds: Vec<SearchKindWire>,
+        limit: Option<usize>,
+        cursor: Option<String>,
+        scope: SearchScopeWire,
+    ) -> Result<SearchResultsWire, ClientError> {
         match self
             .send(&ClientRequest::Search {
                 query: query.to_string(),
                 kinds,
                 limit,
                 cursor,
+                scope: Some(scope),
             })
             .await?
         {

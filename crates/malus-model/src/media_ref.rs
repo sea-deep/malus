@@ -91,6 +91,17 @@ impl MediaRef {
     pub fn format(&self) -> String {
         format!("{}:{}", self.kind(), self.id())
     }
+
+    /// Return the canonical Apple Music web share URL.
+    pub fn web_url(&self) -> Option<String> {
+        match self {
+            Self::Song(id) => Some(format!("https://music.apple.com/song/{id}")),
+            Self::Album(id) => Some(format!("https://music.apple.com/album/{id}")),
+            Self::Artist(id) => Some(format!("https://music.apple.com/artist/{id}")),
+            Self::Playlist(id) => Some(format!("https://music.apple.com/playlist/{id}")),
+            Self::Station(id) => Some(format!("https://music.apple.com/station/{id}")),
+        }
+    }
 }
 
 impl fmt::Display for MediaRef {

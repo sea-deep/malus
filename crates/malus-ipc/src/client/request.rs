@@ -2,7 +2,7 @@
 
 use crate::wire::{
     LibraryKindWire, MediaRef, PageActionWire, PageCursorWire, PageRoute, RepeatMode,
-    SearchKindWire,
+    SearchKindWire, SearchScopeWire,
 };
 use serde::{Deserialize, Serialize};
 
@@ -40,6 +40,9 @@ pub enum ClientRequest {
     SetRepeat {
         repeat: RepeatMode,
     },
+    SetAutoplay {
+        autoplay: bool,
+    },
     Search {
         query: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -48,6 +51,8 @@ pub enum ClientRequest {
         limit: Option<usize>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cursor: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<SearchScopeWire>,
     },
     GetCatalogItem {
         reference: MediaRef,

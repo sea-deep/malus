@@ -103,6 +103,7 @@ async fn test_daemon_navigation_and_pages_over_ipc() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated browser profile without concurrent client"]
 async fn test_daemon_playback_control_lifecycle() {
     let server = TestServer::start().await;
     let client = MalusClient::connect(&server.sock_path).await.unwrap();

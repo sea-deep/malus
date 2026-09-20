@@ -40,29 +40,41 @@ impl DecodedImage {
 const MAX_IMAGE_RESPONSE_BYTES: usize = 8 * 1024 * 1024; // 8 MB
 const MAX_DIMENSION: u32 = 4096;
 const MAX_PIXELS: u64 = 4096 * 4096;
-const MAX_CACHE_BYTES: usize = 20 * 1024 * 1024; // Strict 20 MB budget for decoded image cache
+const MAX_CACHE_BYTES: usize = 32 * 1024 * 1024; // 32 MB budget for decoded image cache
 const MAX_CONCURRENT_FETCHES: usize = 4;
 
-pub const THUMB_SMALL: u32 = 128;
-pub const THUMB_MEDIUM: u32 = 384;
-pub const THUMB_LARGE: u32 = 600;
+pub const THUMB_SMALL: u32 = 160;
+pub const THUMB_MEDIUM: u32 = 480;
+pub const THUMB_LARGE: u32 = 800;
+pub const THUMB_HERO: u32 = 1200;
 
 pub fn normalize_target_size(size: u32) -> u32 {
-    if size <= 128 {
+    if size <= 160 {
         THUMB_SMALL
-    } else if size <= 384 {
+    } else if size <= 480 {
         THUMB_MEDIUM
-    } else {
+    } else if size <= 800 {
         THUMB_LARGE
+    } else {
+        THUMB_HERO
     }
 }
 
 pub fn resolve_artwork_url(url: &str, target_size: u32) -> String {
     let bucket = normalize_target_size(target_size);
+    let url = url
+        .replace("{w}", &bucket.to_string())
+        .replace("{h}", &bucket.to_string())
+        .replace("{c}", "bb")
+        .replace("{f}", "jpg");
     if url.contains("/600x600bb.") {
         url.replace("/600x600bb.", &format!("/{bucket}x{bucket}bb."))
+    } else if url.contains("/600x600sr.") {
+        url.replace("/600x600sr.", &format!("/{bucket}x{bucket}sr."))
+    } else if url.contains("/600x600.") {
+        url.replace("/600x600.", &format!("/{bucket}x{bucket}bb."))
     } else {
-        url.to_string()
+        url
     }
 }
 
@@ -369,7 +381,7 @@ fn decode_image_sync(bytes: Vec<u8>, max_dimension: u32) -> Option<DecodedImage>
 
     let img = image::load_from_memory(&bytes).ok()?;
     drop(bytes);
-    let target = max_dimension.clamp(16, 600);
+    let target = max_dimension.clamp(16, 1200);
     let rgba = if width > target || height > target {
         let thumb = img.thumbnail(target, target);
         drop(img);
@@ -420,13 +432,13 @@ pub fn generate_backdrop_texture(image: &DecodedImage) -> Option<relm4::gtk::gdk
     }
 
     let mut blurred = image::DynamicImage::ImageRgba8(backdrop)
-        .blur(18.0)
+        .blur(6.0)
         .into_rgba8();
 
     for pixel in blurred.pixels_mut() {
         let luma = 0.2126 * pixel[0] as f32 + 0.7152 * pixel[1] as f32 + 0.0722 * pixel[2] as f32;
         for c in 0..3 {
-            pixel[c] = ((pixel[c] as f32 * 0.78 + luma * 0.22) * 0.38).round() as u8;
+            pixel[c] = ((pixel[c] as f32 * 0.84 + luma * 0.16) * 0.52).round() as u8;
         }
         pixel[3] = 255;
     }

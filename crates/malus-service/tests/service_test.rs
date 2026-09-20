@@ -78,6 +78,7 @@ struct MockAppleWebSession {
     volume: Mutex<u8>,
     shuffle: Mutex<bool>,
     repeat: Mutex<RepeatMode>,
+    autoplay: Mutex<bool>,
     last_play_next: Mutex<Option<(String, String)>>,
     last_play_later: Mutex<Option<(String, String)>>,
     last_jump_idx: Mutex<Option<usize>>,
@@ -103,6 +104,7 @@ impl MockAppleWebSession {
             volume: Mutex::new(100),
             shuffle: Mutex::new(false),
             repeat: Mutex::new(RepeatMode::Off),
+            autoplay: Mutex::new(false),
             last_play_next: Mutex::new(None),
             last_play_later: Mutex::new(None),
             last_jump_idx: Mutex::new(None),
@@ -174,6 +176,9 @@ impl AppleWebSession for MockAppleWebSession {
                 muted: false,
                 shuffle: false,
                 repeat: RepeatMode::Off,
+                autoplay: false,
+                timeline_id: 1,
+                sequence: 1,
             }));
         }
         Ok(())
@@ -236,6 +241,10 @@ impl AppleWebSession for MockAppleWebSession {
         *self.repeat.lock().await = repeat;
         Ok(())
     }
+    async fn set_autoplay(&self, autoplay: bool) -> Result<(), AppleError> {
+        *self.autoplay.lock().await = autoplay;
+        Ok(())
+    }
 
     async fn get_status(&self) -> Result<PlayerStatus, AppleError> {
         let paused = *self.is_paused.lock().await;
@@ -262,6 +271,9 @@ impl AppleWebSession for MockAppleWebSession {
             muted: false,
             shuffle: *self.shuffle.lock().await,
             repeat: *self.repeat.lock().await,
+            autoplay: *self.autoplay.lock().await,
+            timeline_id: 1,
+            sequence: 1,
         })
     }
 
@@ -916,22 +928,24 @@ async fn test_apple_pages_navigation_manifest() {
 
     // Discover group
     assert_eq!(nav.groups[0].id, "discover");
-    assert_eq!(nav.groups[0].entries.len(), 3);
-    assert_eq!(nav.groups[0].entries[0].route, PageRoute::Home);
-    assert_eq!(nav.groups[0].entries[1].route, PageRoute::New);
-    assert_eq!(nav.groups[0].entries[2].route, PageRoute::Radio);
+    assert_eq!(nav.groups[0].entries.len(), 4);
+    assert_eq!(nav.groups[0].entries[0].route, PageRoute::Search);
+    assert_eq!(nav.groups[0].entries[1].route, PageRoute::Home);
+    assert_eq!(nav.groups[0].entries[2].route, PageRoute::New);
+    assert_eq!(nav.groups[0].entries[3].route, PageRoute::Radio);
 
     // Library group
     assert_eq!(nav.groups[1].id, "library");
-    assert_eq!(nav.groups[1].entries.len(), 5);
+    assert_eq!(nav.groups[1].entries.len(), 6);
     assert_eq!(
         nav.groups[1].entries[0].route,
         PageRoute::LibraryRecentlyAdded
     );
     assert_eq!(nav.groups[1].entries[1].route, PageRoute::LibraryArtists);
     assert_eq!(nav.groups[1].entries[2].route, PageRoute::LibraryAlbums);
-    assert_eq!(nav.groups[1].entries[3].route, PageRoute::LibrarySongs);
-    assert_eq!(nav.groups[1].entries[4].route, PageRoute::LibraryMadeForYou);
+    assert_eq!(nav.groups[1].entries[3].route, PageRoute::LibraryGenres);
+    assert_eq!(nav.groups[1].entries[4].route, PageRoute::LibrarySongs);
+    assert_eq!(nav.groups[1].entries[5].route, PageRoute::LibraryMadeForYou);
 
     // Playlists group
     assert_eq!(nav.groups[2].id, "playlists");
@@ -946,69 +960,86 @@ async fn test_apple_pages_navigation_manifest() {
 async fn test_apple_pages_home_generation() {
     let mock = Arc::new(MockAppleWebSession::new());
     let (url, _shutdown) = spawn_mock_apple_api(vec![
-        // 1. Recommendations
+        // Canonical unified Listen Now response
         (
             200,
             serde_json::json!({
                 "data": [
                     {
-                        "id": "rec.1",
+                        "id": "group.top",
                         "type": "personal-recommendation",
-                        "attributes": {
-                            "title": { "stringForDisplay": "Favorites Mix" }
+                        "href": "/v1/me/recommendations/group.top"
+                    },
+                    {
+                        "id": "group.recent",
+                        "type": "personal-recommendation",
+                        "href": "/v1/me/recommendations/group.recent"
+                    }
+                ],
+                "resources": {
+                    "personal-recommendation": {
+                        "group.top": {
+                            "id": "group.top",
+                            "type": "personal-recommendation",
+                            "attributes": {
+                                "title": { "stringForDisplay": "Top Picks for You" },
+                                "display": { "kind": "MusicNotesHeroShelf" },
+                                "resourceTypes": ["playlists"]
+                            },
+                            "relationships": {
+                                "contents": {
+                                    "data": [
+                                        { "id": "pl.fav", "type": "playlists" }
+                                    ]
+                                }
+                            }
                         },
-                        "relationships": {
-                            "contents": {
-                                "data": [
-                                    {
-                                        "id": "pl.fav",
-                                        "type": "playlists",
-                                        "attributes": {
-                                            "name": "Favorites Mix",
-                                            "curatorName": "Apple Music",
-                                            "artwork": { "url": "https://example.com/{w}x{h}bb.jpg" }
-                                        }
-                                    }
-                                ]
+                        "group.recent": {
+                            "id": "group.recent",
+                            "type": "personal-recommendation",
+                            "attributes": {
+                                "title": { "stringForDisplay": "Recently Played" },
+                                "reason": { "stringForDisplay": "Based on your recent listening" },
+                                "display": { "kind": "MusicCoverShelf" },
+                                "resourceTypes": ["albums"]
+                            },
+                            "relationships": {
+                                "contents": {
+                                    "data": [
+                                        { "id": "1440857780", "type": "albums" }
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "playlists": {
+                        "pl.fav": {
+                            "id": "pl.fav",
+                            "type": "playlists",
+                            "attributes": {
+                                "name": "Favorites Mix",
+                                "curatorName": "Apple Music",
+                                "artwork": { "url": "https://example.com/{w}x{h}bb.jpg" },
+                                "plainEditorialNotes": {
+                                    "standard": "Your personalized favorites mix updated weekly."
+                                }
+                            }
+                        }
+                    },
+                    "albums": {
+                        "1440857780": {
+                            "id": "1440857780",
+                            "type": "albums",
+                            "attributes": {
+                                "name": "Random Access Memories",
+                                "artistName": "Daft Punk",
+                                "releaseDate": "2013-05-17",
+                                "artwork": { "url": "https://example.com/ram_{w}x{h}.jpg" }
                             }
                         }
                     }
-                ],
+                },
                 "next": "/v1/me/recommendations?offset=10"
-            }),
-        ),
-        // 2. Recently Played
-        (
-            200,
-            serde_json::json!({
-                "data": [
-                    {
-                        "id": "1440857781",
-                        "type": "songs",
-                        "attributes": {
-                            "name": "Get Lucky",
-                            "artistName": "Daft Punk",
-                            "albumName": "Random Access Memories",
-                            "durationInMillis": 369626
-                        }
-                    }
-                ]
-            }),
-        ),
-        // 3. Heavy Rotation
-        (
-            200,
-            serde_json::json!({
-                "data": [
-                    {
-                        "id": "1440857780",
-                        "type": "albums",
-                        "attributes": {
-                            "name": "Random Access Memories",
-                            "artistName": "Daft Punk"
-                        }
-                    }
-                ]
             }),
         ),
     ])
@@ -1022,39 +1053,69 @@ async fn test_apple_pages_home_generation() {
     let page = service.get_page(&PageRoute::Home).await.expect("home page");
     assert_eq!(page.id, "home");
     assert_eq!(page.title, "Home");
-    assert_eq!(page.sections.len(), 4);
+    assert_eq!(page.sections.len(), 2);
 
     // Section 0: Top Picks for You
-    assert_eq!(page.sections[0].id, "top-picks");
+    assert_eq!(page.sections[0].id, "group.top");
     assert_eq!(page.sections[0].title.as_deref(), Some("Top Picks for You"));
+    assert_eq!(
+        page.sections[0].presentation_hint.as_deref(),
+        Some("top-picks-shelf")
+    );
     assert_eq!(page.sections[0].items.len(), 1);
     assert_eq!(page.sections[0].items[0].id, "pl.fav");
-
-    // Section 1: Recently Played
-    assert_eq!(page.sections[1].id, "recently-played");
-    assert_eq!(page.sections[1].items.len(), 1);
-    assert_eq!(page.sections[1].items[0].id, "1440857781");
-
-    // Section 2: Recommendations
-    assert_eq!(page.sections[2].title.as_deref(), Some("Favorites Mix"));
-    assert_eq!(page.sections[2].items.len(), 1);
-    assert_eq!(page.sections[2].items[0].id, "pl.fav");
     assert_eq!(
-        page.sections[2].items[0].entity,
-        Some(MediaRef::Playlist("pl.fav".to_string()))
+        page.sections[0].items[0].tertiary_text.as_deref(),
+        Some("Your personalized favorites mix updated weekly.")
     );
 
-    // Section 3: Heavy Rotation
-    assert_eq!(page.sections[3].id, "heavy-rotation");
-    assert_eq!(page.sections[3].items.len(), 1);
-    assert_eq!(page.sections[3].items[0].id, "1440857780");
+    // Section 1: Recently Played
+    assert_eq!(page.sections[1].id, "group.recent");
+    assert_eq!(page.sections[1].title.as_deref(), Some("Recently Played"));
     assert_eq!(
-        page.sections[3].items[0].entity,
+        page.sections[1].subtitle.as_deref(),
+        Some("Based on your recent listening")
+    );
+    assert_eq!(page.sections[1].presentation_hint.as_deref(), Some("shelf"));
+    assert_eq!(page.sections[1].items.len(), 1);
+    assert_eq!(page.sections[1].items[0].id, "1440857780");
+    assert_eq!(
+        page.sections[1].items[0].entity,
         Some(MediaRef::Album("1440857780".to_string()))
     );
 
     // Page continuation
     assert!(page.continuation.is_some());
+}
+
+#[tokio::test]
+async fn test_apple_pages_search_landing_generation() {
+    let mock = Arc::new(MockAppleWebSession::new());
+    let (url, _shutdown) = spawn_mock_apple_api(vec![]).await;
+
+    let creds = AppleCredentials::new("dev", "user", "us");
+    let token_provider = Arc::new(StaticTokenProvider::new(creds));
+    let api = Arc::new(OfficialAppleMusicApi::with_base_url(token_provider, url));
+    let service = AppleService::with_session_and_api(mock, api);
+
+    let page = service
+        .get_page(&PageRoute::Search)
+        .await
+        .expect("search landing page");
+    assert_eq!(page.id, "search");
+    assert_eq!(page.title, "Search");
+    assert_eq!(page.subtitle.as_deref(), Some("Explore by Category"));
+    assert_eq!(page.sections.len(), 1);
+    assert_eq!(page.sections[0].id, "browse-categories");
+    assert_eq!(page.sections[0].title.as_deref(), Some("Browse Categories"));
+    assert!(!page.sections[0].items.is_empty());
+    assert_eq!(
+        page.sections[0].items[0].presentation_hint.as_deref(),
+        Some("category-brick")
+    );
+    assert!(page.sections[0].items[0].artwork.is_some());
+    assert!(page.sections[0].items[0].open_route.is_some());
+    assert!(page.sections[0].items[0].bg_color.is_some());
 }
 
 #[tokio::test]
@@ -1225,5 +1286,169 @@ async fn collection_play_sets_requested_shuffle_and_preserves_resource_identity(
     assert_eq!(
         *mock.last_played_track.lock().await,
         Some("p.actual".into())
+    );
+}
+
+#[tokio::test]
+async fn service_set_autoplay_updates_state() {
+    let mock = Arc::new(MockAppleWebSession::new());
+    let service = AppleService::with_session(mock.clone());
+    assert!(!*mock.autoplay.lock().await);
+    service.set_autoplay(true).await.unwrap();
+    assert!(*mock.autoplay.lock().await);
+    let status = service.get_status().await.unwrap();
+    assert!(status.autoplay);
+    service.set_autoplay(false).await.unwrap();
+    assert!(!*mock.autoplay.lock().await);
+}
+
+#[test]
+fn test_radio_editorial_groupings_and_live_stations() {
+    use malus_service::pages::groupings;
+    use serde_json::json;
+
+    let fixture = json!({
+        "data": [{ "id": "radio-root", "type": "groupings" }],
+        "resources": {
+            "groupings": {
+                "radio-root": {
+                    "id": "radio-root",
+                    "type": "groupings",
+                    "relationships": {
+                        "tabs": {
+                            "data": [{ "id": "radio-tab", "type": "editorial-elements" }]
+                        }
+                    }
+                }
+            },
+            "editorial-elements": {
+                "radio-tab": {
+                    "id": "radio-tab",
+                    "relationships": {
+                        "children": {
+                            "data": [
+                                { "id": "elem-live-radio", "type": "editorial-elements" },
+                                { "id": "elem-on-air-now", "type": "editorial-elements" }
+                            ]
+                        }
+                    }
+                },
+                "elem-live-radio": {
+                    "id": "elem-live-radio",
+                    "attributes": {},
+                    "relationships": {
+                        "contents": {
+                            "data": [
+                                { "id": "ra.978194965", "type": "stations" }
+                            ]
+                        }
+                    }
+                },
+                "elem-on-air-now": {
+                    "id": "elem-on-air-now",
+                    "attributes": {
+                        "title": "On Air Now"
+                    },
+                    "relationships": {
+                        "contents": {
+                            "data": [
+                                { "id": "ra.978194965", "type": "stations" }
+                            ]
+                        }
+                    }
+                }
+            },
+            "stations": {
+                "ra.978194965": {
+                    "id": "ra.978194965",
+                    "type": "stations",
+                    "attributes": {
+                        "name": "Apple Music 1",
+                        "isLive": true,
+                        "plainEditorialNotes": {
+                            "short": "Live Station",
+                            "tagline": "The new music that matters."
+                        },
+                        "artwork": {
+                            "url": "https://is1-ssl.mzstatic.com/image/thumb/Features/v4/source/{w}x{h}{c}.{f}",
+                            "width": 1000,
+                            "height": 1000
+                        }
+                    },
+                    "relationships": {
+                        "events": {
+                            "data": [
+                                { "id": "ra.978194965-0", "type": "station-events" }
+                            ]
+                        }
+                    }
+                }
+            },
+            "station-events": {
+                "ra.978194965-0": {
+                    "id": "ra.978194965-0",
+                    "type": "station-events",
+                    "attributes": {
+                        "title": "Rocket Hour",
+                        "description": {
+                            "standard": "The icon shares his favorite songs."
+                        },
+                        "heroArtwork": {
+                            "url": "https://is1-ssl.mzstatic.com/image/thumb/Show/v4/source/{w}x{h}{c}.{f}",
+                            "width": 2000,
+                            "height": 2000
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    let sections = groupings::map_groupings_response(&fixture, "radio");
+    assert_eq!(sections.len(), 2);
+
+    // Shelf 0: Live Radio (hero shelf)
+    let live_sec = &sections[0];
+    assert_eq!(live_sec.title.as_deref(), Some("Live Radio"));
+    assert_eq!(
+        live_sec.presentation_hint.as_deref(),
+        Some("live-stations-shelf")
+    );
+    assert_eq!(live_sec.items.len(), 1);
+    let live_station = &live_sec.items[0];
+    assert_eq!(live_station.title, "Apple Music 1");
+    assert_eq!(
+        live_station.entity,
+        Some(MediaRef::Station("ra.978194965".to_string()))
+    );
+    assert!(live_station.badges.iter().any(|b| b.label == "LIVE"));
+    assert_eq!(
+        live_station.artwork.as_ref().map(|a| a.url.as_str()),
+        Some("https://is1-ssl.mzstatic.com/image/thumb/Features/v4/source/600x600.jpg")
+    );
+
+    // Shelf 1: On Air Now
+    let on_air_sec = &sections[1];
+    assert_eq!(on_air_sec.title.as_deref(), Some("On Air Now"));
+    assert_eq!(
+        on_air_sec.presentation_hint.as_deref(),
+        Some("stations-shelf")
+    );
+    assert_eq!(on_air_sec.items.len(), 1);
+    let show_item = &on_air_sec.items[0];
+    assert_eq!(show_item.title, "Rocket Hour");
+    assert_eq!(show_item.tertiary_text.as_deref(), Some("APPLE MUSIC 1"));
+    assert_eq!(
+        show_item.subtitle.as_deref(),
+        Some("The icon shares his favorite songs.")
+    );
+    assert_eq!(
+        show_item.entity,
+        Some(MediaRef::Station("ra.978194965".to_string()))
+    );
+    assert!(show_item.badges.iter().any(|b| b.label == "LIVE"));
+    assert_eq!(
+        show_item.artwork.as_ref().map(|a| a.url.as_str()),
+        Some("https://is1-ssl.mzstatic.com/image/thumb/Show/v4/source/600x600.jpg")
     );
 }

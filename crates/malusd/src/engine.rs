@@ -7,7 +7,7 @@ use malus_ipc::{
     client::{ClientEvent, ClientRequest, ClientResponse},
     wire::{ActionResultWire, PageActionWire},
 };
-use malus_model::{MediaRef, PlaybackState, PlayerStatus, Queue};
+use malus_model::{MediaRef, PlaybackState, PlayerStatus, PresentationClock, Queue};
 use malus_service::AppleService;
 use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast, mpsc};
@@ -16,7 +16,7 @@ use tracing::info;
 #[derive(Debug, Clone)]
 pub struct MirroredPlayerState {
     pub status: PlayerStatus,
-    pub received_at: std::time::Instant,
+    pub clock: PresentationClock,
 }
 
 /// A bridge heartbeat arrives every ~1s. A sample older than this
@@ -25,27 +25,32 @@ const STALE_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(3);
 
 impl MirroredPlayerState {
     pub fn new(status: PlayerStatus) -> Self {
-        Self {
-            status,
-            received_at: std::time::Instant::now(),
-        }
+        Self::new_at(status, std::time::Instant::now())
+    }
+
+    pub fn new_at(status: PlayerStatus, at: std::time::Instant) -> Self {
+        let mut clock = PresentationClock::new();
+        clock.update_at(status.clone().into(), at);
+        Self { status, clock }
+    }
+
+    pub fn update(&mut self, status: PlayerStatus) {
+        self.clock.update(&status);
+        self.status = status;
     }
 
     /// Whether the cached sample is stale (bridge not delivering updates).
     pub fn is_stale(&self) -> bool {
-        self.received_at.elapsed() > STALE_THRESHOLD
+        if self.status.state == PlaybackState::Stopped {
+            return false;
+        }
+        self.clock
+            .is_stale_at(std::time::Instant::now(), STALE_THRESHOLD)
     }
 
     pub fn extrapolated_status(&self) -> PlayerStatus {
         let mut s = self.status.clone();
-        if s.state == PlaybackState::Playing && !self.is_stale() {
-            let elapsed_ms = self.received_at.elapsed().as_millis() as u64;
-            let mut pos = s.position_ms + elapsed_ms;
-            if s.duration_ms > 0 && pos > s.duration_ms {
-                pos = s.duration_ms;
-            }
-            s.position_ms = pos;
-        }
+        s.position_ms = self.clock.position_ms();
         s
     }
 }
@@ -101,10 +106,41 @@ impl Engine {
     /// Initialize the engine with an explicit AppleService instance (test seam).
     pub fn with_apple(apple: Arc<AppleService>) -> Self {
         let (event_tx, _) = broadcast::channel(128);
-        let mirrored_player = Arc::new(RwLock::new(None));
+        let mirrored_player: Arc<RwLock<Option<MirroredPlayerState>>> = Arc::new(RwLock::new(None));
         let mirrored_queue = Arc::new(RwLock::new(Queue::new()));
         let queue_context = Arc::new(RwLock::new(QueueContext::default()));
         let playback_mutex = Arc::new(tokio::sync::Mutex::new(()));
+
+        // Fetch recently played track from Apple Music to seed player bar in stopped state
+        let apple_init = apple.clone();
+        let mirrored_init = mirrored_player.clone();
+        let event_tx_init = event_tx.clone();
+        tokio::spawn(async move {
+            match apple_init.get_recently_played_track().await {
+                Ok(Some(track)) => {
+                    let mut guard = mirrored_init.write().await;
+                    if guard
+                        .as_ref()
+                        .and_then(|m| m.status.current_track.as_ref())
+                        .is_none()
+                    {
+                        let duration_ms = track.duration_ms.unwrap_or(0);
+                        let status = PlayerStatus {
+                            current_track: Some(track),
+                            duration_ms,
+                            ..Default::default()
+                        };
+                        *guard = Some(MirroredPlayerState::new(status.clone()));
+                        drop(guard);
+                        let _ = event_tx_init.send(ClientEvent::StatusChanged(status));
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::debug!("Could not fetch recently played track on startup: {e}");
+                }
+            }
+        });
 
         // Wire status events from Apple runtime directly into daemon
         let (status_tx, mut status_rx) = mpsc::unbounded_channel();
@@ -117,8 +153,13 @@ impl Engine {
             while let Some(event) = status_rx.recv().await {
                 match event {
                     malus_service::PlaybackEvent::Status(status) => {
-                        *mirrored_clone.write().await =
-                            Some(MirroredPlayerState::new(status.clone()));
+                        let mut guard = mirrored_clone.write().await;
+                        if let Some(ref mut state) = *guard {
+                            state.update(status.clone());
+                        } else {
+                            *guard = Some(MirroredPlayerState::new(status.clone()));
+                        }
+                        drop(guard);
                         let _ = event_tx_clone.send(ClientEvent::StatusChanged(status));
                     }
                     malus_service::PlaybackEvent::Queue(queue) => {
@@ -126,6 +167,7 @@ impl Engine {
                         let _ = event_tx_clone.send(ClientEvent::QueueChanged(queue));
                     }
                     malus_service::PlaybackEvent::Error { source, message } => {
+                        tracing::error!("[playback_error] source={source} message={message}");
                         let _ = event_tx_clone.send(ClientEvent::PlaybackError { source, message });
                     }
                 }
@@ -149,7 +191,11 @@ impl Engine {
 
     pub async fn update_mirrored_status(&self, status: PlayerStatus) {
         let mut guard = self.mirrored_player.write().await;
-        *guard = Some(MirroredPlayerState::new(status));
+        if let Some(ref mut state) = *guard {
+            state.update(status);
+        } else {
+            *guard = Some(MirroredPlayerState::new(status));
+        }
     }
 
     pub async fn update_mirrored_queue(&self, queue: Queue) {
@@ -335,6 +381,8 @@ impl Engine {
 
             ClientRequest::AuthLogout => match self.apple.auth_logout().await {
                 Ok(status) => {
+                    *self.mirrored_player.write().await = None;
+                    self.emit(ClientEvent::StatusChanged(PlayerStatus::default()));
                     self.emit(ClientEvent::AuthChanged(status.clone()));
                     ClientResponse::AuthStatus(status)
                 }
@@ -503,13 +551,20 @@ impl Engine {
                 kinds,
                 limit,
                 cursor,
+                scope,
             } => {
-                let limit = limit.unwrap_or(20);
-                match self
-                    .apple
-                    .search(&query, &kinds, limit, cursor.as_deref())
-                    .await
-                {
+                let limit = limit.unwrap_or(25);
+                let is_library = scope == Some(malus_ipc::wire::SearchScopeWire::Library);
+                let res = if is_library {
+                    self.apple
+                        .search_library(&query, &kinds, limit, cursor.as_deref())
+                        .await
+                } else {
+                    self.apple
+                        .search(&query, &kinds, limit, cursor.as_deref())
+                        .await
+                };
+                match res {
                     Ok(results) => ClientResponse::SearchResults(results),
                     Err(e) => ClientResponse::err("SEARCH_FAILED", e.to_string()),
                 }
@@ -552,11 +607,54 @@ impl Engine {
 
             ClientRequest::Play => {
                 let _lock = self.playback_mutex.lock().await;
-                match self.apple.resume().await {
+                let (current_state, track_ref) = {
+                    let guard = self.mirrored_player.read().await;
+                    let state = guard
+                        .as_ref()
+                        .map(|m| m.status.state)
+                        .unwrap_or(PlaybackState::Stopped);
+                    let tr = guard
+                        .as_ref()
+                        .and_then(|m| m.status.current_track.as_ref())
+                        .map(|t| t.id.clone());
+                    (state, tr)
+                };
+
+                // When stopped, MusicKit queue is empty — resume would be
+                // a no-op / silent failure. Load the mirrored track directly.
+                let loaded_from_stopped =
+                    current_state == PlaybackState::Stopped && track_ref.is_some();
+                let res = if loaded_from_stopped {
+                    self.apple.play(track_ref.as_ref().unwrap()).await
+                } else if current_state == PlaybackState::Paused {
+                    let resume_res = self.apple.resume().await;
+                    if resume_res.is_err() {
+                        if let Some(ref reference) = track_ref {
+                            self.apple.play(reference).await
+                        } else {
+                            resume_res
+                        }
+                    } else {
+                        resume_res
+                    }
+                } else {
+                    self.apple.resume().await
+                };
+
+                match res {
                     Ok(()) => {
                         if let Ok(status) = self.apple.get_status().await {
-                            self.update_mirrored_status(status.clone()).await;
-                            self.emit(ClientEvent::StatusChanged(status));
+                            // Guard: don't overwrite a known mirrored track
+                            // with a transient empty snapshot right after
+                            // loading a track into MusicKit.
+                            if status.current_track.is_some() || !loaded_from_stopped {
+                                self.update_mirrored_status(status.clone()).await;
+                                self.emit(ClientEvent::StatusChanged(status));
+                            }
+                        }
+                        if loaded_from_stopped && let Ok(queue) = self.apple.get_queue().await {
+                            self.update_mirrored_queue(queue.clone()).await;
+                            self.emit(ClientEvent::QueueChanged(queue));
                         }
                         ClientResponse::Ok
                     }
@@ -623,37 +721,81 @@ impl Engine {
 
             ClientRequest::TogglePlay => {
                 let _lock = self.playback_mutex.lock().await;
-                let current_state = {
+                let (current_state, track_ref) = {
                     let guard = self.mirrored_player.read().await;
                     if let Some(m) = guard.as_ref().filter(|m| !m.is_stale()) {
-                        m.status.state
+                        (
+                            m.status.state,
+                            m.status.current_track.as_ref().map(|t| t.id.clone()),
+                        )
                     } else {
                         drop(guard);
                         match self.apple.get_status().await {
                             Ok(status) => {
-                                self.update_mirrored_status(status.clone()).await;
-                                status.state
+                                let state = status.state;
+                                let tr = status.current_track.as_ref().map(|t| t.id.clone());
+                                self.update_mirrored_status(status).await;
+                                (state, tr)
                             }
-                            Err(_) => PlaybackState::Stopped,
+                            Err(_) => (PlaybackState::Stopped, None),
                         }
                     }
                 };
 
-                let res = if current_state == PlaybackState::Playing {
-                    self.apple.pause().await
+                if current_state == PlaybackState::Playing {
+                    // ── Pause path ──
+                    match self.apple.pause().await {
+                        Ok(()) => {
+                            if let Ok(status) = self.apple.get_status().await {
+                                self.update_mirrored_status(status.clone()).await;
+                                self.emit(ClientEvent::StatusChanged(status));
+                            }
+                            ClientResponse::Ok
+                        }
+                        Err(e) => ClientResponse::err("TOGGLE_FAILED", e.to_string()),
+                    }
                 } else {
-                    self.apple.resume().await
-                };
-
-                match res {
-                    Ok(()) => {
-                        if let Ok(status) = self.apple.get_status().await {
-                            self.update_mirrored_status(status.clone()).await;
-                            self.emit(ClientEvent::StatusChanged(status));
+                    // ── Play / resume path ──
+                    // When stopped, MusicKit queue is empty — resume would be
+                    // a no-op / silent failure. Load the mirrored track directly.
+                    let loaded_from_stopped =
+                        current_state == PlaybackState::Stopped && track_ref.is_some();
+                    let res = if loaded_from_stopped {
+                        self.apple.play(track_ref.as_ref().unwrap()).await
+                    } else if current_state == PlaybackState::Paused {
+                        let resume_res = self.apple.resume().await;
+                        if resume_res.is_err() {
+                            if let Some(ref reference) = track_ref {
+                                self.apple.play(reference).await
+                            } else {
+                                resume_res
+                            }
+                        } else {
+                            resume_res
                         }
-                        ClientResponse::Ok
+                    } else {
+                        self.apple.resume().await
+                    };
+
+                    match res {
+                        Ok(()) => {
+                            if let Ok(status) = self.apple.get_status().await {
+                                // Guard: don't overwrite a known mirrored track
+                                // with a transient empty snapshot right after
+                                // loading a track into MusicKit.
+                                if status.current_track.is_some() || !loaded_from_stopped {
+                                    self.update_mirrored_status(status.clone()).await;
+                                    self.emit(ClientEvent::StatusChanged(status));
+                                }
+                            }
+                            if loaded_from_stopped && let Ok(queue) = self.apple.get_queue().await {
+                                self.update_mirrored_queue(queue.clone()).await;
+                                self.emit(ClientEvent::QueueChanged(queue));
+                            }
+                            ClientResponse::Ok
+                        }
+                        Err(e) => ClientResponse::err("TOGGLE_FAILED", e.to_string()),
                     }
-                    Err(e) => ClientResponse::err("TOGGLE_FAILED", e.to_string()),
                 }
             }
 
@@ -740,6 +882,17 @@ impl Engine {
                 self.finish_player_setting(self.apple.set_repeat(repeat).await)
                     .await
             }
+            ClientRequest::SetAutoplay { autoplay } => {
+                let _lock = self.playback_mutex.lock().await;
+                let res = self
+                    .finish_player_setting(self.apple.set_autoplay(autoplay).await)
+                    .await;
+                if let Ok(queue) = self.apple.get_queue().await {
+                    *self.mirrored_queue.write().await = queue.clone();
+                    self.emit(ClientEvent::QueueChanged(queue));
+                }
+                res
+            }
 
             ClientRequest::GetStatus => {
                 // Use cached status if fresh; fall through to live query if stale.
@@ -756,9 +909,38 @@ impl Engine {
                 } else {
                     match self.apple.get_status().await {
                         Ok(status) => {
-                            self.update_mirrored_status(status.clone()).await;
-                            self.emit(ClientEvent::StatusChanged(status.clone()));
-                            ClientResponse::Status(status)
+                            if status.current_track.is_some() {
+                                self.update_mirrored_status(status.clone()).await;
+                                self.emit(ClientEvent::StatusChanged(status.clone()));
+                                ClientResponse::Status(status)
+                            } else {
+                                // MusicKit is dormant / no active track.
+                                let existing = {
+                                    let guard = self.mirrored_player.read().await;
+                                    guard.as_ref().map(|m| m.status.clone())
+                                };
+                                if let Some(existing) = existing {
+                                    ClientResponse::Status(existing)
+                                } else {
+                                    match self.apple.get_recently_played_track().await {
+                                        Ok(Some(track)) => {
+                                            let duration_ms = track.duration_ms.unwrap_or(0);
+                                            let status = PlayerStatus {
+                                                current_track: Some(track),
+                                                duration_ms,
+                                                ..Default::default()
+                                            };
+                                            self.update_mirrored_status(status.clone()).await;
+                                            self.emit(ClientEvent::StatusChanged(status.clone()));
+                                            ClientResponse::Status(status)
+                                        }
+                                        _ => {
+                                            self.update_mirrored_status(status.clone()).await;
+                                            ClientResponse::Status(status)
+                                        }
+                                    }
+                                }
+                            }
                         }
                         Err(error) => ClientResponse::err("STATUS_FAILED", error.to_string()),
                     }
@@ -936,7 +1118,17 @@ impl Engine {
                     .create_playlist(&name, description.as_deref(), &initial_tracks)
                     .await
                 {
-                    Ok(playlist) => ClientResponse::Playlist(playlist),
+                    Ok(playlist) => {
+                        self.emit(ClientEvent::MediaStateChanged(
+                            malus_model::AccountMediaState::new(
+                                playlist.id.clone(),
+                                true,
+                                false,
+                                malus_model::Rating::Neutral,
+                            ),
+                        ));
+                        ClientResponse::Playlist(playlist)
+                    }
                     Err(e) => ClientResponse::err("CREATE_PLAYLIST_FAILED", e.to_string()),
                 }
             }
@@ -980,7 +1172,17 @@ impl Engine {
 
             ClientRequest::DeletePlaylist { playlist } => {
                 match self.apple.delete_playlist(&playlist).await {
-                    Ok(()) => ClientResponse::Ok,
+                    Ok(()) => {
+                        self.emit(ClientEvent::MediaStateChanged(
+                            malus_model::AccountMediaState::new(
+                                playlist,
+                                false,
+                                false,
+                                malus_model::Rating::Neutral,
+                            ),
+                        ));
+                        ClientResponse::Ok
+                    }
                     Err(e) => ClientResponse::err("DELETE_PLAYLIST_FAILED", e.to_string()),
                 }
             }
@@ -1012,6 +1214,9 @@ mod tests {
             muted: false,
             shuffle: false,
             repeat: RepeatMode::Off,
+            autoplay: false,
+            timeline_id: 1,
+            sequence: 1,
         }
     }
 
@@ -1025,15 +1230,18 @@ mod tests {
             muted: false,
             shuffle: false,
             repeat: RepeatMode::Off,
+            autoplay: false,
+            timeline_id: 1,
+            sequence: 1,
         }
     }
 
     #[test]
     fn fresh_playing_extrapolates() {
-        let state = MirroredPlayerState {
-            status: playing_status(5000, 200000),
-            received_at: Instant::now() - Duration::from_millis(500),
-        };
+        let state = MirroredPlayerState::new_at(
+            playing_status(5000, 200000),
+            Instant::now() - Duration::from_millis(500),
+        );
         assert!(!state.is_stale());
         let ext = state.extrapolated_status();
         assert_eq!(ext.state, PlaybackState::Playing);
@@ -1042,24 +1250,24 @@ mod tests {
     }
 
     #[test]
-    fn stale_playing_does_not_extrapolate() {
-        let state = MirroredPlayerState {
-            status: playing_status(5000, 200000),
-            received_at: Instant::now() - Duration::from_secs(5),
-        };
+    fn stale_playing_freezes_at_staleness_threshold() {
+        let state = MirroredPlayerState::new_at(
+            playing_status(5000, 200000),
+            Instant::now() - Duration::from_secs(5),
+        );
         assert!(state.is_stale());
         let ext = state.extrapolated_status();
-        // State still reports Playing, but position is frozen at the raw value
+        // State still reports Playing, but position is frozen at the staleness threshold without snapping backward
         assert_eq!(ext.state, PlaybackState::Playing);
-        assert_eq!(ext.position_ms, 5000);
+        assert_eq!(ext.position_ms, 8000);
     }
 
     #[test]
     fn paused_does_not_extrapolate() {
-        let state = MirroredPlayerState {
-            status: paused_status(5000, 200000),
-            received_at: Instant::now() - Duration::from_millis(500),
-        };
+        let state = MirroredPlayerState::new_at(
+            paused_status(5000, 200000),
+            Instant::now() - Duration::from_millis(500),
+        );
         let ext = state.extrapolated_status();
         assert_eq!(ext.state, PlaybackState::Paused);
         assert_eq!(ext.position_ms, 5000);
@@ -1067,10 +1275,10 @@ mod tests {
 
     #[test]
     fn extrapolation_capped_at_duration() {
-        let state = MirroredPlayerState {
-            status: playing_status(199500, 200000),
-            received_at: Instant::now() - Duration::from_secs(2),
-        };
+        let state = MirroredPlayerState::new_at(
+            playing_status(199500, 200000),
+            Instant::now() - Duration::from_secs(2),
+        );
         assert!(!state.is_stale());
         let ext = state.extrapolated_status();
         assert_eq!(ext.position_ms, 200000); // Capped at duration
@@ -1079,16 +1287,16 @@ mod tests {
     #[test]
     fn stale_threshold_boundary() {
         // Exactly at 3s — should still be within tolerance
-        let just_under = MirroredPlayerState {
-            status: playing_status(1000, 200000),
-            received_at: Instant::now() - Duration::from_millis(2999),
-        };
+        let just_under = MirroredPlayerState::new_at(
+            playing_status(1000, 200000),
+            Instant::now() - Duration::from_millis(2900),
+        );
         assert!(!just_under.is_stale());
 
-        let just_over = MirroredPlayerState {
-            status: playing_status(1000, 200000),
-            received_at: Instant::now() - Duration::from_millis(3001),
-        };
+        let just_over = MirroredPlayerState::new_at(
+            playing_status(1000, 200000),
+            Instant::now() - Duration::from_millis(3100),
+        );
         assert!(just_over.is_stale());
     }
 }

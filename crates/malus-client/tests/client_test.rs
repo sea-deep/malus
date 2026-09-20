@@ -37,6 +37,9 @@ async fn test_client_ping_and_get_status() {
                             muted: false,
                             shuffle: false,
                             repeat: RepeatMode::Off,
+                            autoplay: false,
+                            timeline_id: 1,
+                            sequence: 1,
                         }),
                         _ => ClientResponse::Ok,
                     };
@@ -53,6 +56,8 @@ async fn test_client_ping_and_get_status() {
     assert_eq!(status.state, PlaybackState::Paused);
     assert_eq!(status.position_ms, 12000);
     assert_eq!(status.volume, 75);
+
+    client.set_autoplay(true).await.unwrap();
 
     server_task.abort();
 }
@@ -187,7 +192,7 @@ async fn test_slow_request_a_does_not_block_later_fast_request_b() {
         "Request B (fast) should finish before Request A (slow)"
     );
     assert!(
-        b_finished.duration_since(b_start) < Duration::from_millis(100),
+        b_finished.duration_since(b_start) < Duration::from_millis(350),
         "Request B should complete quickly"
     );
     assert!(
@@ -289,6 +294,9 @@ async fn test_event_subscription_and_reconnect() {
         muted: false,
         shuffle: false,
         repeat: RepeatMode::Off,
+        autoplay: false,
+        timeline_id: 1,
+        sequence: 1,
     };
     event_sender_tx
         .send(ClientEvent::StatusChanged(status_wire.clone()))

@@ -18,6 +18,12 @@ pub struct PlayerStatus {
     pub muted: bool,
     pub shuffle: bool,
     pub repeat: RepeatMode,
+    #[serde(default)]
+    pub autoplay: bool,
+    #[serde(default)]
+    pub timeline_id: u64,
+    #[serde(default)]
+    pub sequence: u64,
 }
 
 impl Default for PlayerStatus {
@@ -31,6 +37,9 @@ impl Default for PlayerStatus {
             muted: false,
             shuffle: false,
             repeat: RepeatMode::Off,
+            autoplay: false,
+            timeline_id: 0,
+            sequence: 0,
         }
     }
 }
@@ -68,5 +77,11 @@ impl PlayerStatus {
             self.position_ms = 0;
         }
         self.current_track = track;
+    }
+
+    pub fn with_timeline(mut self, timeline_id: u64, sequence: u64) -> Self {
+        self.timeline_id = timeline_id;
+        self.sequence = sequence;
+        self
     }
 }

@@ -91,6 +91,7 @@ pub enum AppInput {
     CloseNowPlaying,
     BrowseTransitionFinished,
     ToggleNowPlayingLyrics,
+    ToggleNowPlayingQueue,
     Player(PlayerCommand),
     Tick,
     TogglePlayback,
@@ -117,6 +118,8 @@ pub enum AppInput {
         expected_track: MediaRef,
     },
     ReloadFeed,
+    ReloadPlaylists,
+    CopyLink(String),
 }
 
 #[derive(Debug)]
@@ -152,7 +155,7 @@ impl Component for MalusApp {
         #[root]
         adw::ApplicationWindow {
             set_default_size: (1180, 780),
-            set_size_request: (560, 560),
+            set_size_request: (560, 320),
             set_title: Some("Malus"),
             add_css_class: "malus-window",
 
@@ -169,7 +172,7 @@ impl Component for MalusApp {
                         set_show_title: true,
                         #[wrap(Some)]
                         set_title_widget = &gtk::Label {
-                            set_text: "MALUS  /  APPLE MUSIC",
+                            set_text: "Malus",
                             add_css_class: "navigation-title",
                         },
 
@@ -177,6 +180,7 @@ impl Component for MalusApp {
                             add_css_class: "flat",
                             set_icon_name: ICON_SIDEBAR_TOGGLE,
                             set_tooltip_text: Some("Toggle Sidebar (Ctrl+B)"),
+                            set_focus_on_click: false,
                             connect_clicked => AppInput::ToggleSidebar,
                         },
 
@@ -184,6 +188,7 @@ impl Component for MalusApp {
                             add_css_class: "flat",
                             set_icon_name: ICON_BACK,
                             set_tooltip_text: Some("Back (Alt+Left)"),
+                            set_focus_on_click: false,
                             #[watch]
                             set_sensitive: model.history.can_go_back(),
                             connect_clicked => AppInput::GoBack,
@@ -193,6 +198,7 @@ impl Component for MalusApp {
                             add_css_class: "flat",
                             set_icon_name: ICON_FORWARD,
                             set_tooltip_text: Some("Forward (Alt+Right)"),
+                            set_focus_on_click: false,
                             #[watch]
                             set_sensitive: model.history.can_go_forward(),
                             connect_clicked => AppInput::GoForward,
@@ -233,8 +239,7 @@ impl Component for MalusApp {
                             set_content = &adw::OverlaySplitView {
                                 set_sidebar_position: gtk::PackType::End,
                                 set_min_sidebar_width: UTILITY_PANE_MIN_WIDTH,
-                                set_max_sidebar_width: UTILITY_PANE_MAX_WIDTH,
-                                set_sidebar_width_fraction: 0.22,
+                                set_max_sidebar_width: UTILITY_PANE_WIDTH,
                                 set_collapsed: false,
                                 set_show_sidebar: false,
 
@@ -279,7 +284,7 @@ impl Component for MalusApp {
                 .and_then(|v| v.parse::<i32>().ok())
                 .unwrap_or(780);
             root.set_default_size(w, h);
-            root.set_size_request(w, h);
+            root.set_size_request(w.min(560), h.min(320));
         }
 
         let artwork_service = ArtworkService::new();
@@ -305,6 +310,8 @@ impl Component for MalusApp {
                     track_index,
                     expected_track,
                 },
+                ActionMenuCommand::Navigate(r) => AppInput::Navigate(AppDestination::Page(r)),
+                ActionMenuCommand::CopyLink(u) => AppInput::CopyLink(u),
             })
         });
         let s_open = sender.clone();
@@ -386,6 +393,7 @@ impl Component for MalusApp {
                     track_index,
                     expected_track,
                 },
+                FeedOutput::CopyLink(url) => AppInput::CopyLink(url),
             });
 
         let search_page = SearchPage::builder()
@@ -396,18 +404,25 @@ impl Component for MalusApp {
                 SearchOutput::Action(a) => AppInput::InvokeAction(a),
                 SearchOutput::ViewCredits(r) => AppInput::ViewCredits(r),
                 SearchOutput::ShowAddToPlaylist(r) => AppInput::ShowAddToPlaylist(r),
+                SearchOutput::CopyLink(url) => AppInput::CopyLink(url),
             });
 
         let s_close = sender.clone();
         let s_lyrics = sender.clone();
         let s_queue = sender.clone();
+        let s_player = sender.clone();
+        let s_nav = sender.clone();
         let now_playing_page = NowPlayingPage::new(
+            client.clone(),
+            artwork_service.clone(),
             &player,
             &command,
             &menu,
             move || s_close.input(AppInput::CloseNowPlaying),
             move || s_lyrics.input(AppInput::ToggleNowPlayingLyrics),
-            move || s_queue.input(AppInput::ToggleQueue),
+            move || s_queue.input(AppInput::ToggleNowPlayingQueue),
+            move || s_player.input(AppInput::OpenNowPlaying(NowPlayingMode::Player)),
+            move |dest| s_nav.input(AppInput::Navigate(dest)),
         );
         let (volume_tx, mut volume_rx) = tokio::sync::watch::channel(None::<u8>);
         let c = client.clone();
@@ -452,6 +467,8 @@ impl Component for MalusApp {
             now_playing_page,
             settings_page,
         };
+
+        model.refresh_player();
 
         // Subscribe to authoritative background daemon events
         let client_events = client.clone();
@@ -538,33 +555,50 @@ impl Component for MalusApp {
                 }
             });
 
-        // Breakpoints remove the wide layout's minimum-size feedback loop, so
-        // tiled compositors can allocate the real window width before adapting.
-        for (condition, collapse_navigation) in
-            [("max-width: 1249px", false), ("max-width: 859px", true)]
-        {
-            let breakpoint = adw::Breakpoint::new(
-                adw::BreakpointCondition::parse(condition).expect("constant breakpoint"),
-            );
-            breakpoint.add_setter(
-                &widgets.inner_split_view,
-                "collapsed",
-                Some(&true.to_value()),
-            );
-            if collapse_navigation {
-                breakpoint.add_setter(
-                    &widgets.outer_split_view,
-                    "collapsed",
-                    Some(&true.to_value()),
-                );
-                breakpoint.add_setter(
-                    &widgets.outer_split_view,
-                    "show-sidebar",
-                    Some(&false.to_value()),
-                );
-            }
-            root.add_breakpoint(breakpoint);
-        }
+        // Responsive breakpoint to collapse utility pane (lyrics/queue) to an overlay when window width <= 1040px
+        let utility_breakpoint = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
+            adw::BreakpointConditionLengthType::MaxWidth,
+            1040.0,
+            adw::LengthUnit::Px,
+        ));
+        utility_breakpoint.add_setter(
+            &widgets.inner_split_view,
+            "collapsed",
+            Some(&true.to_value()),
+        );
+        root.add_breakpoint(utility_breakpoint);
+
+        // Responsive breakpoint to collapse navigation sidebar when the window becomes narrow.
+        let nav_breakpoint = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
+            adw::BreakpointConditionLengthType::MaxWidth,
+            BREAKPOINT_COLLAPSE_NAVIGATION,
+            adw::LengthUnit::Px,
+        ));
+        nav_breakpoint.add_setter(
+            &widgets.outer_split_view,
+            "collapsed",
+            Some(&true.to_value()),
+        );
+        nav_breakpoint.add_setter(
+            &widgets.outer_split_view,
+            "show-sidebar",
+            Some(&false.to_value()),
+        );
+        nav_breakpoint.add_setter(
+            &widgets.inner_split_view,
+            "collapsed",
+            Some(&true.to_value()),
+        );
+        root.add_breakpoint(nav_breakpoint);
+
+        let s_utility = sender.clone();
+        widgets
+            .inner_split_view
+            .connect_show_sidebar_notify(move |view| {
+                if !view.shows_sidebar() {
+                    s_utility.input(AppInput::CloseUtility);
+                }
+            });
 
         if let Ok(w_str) = std::env::var("MALUS_WINDOW_WIDTH")
             && let Ok(w) = w_str.parse::<i32>()
@@ -583,6 +617,8 @@ impl Component for MalusApp {
                 sender.input(AppInput::OpenNowPlaying(NowPlayingMode::Player));
             } else if route_str == "nowplaying:lyrics" {
                 sender.input(AppInput::OpenNowPlaying(NowPlayingMode::Lyrics));
+            } else if route_str == "nowplaying:queue" {
+                sender.input(AppInput::OpenNowPlaying(NowPlayingMode::Queue));
             } else if let Some(q) = route_str.strip_prefix("search:") {
                 sender.input(AppInput::Navigate(AppDestination::Search(q.to_string())));
             }
@@ -611,13 +647,14 @@ impl Component for MalusApp {
 
         // Global keyboard shortcuts with input-focus safety
         let event_ctrl = gtk::EventControllerKey::new();
+        event_ctrl.set_propagation_phase(gtk::PropagationPhase::Capture);
         let s_key = sender.clone();
         let r_key = root.clone();
         event_ctrl.connect_key_pressed(move |_ctrl, keyval, _code, modifier| {
             let focus = gtk::prelude::GtkWindowExt::focus(&r_key);
             let is_editing = focus
                 .as_ref()
-                .map(|w| w.is::<gtk::Editable>() || w.is::<gtk::TextView>())
+                .map(|w| w.is::<gtk::Editable>() || w.is::<gtk::TextView>() || w.is::<gtk::Text>())
                 .unwrap_or(false);
 
             if modifier.contains(gtk::gdk::ModifierType::CONTROL_MASK) {
@@ -642,6 +679,18 @@ impl Component for MalusApp {
                     s_key.input(AppInput::GoForward);
                     return gtk::glib::Propagation::Stop;
                 }
+            } else if keyval == gtk::gdk::Key::AudioPlay || keyval == gtk::gdk::Key::AudioPause {
+                s_key.input(AppInput::TogglePlayback);
+                return gtk::glib::Propagation::Stop;
+            } else if keyval == gtk::gdk::Key::AudioNext {
+                s_key.input(AppInput::Player(PlayerCommand::Next));
+                return gtk::glib::Propagation::Stop;
+            } else if keyval == gtk::gdk::Key::AudioPrev {
+                s_key.input(AppInput::Player(PlayerCommand::Previous));
+                return gtk::glib::Propagation::Stop;
+            } else if keyval == gtk::gdk::Key::AudioStop {
+                s_key.input(AppInput::Player(PlayerCommand::Pause));
+                return gtk::glib::Propagation::Stop;
             } else if !is_editing && keyval == gtk::gdk::Key::space {
                 s_key.input(AppInput::TogglePlayback);
                 return gtk::glib::Propagation::Stop;
@@ -734,7 +783,11 @@ impl Component for MalusApp {
                 }
                 widgets.shell_stack.set_visible_child_name("browse");
                 widgets.outer_split_view.set_show_sidebar(true);
-                self.sidebar.emit(SidebarInput::FocusSearch);
+                if self.history.current() == &AppDestination::Page(PageRoute::Search) {
+                    self.search_page.emit(SearchInput::FocusSearch);
+                } else {
+                    sender.input(AppInput::Navigate(AppDestination::Page(PageRoute::Search)));
+                }
             }
             AppInput::ShowToast(message) => {
                 widgets.toast_overlay.add_toast(adw::Toast::new(&message));
@@ -758,6 +811,7 @@ impl Component for MalusApp {
                         s.input(AppInput::ShowToast(format!("Playback failed: {e}")));
                     }
                 });
+                self.now_playing_page.reload_queue();
                 self.utility_pane.reload_queue();
             }
             AppInput::PlayTrack {
@@ -775,9 +829,18 @@ impl Component for MalusApp {
                         s.input(AppInput::ShowToast(format!("Playback failed: {e}")));
                     }
                 });
+                self.now_playing_page.reload_queue();
                 self.utility_pane.reload_queue();
             }
+            AppInput::ReloadPlaylists => {
+                self.sidebar.emit(SidebarInput::ReloadPlaylists);
+            }
             AppInput::InvokeAction(action) => {
+                let is_playlist_mutation = matches!(
+                    &action,
+                    PageActionWire::AddToLibrary(MediaRef::Playlist(_))
+                        | PageActionWire::RemoveFromLibrary(MediaRef::Playlist(_))
+                );
                 let c = self.client.clone();
                 let s = sender.clone();
                 relm4::spawn(async move {
@@ -785,6 +848,10 @@ impl Component for MalusApp {
                         Ok(res) => {
                             if let Some(msg) = res.message {
                                 s.input(AppInput::ShowToast(msg));
+                            }
+                            if is_playlist_mutation {
+                                s.input(AppInput::ReloadPlaylists);
+                                s.input(AppInput::ReloadFeed);
                             }
                         }
                         Err(e) => {
@@ -826,6 +893,7 @@ impl Component for MalusApp {
                             "Created playlist “{}”",
                             pl.title
                         )));
+                        s.input(AppInput::ReloadPlaylists);
                         s.input(AppInput::Navigate(AppDestination::Page(
                             PageRoute::Playlist(pl.id.id().to_string()),
                         )));
@@ -846,6 +914,7 @@ impl Component for MalusApp {
                     current_desc.as_deref(),
                     move |name, _desc| {
                         s.input(AppInput::ShowToast(format!("Updated “{name}”")));
+                        s.input(AppInput::ReloadPlaylists);
                         s.input(AppInput::ReloadFeed);
                     },
                 );
@@ -862,6 +931,7 @@ impl Component for MalusApp {
                     &playlist_title,
                     move || {
                         s.input(AppInput::ShowToast("Deleted playlist".to_string()));
+                        s.input(AppInput::ReloadPlaylists);
                         s.input(AppInput::Navigate(AppDestination::Page(
                             PageRoute::LibraryPlaylists,
                         )));
@@ -901,6 +971,10 @@ impl Component for MalusApp {
                 self.now_playing_page
                     .set_artwork(self.current_artwork.as_deref());
                 widgets.shell_stack.set_visible_child_name("now_playing");
+                if mode == NowPlayingMode::Queue {
+                    self.now_playing_page.reload_queue();
+                    self.now_playing_page.scroll_to_now_playing();
+                }
             }
             AppInput::CloseNowPlaying => {
                 self.now_playing_mode = None;
@@ -919,6 +993,14 @@ impl Component for MalusApp {
                     NowPlayingMode::Player
                 } else {
                     NowPlayingMode::Lyrics
+                };
+                sender.input(AppInput::OpenNowPlaying(mode));
+            }
+            AppInput::ToggleNowPlayingQueue => {
+                let mode = if self.now_playing_mode == Some(NowPlayingMode::Queue) {
+                    NowPlayingMode::Player
+                } else {
+                    NowPlayingMode::Queue
                 };
                 sender.input(AppInput::OpenNowPlaying(mode));
             }
@@ -955,6 +1037,10 @@ impl Component for MalusApp {
                         s.input(AppInput::ShowToast(format!("Playback error: {e}")));
                     }
                 });
+            }
+            AppInput::CopyLink(url) => {
+                widgets.top_header_bar.clipboard().set_text(&url);
+                sender.input(AppInput::ShowToast("Link copied to clipboard".to_string()));
             }
         }
         self.update_view(widgets, sender);
@@ -1000,7 +1086,10 @@ impl Component for MalusApp {
             }
             AppCmd::DaemonEvent(ev) => match ev {
                 ClientEvent::StatusChanged(status) => self.receive_status(status, &sender),
-                ClientEvent::QueueChanged(queue) => self.utility_pane.set_queue(queue),
+                ClientEvent::QueueChanged(queue) => {
+                    self.now_playing_page.set_queue(queue.clone());
+                    self.utility_pane.set_queue(queue);
+                }
                 ClientEvent::MediaStateChanged(media_state) => {
                     self.feed_page
                         .emit(FeedInput::MediaState(media_state.clone()));
@@ -1011,6 +1100,9 @@ impl Component for MalusApp {
                         .now
                         .update_media_state(&media_state);
                     self.refresh_player();
+                    if matches!(media_state.reference, MediaRef::Playlist(_)) {
+                        self.sidebar.emit(SidebarInput::ReloadPlaylists);
+                    }
                 }
                 ClientEvent::AuthChanged(_) => {
                     self.settings_page.emit(SettingsInput::Reload);
@@ -1029,6 +1121,7 @@ impl Component for MalusApp {
             }
             AppCmd::InitialQueue(queue) => {
                 if let Some(queue) = queue {
+                    self.now_playing_page.set_queue(queue.clone());
                     self.utility_pane.set_queue(queue);
                 }
             }
@@ -1060,6 +1153,9 @@ impl Component for MalusApp {
                 if generation == self.player.borrow().lyrics.generation
                     && let Some(state) = state
                 {
+                    self.feed_page.emit(FeedInput::MediaState(state.clone()));
+                    self.search_page
+                        .emit(SearchInput::MediaState(state.clone()));
                     self.player.borrow_mut().now.update_media_state(&state);
                     self.refresh_player();
                 }
@@ -1092,11 +1188,18 @@ impl MalusApp {
             .emit(SidebarInput::SetActive(destination.clone()));
         match destination {
             AppDestination::Page(route) => {
-                self.feed_page.emit(FeedInput::LoadRoute(route));
-                widgets.content_stack.set_visible_child_name("feed");
+                if route == PageRoute::Search {
+                    self.search_page.emit(SearchInput::ShowLanding);
+                    self.search_page.emit(SearchInput::FocusSearch);
+                    widgets.content_stack.set_visible_child_name("search");
+                } else {
+                    self.feed_page.emit(FeedInput::LoadRoute(route));
+                    widgets.content_stack.set_visible_child_name("feed");
+                }
             }
             AppDestination::Search(query) => {
-                self.search_page.emit(SearchInput::QueryChanged(query));
+                self.search_page.emit(SearchInput::ExecuteSearch(query));
+                self.search_page.emit(SearchInput::FocusSearch);
                 widgets.content_stack.set_visible_child_name("search");
             }
             AppDestination::Settings => {
@@ -1112,6 +1215,7 @@ impl MalusApp {
         self.utility_pane.set_mode(self.utility_mode);
         if self.utility_mode == UtilityMode::Queue {
             self.utility_pane.reload_queue();
+            self.utility_pane.scroll_to_now_playing();
         }
         self.player_bar.refresh(&self.player, self.utility_mode);
     }
@@ -1132,6 +1236,7 @@ impl MalusApp {
             .map(|a| a.url.clone());
         if changed {
             self.utility_pane.reload_queue();
+            self.utility_pane.scroll_to_now_playing();
             p.lyrics.generation = p.lyrics.generation.wrapping_add(1);
             p.lyrics.content = None;
             p.lyrics.active = None;
@@ -1178,6 +1283,10 @@ impl MalusApp {
                 }
             });
         }
+        self.now_playing_page.set_playback_state(status.state);
+        self.now_playing_page.set_autoplay(status.autoplay);
+        self.utility_pane.set_playback_state(status.state);
+        self.utility_pane.set_autoplay(status.autoplay);
         self.refresh_player();
         self.utility_pane.lyrics.view.refresh();
     }
@@ -1202,10 +1311,12 @@ impl MalusApp {
         sender.oneshot_command(async move {
             let result = match command {
                 PlayerCommand::TogglePlay => c.toggle_play().await,
+                PlayerCommand::Pause => c.pause().await,
                 PlayerCommand::Previous => c.previous().await,
                 PlayerCommand::Next => c.next().await,
                 PlayerCommand::Shuffle(value) => c.set_shuffle(value).await,
                 PlayerCommand::Repeat(value) => c.set_repeat(value).await,
+                PlayerCommand::Autoplay(value) => c.set_autoplay(value).await,
                 PlayerCommand::Seek { position_ms, .. } => c.seek(position_ms).await,
                 PlayerCommand::Volume(_) => unreachable!(),
             };

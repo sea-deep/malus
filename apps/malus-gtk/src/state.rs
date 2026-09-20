@@ -1,8 +1,8 @@
 //! Pure UI state models for Malus GTK.
 
 use malus_model::{
-    AccountMediaState, Lyrics, MediaRef, PlaybackState, PlayerStatus, Queue, Rating, RepeatMode,
-    Track,
+    AccountMediaState, Lyrics, MediaRef, PlaybackState, PlayerStatus, PresentationClock, Queue,
+    Rating, RepeatMode, Track,
 };
 
 /// One immersive page, with an optional lyrics composition. It is an overlay on
@@ -12,6 +12,7 @@ pub enum NowPlayingMode {
     #[default]
     Player,
     Lyrics,
+    Queue,
 }
 
 #[derive(Debug, Default)]
@@ -51,10 +52,12 @@ impl LyricsState {
 #[derive(Debug, Clone)]
 pub enum PlayerCommand {
     TogglePlay,
+    Pause,
     Previous,
     Next,
     Shuffle(bool),
     Repeat(RepeatMode),
+    Autoplay(bool),
     Seek { track: MediaRef, position_ms: u64 },
     Volume(u8),
 }
@@ -103,15 +106,15 @@ impl UtilityMode {
 pub struct NowPlayingState {
     pub current_track: Option<Track>,
     pub playback_state: PlaybackState,
-    pub position_ms: u64,
     pub duration_ms: u64,
     pub volume: u8,
     pub shuffle: bool,
     pub repeat: RepeatMode,
+    pub autoplay: bool,
     pub is_favorite: bool,
     pub in_library: bool,
     pub rating: Rating,
-    pub last_update: Option<std::time::Instant>,
+    pub clock: PresentationClock,
 }
 
 impl Default for NowPlayingState {
@@ -119,38 +122,35 @@ impl Default for NowPlayingState {
         Self {
             current_track: None,
             playback_state: PlaybackState::Stopped,
-            position_ms: 0,
             duration_ms: 0,
             volume: 100,
             shuffle: false,
             repeat: RepeatMode::Off,
+            autoplay: false,
             is_favorite: false,
             in_library: false,
             rating: Rating::Neutral,
-            last_update: None,
+            clock: PresentationClock::new(),
         }
     }
 }
 
 impl NowPlayingState {
     pub fn from_status(status: &PlayerStatus) -> Self {
-        let last_update = if status.state == PlaybackState::Playing {
-            Some(std::time::Instant::now())
-        } else {
-            None
-        };
+        let mut clock = PresentationClock::new();
+        clock.update(status);
         Self {
             current_track: status.current_track.clone(),
             playback_state: status.state,
-            position_ms: status.position_ms,
             duration_ms: status.duration_ms,
             volume: status.volume,
             shuffle: status.shuffle,
             repeat: status.repeat,
+            autoplay: status.autoplay,
             is_favorite: false,
             in_library: false,
             rating: Rating::Neutral,
-            last_update,
+            clock,
         }
     }
 
@@ -163,16 +163,12 @@ impl NowPlayingState {
 
         self.current_track = status.current_track.clone();
         self.playback_state = status.state;
-        self.position_ms = status.position_ms;
         self.duration_ms = status.duration_ms;
         self.volume = status.volume;
         self.shuffle = status.shuffle;
         self.repeat = status.repeat;
-        self.last_update = if status.state == PlaybackState::Playing {
-            Some(std::time::Instant::now())
-        } else {
-            None
-        };
+        self.autoplay = status.autoplay;
+        self.clock.update(status);
 
         if track_changed {
             self.is_favorite = false;
@@ -196,33 +192,11 @@ impl NowPlayingState {
     }
 
     pub fn extrapolated_position_ms(&self) -> u64 {
-        if self.playback_state != PlaybackState::Playing {
-            return self.position_ms;
-        }
-        let elapsed_ms = self
-            .last_update
-            .map(|t| t.elapsed().as_millis() as u64)
-            .unwrap_or(0);
-        // Freeze position if daemon sample is stale (bridge heartbeat ~1s,
-        // so >3s means updates stopped). Prevents ghost advancement.
-        if elapsed_ms > 3000 {
-            return self.position_ms;
-        }
-        let pos = self.position_ms + elapsed_ms;
-        if self.duration_ms > 0 {
-            pos.min(self.duration_ms)
-        } else {
-            pos
-        }
+        self.clock.position_ms()
     }
 
     pub fn progress_fraction(&self) -> f64 {
-        let pos = self.extrapolated_position_ms();
-        if self.duration_ms == 0 {
-            0.0
-        } else {
-            (pos as f64 / self.duration_ms as f64).clamp(0.0, 1.0)
-        }
+        self.clock.progress_fraction()
     }
 }
 
@@ -292,15 +266,21 @@ mod tests {
             muted: false,
             shuffle: false,
             repeat: RepeatMode::Off,
+            autoplay: false,
+            timeline_id: 1,
+            sequence: 1,
         };
         state.update_from_status(&status);
         state.is_favorite = true;
         status.position_ms = 500;
+        status.sequence = 2;
         state.update_from_status(&status);
         assert!(state.is_favorite);
         assert_eq!(state.volume, 0);
         status.current_track = Some(Track::new(MediaRef::Song("two".into()), "Two", "Artist"));
         status.position_ms = 0;
+        status.timeline_id = 2;
+        status.sequence = 3;
         state.update_from_status(&status);
         assert!(!state.is_favorite);
         assert!(state.extrapolated_position_ms() < 500);
@@ -339,11 +319,25 @@ mod tests {
             muted: false,
             shuffle: false,
             repeat: RepeatMode::Off,
+            autoplay: false,
+            timeline_id: 1,
+            sequence: 1,
         };
 
         state.update_from_status(&status);
         assert!(state.is_playing());
         assert!(state.extrapolated_position_ms() >= 1000);
         assert!(state.progress_fraction() >= 0.1);
+    }
+
+    #[test]
+    fn test_now_playing_mode_variants() {
+        assert_eq!(NowPlayingMode::default(), NowPlayingMode::Player);
+        let player = NowPlayingMode::Player;
+        let lyrics = NowPlayingMode::Lyrics;
+        let queue = NowPlayingMode::Queue;
+        assert_ne!(player, lyrics);
+        assert_ne!(player, queue);
+        assert_ne!(lyrics, queue);
     }
 }

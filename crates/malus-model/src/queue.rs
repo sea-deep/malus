@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 pub struct Queue {
     pub items: Vec<Track>,
     pub current_index: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autoplay_start_index: Option<usize>,
 }
 
 impl Queue {
@@ -19,6 +21,19 @@ impl Queue {
         Self {
             items,
             current_index,
+            autoplay_start_index: None,
+        }
+    }
+
+    pub fn with_autoplay(
+        items: Vec<Track>,
+        current_index: Option<usize>,
+        autoplay_start_index: Option<usize>,
+    ) -> Self {
+        Self {
+            items,
+            current_index,
+            autoplay_start_index,
         }
     }
 
@@ -36,6 +51,10 @@ impl Queue {
 
     pub fn current_index(&self) -> Option<usize> {
         self.current_index
+    }
+
+    pub fn autoplay_start_index(&self) -> Option<usize> {
+        self.autoplay_start_index
     }
 
     pub fn current_track(&self) -> Option<&Track> {

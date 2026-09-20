@@ -162,7 +162,7 @@ Always pinned and visible across all page navigation:
 
 ## 6. Up Next, Queue Management & Autoplay
 
-### 6.1. The "Playing Next" Drawer
+### 6.1. The "Queue" Drawer
 * Displays:
   1. **Now Playing:** Currently active song with progress bar.
   2. **Up Next (Queue):** List of upcoming songs.

@@ -1,0 +1,404 @@
+{
+  "data": [
+    {
+      "id": "shelf-top-picks",
+      "type": "personal-recommendation",
+      "href": "/v1/me/recommendations/shelf-top-picks"
+    },
+    {
+      "id": "shelf-recently-played",
+      "type": "personal-recommendation",
+      "href": "/v1/me/recommendations/shelf-recently-played"
+    },
+    {
+      "id": "shelf-mood-stations",
+      "type": "personal-recommendation",
+      "href": "/v1/me/recommendations/shelf-mood-stations"
+    },
+    {
+      "id": "shelf-favourite-artists",
+      "type": "personal-recommendation",
+      "href": "/v1/me/recommendations/shelf-favourite-artists"
+    },
+    {
+      "id": "shelf-empty-concerts",
+      "type": "personal-recommendation",
+      "href": "/v1/me/recommendations/shelf-empty-concerts"
+    },
+    {
+      "id": "shelf-replay",
+      "type": "personal-recommendation",
+      "href": "/v1/me/recommendations/shelf-replay"
+    },
+    {
+      "id": "shelf-unknown-kind",
+      "type": "personal-recommendation",
+      "href": "/v1/me/recommendations/shelf-unknown-kind"
+    },
+    {
+      "id": "shelf-dangling-ref",
+      "type": "personal-recommendation",
+      "href": "/v1/me/recommendations/shelf-dangling-ref"
+    }
+  ],
+  "resources": {
+    "personal-recommendation": {
+      "shelf-top-picks": {
+        "id": "shelf-top-picks",
+        "type": "personal-recommendation",
+        "attributes": {
+          "title": {
+            "stringForDisplay": "Top Picks"
+          },
+          "display": {
+            "kind": "MusicNotesHeroShelf"
+          },
+          "resourceTypes": [
+            "playlists",
+            "albums",
+            "stations"
+          ]
+        },
+        "relationships": {
+          "contents": {
+            "data": [
+              {
+                "id": "pl-top-1",
+                "type": "playlists"
+              },
+              {
+                "id": "alb-top-1",
+                "type": "albums"
+              },
+              {
+                "id": "ra-top-station",
+                "type": "stations"
+              }
+            ]
+          }
+        }
+      },
+      "shelf-recently-played": {
+        "id": "shelf-recently-played",
+        "type": "personal-recommendation",
+        "attributes": {
+          "title": {
+            "stringForDisplay": "Recently Played"
+          },
+          "reason": {
+            "stringForDisplay": "Based on recent activity"
+          },
+          "display": {
+            "kind": "MusicCoverShelf"
+          },
+          "resourceTypes": [
+            "albums",
+            "playlists"
+          ]
+        },
+        "relationships": {
+          "contents": {
+            "data": [
+              {
+                "id": "alb-recent-1",
+                "type": "albums"
+              },
+              {
+                "id": "pl-recent-1",
+                "type": "playlists"
+              }
+            ]
+          }
+        }
+      },
+      "shelf-mood-stations": {
+        "id": "shelf-mood-stations",
+        "type": "personal-recommendation",
+        "attributes": {
+          "title": {
+            "stringForDisplay": "Mood Stations"
+          },
+          "display": {
+            "kind": "MusicCoverShelf"
+          },
+          "resourceTypes": [
+            "stations"
+          ]
+        },
+        "relationships": {
+          "contents": {
+            "data": [
+              {
+                "id": "ra.q-test-relax",
+                "type": "stations"
+              },
+              {
+                "id": "ra.q-test-energy",
+                "type": "stations"
+              }
+            ]
+          }
+        }
+      },
+      "shelf-favourite-artists": {
+        "id": "shelf-favourite-artists",
+        "type": "personal-recommendation",
+        "attributes": {
+          "title": {
+            "stringForDisplay": "Artists You Follow"
+          },
+          "display": {
+            "kind": "MusicCircleCoverShelf"
+          },
+          "resourceTypes": [
+            "artists"
+          ]
+        },
+        "relationships": {
+          "contents": {
+            "data": [
+              {
+                "id": "artist-1",
+                "type": "artists"
+              }
+            ]
+          }
+        }
+      },
+      "shelf-empty-concerts": {
+        "id": "shelf-empty-concerts",
+        "type": "personal-recommendation",
+        "attributes": {
+          "title": {
+            "stringForDisplay": "Concerts"
+          },
+          "display": {
+            "kind": "MusicConcertsEmptyShelf"
+          },
+          "resourceTypes": [
+            "editorial-items"
+          ]
+        },
+        "relationships": {
+          "contents": {
+            "data": []
+          }
+        }
+      },
+      "shelf-replay": {
+        "id": "shelf-replay",
+        "type": "personal-recommendation",
+        "attributes": {
+          "title": {
+            "stringForDisplay": "Replay: Top Songs"
+          },
+          "display": {
+            "kind": "MusicNotesHeroShelf"
+          },
+          "resourceTypes": [
+            "playlists",
+            "editorial-items"
+          ]
+        },
+        "relationships": {
+          "contents": {
+            "data": [
+              {
+                "id": "pl.rp-test123",
+                "type": "playlists"
+              },
+              {
+                "id": "ed-replay-1",
+                "type": "editorial-items"
+              }
+            ]
+          }
+        }
+      },
+      "shelf-unknown-kind": {
+        "id": "shelf-unknown-kind",
+        "type": "personal-recommendation",
+        "attributes": {
+          "title": {
+            "stringForDisplay": "Experimental Feed"
+          },
+          "display": {
+            "kind": "MusicFutureExperimentalShelf"
+          },
+          "resourceTypes": [
+            "albums"
+          ]
+        },
+        "relationships": {
+          "contents": {
+            "data": [
+              {
+                "id": "alb-2",
+                "type": "albums"
+              }
+            ]
+          }
+        }
+      },
+      "shelf-dangling-ref": {
+        "id": "shelf-dangling-ref",
+        "type": "personal-recommendation",
+        "attributes": {
+          "title": {
+            "stringForDisplay": "Partial Content"
+          },
+          "display": {
+            "kind": "MusicCoverShelf"
+          },
+          "resourceTypes": [
+            "albums"
+          ]
+        },
+        "relationships": {
+          "contents": {
+            "data": [
+              {
+                "id": "missing-nonexistent",
+                "type": "albums"
+              },
+              {
+                "id": "alb-2",
+                "type": "albums"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "playlists": {
+      "pl-top-1": {
+        "id": "pl-top-1",
+        "type": "playlists",
+        "attributes": {
+          "name": "Weekly Discovery",
+          "curatorName": "Apple Music Editorial",
+          "artwork": {
+            "url": "https://example.com/art/weekly_{w}x{h}.jpg",
+            "width": 600,
+            "height": 600
+          },
+          "plainEditorialNotes": {
+            "standard": "Handpicked fresh tracks curated every week for your taste."
+          }
+        }
+      },
+      "pl-recent-1": {
+        "id": "pl-recent-1",
+        "type": "playlists",
+        "attributes": {
+          "name": "Chill Lounge",
+          "curatorName": "Curator A",
+          "artwork": {
+            "url": "https://example.com/art/chill_{w}x{h}.jpg"
+          }
+        }
+      },
+      "pl.rp-test123": {
+        "id": "pl.rp-test123",
+        "type": "playlists",
+        "attributes": {
+          "name": "Replay 2025",
+          "curatorName": "Apple Music"
+        }
+      }
+    },
+    "albums": {
+      "alb-top-1": {
+        "id": "alb-top-1",
+        "type": "albums",
+        "attributes": {
+          "name": "Hero Album",
+          "artistName": "Great Artist",
+          "releaseDate": "2026-01-01",
+          "artwork": {
+            "url": "https://example.com/art/hero_alb_{w}x{h}.jpg"
+          }
+        }
+      },
+      "alb-recent-1": {
+        "id": "alb-recent-1",
+        "type": "albums",
+        "attributes": {
+          "name": "Recent Album",
+          "artistName": "Artist B",
+          "releaseDate": "2025-05-12",
+          "artwork": {
+            "url": "https://example.com/art/recent_alb_{w}x{h}.jpg"
+          }
+        }
+      },
+      "alb-2": {
+        "id": "alb-2",
+        "type": "albums",
+        "attributes": {
+          "name": "Fallback Album",
+          "artistName": "Artist C",
+          "releaseDate": "2024-11-20",
+          "artwork": {
+            "url": "https://example.com/art/alb2_{w}x{h}.jpg"
+          }
+        }
+      }
+    },
+    "stations": {
+      "ra-top-station": {
+        "id": "ra-top-station",
+        "type": "stations",
+        "attributes": {
+          "name": "Discovery Station",
+          "artwork": {
+            "url": "https://example.com/art/discovery_{w}x{h}.jpg"
+          }
+        }
+      },
+      "ra.q-test-relax": {
+        "id": "ra.q-test-relax",
+        "type": "stations",
+        "attributes": {
+          "name": "Relax",
+          "artwork": {
+            "url": "https://example.com/art/relax_{w}x{h}.jpg"
+          }
+        }
+      },
+      "ra.q-test-energy": {
+        "id": "ra.q-test-energy",
+        "type": "stations",
+        "attributes": {
+          "name": "Energy",
+          "artwork": {
+            "url": "https://example.com/art/energy_{w}x{h}.jpg"
+          }
+        }
+      }
+    },
+    "artists": {
+      "artist-1": {
+        "id": "artist-1",
+        "type": "artists",
+        "attributes": {
+          "name": "Featured Star",
+          "artwork": {
+            "url": "https://example.com/art/star_{w}x{h}.jpg"
+          }
+        }
+      }
+    },
+    "editorial-items": {
+      "ed-replay-1": {
+        "id": "ed-replay-1",
+        "type": "editorial-items",
+        "attributes": {
+          "link": {
+            "url": "https://replay.music.apple.com"
+          }
+        }
+      }
+    }
+  }
+}

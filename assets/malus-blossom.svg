@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Malus app icon">
+  <defs>
+    <!-- Apple Music Crimson background gradient -->
+    <linearGradient id="appleMusicBg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FC3C44"/>
+      <stop offset="100%" stop-color="#D40242"/>
+    </linearGradient>
+
+    <!-- Apple-style leaf smooth botanical gradient -->
+    <linearGradient id="appleLeafGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#236b3b"/>
+      <stop offset="40%" stop-color="#349451"/>
+      <stop offset="80%" stop-color="#4cb36c"/>
+      <stop offset="100%" stop-color="#5ec47c"/>
+    </linearGradient>
+
+    <!-- Crabapple petal: pure white outside, botanical magenta-rose radiating from heart -->
+    <radialGradient id="petalBlush" cx="0" cy="-25" r="95" fx="0" fy="-15" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ea3d85" stop-opacity="0.90"/>
+      <stop offset="35%" stop-color="#fa8cb7" stop-opacity="0.65"/>
+      <stop offset="70%" stop-color="#ffd8e8" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.0"/>
+    </radialGradient>
+
+    <linearGradient id="stamenFilament" x1="0" y1="-12" x2="0" y2="-44" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#d93373"/>
+      <stop offset="100%" stop-color="#b8205b"/>
+    </linearGradient>
+
+    <path id="petal" d="M0 -10 C-22 -18 -54 -48 -52 -92 C-50 -125 -34 -140 -15 -140 C-7 -140 -3 -135 0 -128 C3 -135 7 -140 15 -140 C34 -140 50 -125 52 -92 C54 -48 22 -18 0 -10 Z"/>
+  </defs>
+
+
+  <!-- Centered Artwork Group -->
+  <g transform="translate(256 256) scale(1.18) translate(-231.5 -272.0)">
+    <!-- Apple-style Tilted Floating Leaf (Option 3: 45 deg, balanced gap) -->
+    <path d="M 274.0 189.0 C 316.6 184.8 353.3 148.1 357.4 105.6 C 314.9 109.7 278.2 146.4 274.0 189.0 Z" fill="url(#appleLeafGrad)"/>
+
+    <!-- Blossom Petals (Center at 236, 290) -->
+    <g transform="translate(236 290)">
+      <!-- Petal 1: 202 deg -->
+      <g transform="rotate(202)">
+        <use href="#petal" fill="#ffffff"/>
+        <use href="#petal" fill="url(#petalBlush)"/>
+        <use href="#petal" fill="none" stroke="rgba(204, 64, 115, 0.18)" stroke-width="1.0"/>
+      </g>
+      <!-- Petal 2: 274 deg -->
+      <g transform="rotate(274)">
+        <use href="#petal" fill="#ffffff"/>
+        <use href="#petal" fill="url(#petalBlush)"/>
+        <use href="#petal" fill="none" stroke="rgba(204, 64, 115, 0.18)" stroke-width="1.0"/>
+      </g>
+      <!-- Petal 3: -14 deg -->
+      <g transform="rotate(-14)">
+        <use href="#petal" fill="#ffffff"/>
+        <use href="#petal" fill="url(#petalBlush)"/>
+        <use href="#petal" fill="none" stroke="rgba(204, 64, 115, 0.18)" stroke-width="1.0"/>
+      </g>
+      <!-- Petal 4: 58 deg -->
+      <g transform="rotate(58)">
+        <use href="#petal" fill="#ffffff"/>
+        <use href="#petal" fill="url(#petalBlush)"/>
+        <use href="#petal" fill="none" stroke="rgba(204, 64, 115, 0.18)" stroke-width="1.0"/>
+      </g>
+      <!-- Petal 5: 130 deg -->
+      <g transform="rotate(130)">
+        <use href="#petal" fill="#ffffff"/>
+        <use href="#petal" fill="url(#petalBlush)"/>
+        <use href="#petal" fill="none" stroke="rgba(204, 64, 115, 0.18)" stroke-width="1.0"/>
+      </g>
+
+      <!-- Primary Stamens -->
+      <g stroke="url(#stamenFilament)" stroke-width="2.0" stroke-linecap="round">
+        <line x1="0" y1="-12" x2="0" y2="-42" transform="rotate(22)"/>
+        <line x1="0" y1="-12" x2="0" y2="-42" transform="rotate(94)"/>
+        <line x1="0" y1="-12" x2="0" y2="-42" transform="rotate(166)"/>
+        <line x1="0" y1="-12" x2="0" y2="-42" transform="rotate(238)"/>
+        <line x1="0" y1="-12" x2="0" y2="-42" transform="rotate(310)"/>
+      </g>
+
+      <!-- Dark Botanical Anther Heads ("Freckles") -->
+      <g fill="#2e0f18">
+        <circle cx="0" cy="-45" r="3.2" transform="rotate(22)"/>
+        <circle cx="0" cy="-45" r="3.2" transform="rotate(94)"/>
+        <circle cx="0" cy="-45" r="3.2" transform="rotate(166)"/>
+        <circle cx="0" cy="-45" r="3.2" transform="rotate(238)"/>
+        <circle cx="0" cy="-45" r="3.2" transform="rotate(310)"/>
+      </g>
+
+      <!-- Secondary delicate stamens -->
+      <g stroke="rgba(217, 80, 120, 0.75)" stroke-width="1.5" stroke-linecap="round">
+        <line x1="0" y1="-10" x2="0" y2="-32" transform="rotate(58)"/>
+        <line x1="0" y1="-10" x2="0" y2="-32" transform="rotate(130)"/>
+        <line x1="0" y1="-10" x2="0" y2="-32" transform="rotate(202)"/>
+        <line x1="0" y1="-10" x2="0" y2="-32" transform="rotate(274)"/>
+        <line x1="0" y1="-10" x2="0" y2="-32" transform="rotate(346)"/>
+      </g>
+      <g fill="#381420">
+        <circle cx="0" cy="-34" r="2.5" transform="rotate(58)"/>
+        <circle cx="0" cy="-34" r="2.5" transform="rotate(130)"/>
+        <circle cx="0" cy="-34" r="2.5" transform="rotate(202)"/>
+        <circle cx="0" cy="-34" r="2.5" transform="rotate(274)"/>
+        <circle cx="0" cy="-34" r="2.5" transform="rotate(346)"/>
+      </g>
+
+      <!-- Core Pistil Hub -->
+      <circle r="6.8" fill="#7a1433"/>
+      <circle r="3.8" fill="#94c642"/>
+    </g>
+  </g>
+</svg>

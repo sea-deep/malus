@@ -67,6 +67,7 @@ pub fn parse_ttml_lyrics(ttml: &str) -> Lyrics {
     let mut in_p = false;
     let mut p_start_ms: Option<u64> = None;
     let mut p_end_ms: Option<u64> = None;
+    let mut p_agent: Option<String> = None;
     let mut p_text = String::new();
     let mut p_syllables: Vec<LyricSyllable> = Vec::new();
 
@@ -83,14 +84,18 @@ pub fn parse_ttml_lyrics(ttml: &str) -> Lyrics {
                     in_p = true;
                     p_start_ms = None;
                     p_end_ms = None;
+                    p_agent = None;
                     p_text.clear();
                     p_syllables.clear();
 
                     for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == "begin" {
+                        let key = attr.key.as_ref();
+                        if key == "begin" {
                             p_start_ms = parse_ttml_time(attr.value.as_ref());
-                        } else if attr.key.as_ref() == "end" {
+                        } else if key == "end" {
                             p_end_ms = parse_ttml_time(attr.value.as_ref());
+                        } else if key == "ttm:agent" {
+                            p_agent = Some(attr.value.as_ref().to_string());
                         }
                     }
                 } else if in_p && local_name.as_ref() == "span" {
@@ -154,12 +159,17 @@ pub fn parse_ttml_lyrics(ttml: &str) -> Lyrics {
                     in_span = false;
                 } else if in_p && local_name.as_ref() == "p" {
                     let full_text = if !p_syllables.is_empty() {
-                        p_syllables
-                            .iter()
-                            .map(|s| s.text.as_str())
-                            .collect::<String>()
-                            .trim()
-                            .to_string()
+                        let mut joined = String::new();
+                        for syl in &p_syllables {
+                            if !joined.is_empty()
+                                && !joined.ends_with(char::is_whitespace)
+                                && !syl.text.starts_with(char::is_whitespace)
+                            {
+                                joined.push(' ');
+                            }
+                            joined.push_str(&syl.text);
+                        }
+                        joined.trim().to_string()
                     } else {
                         collapse_whitespace(&p_text)
                     };
@@ -177,6 +187,7 @@ pub fn parse_ttml_lyrics(ttml: &str) -> Lyrics {
                         if !p_syllables.is_empty() {
                             line = line.with_syllables(p_syllables.clone());
                         }
+                        line.agent = p_agent.clone();
                         lines.push(line);
                     }
                     in_p = false;
@@ -271,6 +282,28 @@ mod tests {
         assert_eq!(syllables[1].text, "police");
         assert_eq!(syllables[1].start_ms, Some(15800));
         assert_eq!(syllables[1].end_ms, Some(16400));
+    }
+
+    #[test]
+    fn test_syllable_spans_without_trailing_whitespace() {
+        let ttml = r#"
+        <tt itunes:timing="Word">
+            <body>
+                <div>
+                    <p begin="00:15.20" end="00:19.45">
+                        <span begin="00:15.20" end="00:15.80">Chhali</span>
+                        <span begin="00:15.80" end="00:16.40">karde</span>
+                        <span begin="00:16.40" end="00:17.00">dil</span>
+                        <span begin="00:17.00" end="00:17.60">mera</span>
+                    </p>
+                </div>
+            </body>
+        </tt>
+        "#;
+
+        let lyrics = parse_ttml_lyrics(ttml);
+        assert_eq!(lyrics.lines.len(), 1);
+        assert_eq!(lyrics.lines[0].text, "Chhali karde dil mera");
     }
 
     #[test]

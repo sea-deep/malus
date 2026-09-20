@@ -13,7 +13,7 @@ use relm4::gtk::{self, gio, glib, prelude::*, subclass::prelude::*};
 use crate::design::tokens::*;
 use crate::model::format_time;
 use crate::pages::feed::{FeedOutput, FeedPage};
-use crate::widgets::actions_menu::{ActionMenuCommand, build_action_popover_with_actions};
+use crate::widgets::actions_menu::{ActionMenuCommand, build_action_popover_full};
 
 // ──────────────────────── TrackObject GObject Model ────────────────────────
 
@@ -153,6 +153,7 @@ mod row_widget_imp {
             self.fav_btn.add_css_class("track-action-btn");
             self.fav_btn.set_icon_name(ICON_FAVORITE_OUTLINE);
             self.fav_btn.set_valign(gtk::Align::Center);
+            self.fav_btn.set_focus_on_click(false);
             obj.append(&self.fav_btn);
 
             // Menu button
@@ -161,6 +162,7 @@ mod row_widget_imp {
             self.menu_btn.set_icon_name(ICON_MORE);
             self.menu_btn.set_tooltip_text(Some("More actions"));
             self.menu_btn.set_valign(gtk::Align::Center);
+            self.menu_btn.set_focus_on_click(false);
             obj.append(&self.menu_btn);
         }
     }
@@ -189,8 +191,9 @@ impl VirtualRowWidget {
     pub fn setup(&self, sender: ComponentSender<FeedPage>) {
         *self.imp().sender.borrow_mut() = Some(sender.clone());
 
-        // Click on row to play
+        // Primary click on row to play
         let gesture = gtk::GestureClick::new();
+        gesture.set_button(gtk::gdk::BUTTON_PRIMARY);
         let this = self.downgrade();
         gesture.connect_released(move |_g, n_press, _x, _y| {
             let Some(this) = this.upgrade() else {
@@ -209,18 +212,134 @@ impl VirtualRowWidget {
         });
         self.add_controller(gesture);
 
+        // Secondary (right) click on row for context menu
+        let rc_gesture = gtk::GestureClick::new();
+        rc_gesture.set_button(gtk::gdk::BUTTON_SECONDARY);
+        let this_rc = self.downgrade();
+        rc_gesture.connect_pressed(move |g, _n, x, y| {
+            g.set_state(gtk::EventSequenceState::Claimed);
+            let Some(this) = this_rc.upgrade() else {
+                return;
+            };
+            if let Some(ref item) = *this.imp().current_item.borrow()
+                && let Some(ref s) = *this.imp().sender.borrow()
+            {
+                let s_clone = s.clone();
+                let media_ref = item.entity.clone().unwrap_or_else(|| {
+                    MediaRef::parse(&item.id).unwrap_or_else(|_| MediaRef::Song(item.id.clone()))
+                });
+                let popover = build_action_popover_full(
+                    &media_ref,
+                    item.is_favorite(),
+                    item.in_library(),
+                    true,
+                    &item.actions,
+                    None,
+                    item.album_route.clone(),
+                    item.artist_route.clone(),
+                    move |cmd| match cmd {
+                        ActionMenuCommand::Action(action) => {
+                            let _ = s_clone.output(FeedOutput::Action(action));
+                        }
+                        ActionMenuCommand::ViewCredits(r) => {
+                            let _ = s_clone.output(FeedOutput::ViewCredits(r));
+                        }
+                        ActionMenuCommand::AddToPlaylist(r) => {
+                            let _ = s_clone.output(FeedOutput::ShowAddToPlaylist(r));
+                        }
+                        ActionMenuCommand::RemoveFromPlaylist {
+                            playlist,
+                            track_index,
+                            expected_track,
+                        } => {
+                            let _ = s_clone.output(FeedOutput::RemoveTrackFromPlaylist {
+                                playlist,
+                                track_index,
+                                expected_track,
+                            });
+                        }
+                        ActionMenuCommand::Navigate(r) => {
+                            let _ = s_clone.output(FeedOutput::Navigate(r));
+                        }
+                        ActionMenuCommand::CopyLink(u) => {
+                            let _ = s_clone.output(FeedOutput::CopyLink(u));
+                        }
+                    },
+                );
+                popover.set_parent(&this);
+                popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+                popover.connect_closed(|p| {
+                    p.unparent();
+                });
+                popover.popup();
+            }
+        });
+        self.add_controller(rc_gesture);
+
+        // Clickable artist navigation
+        let art_gesture = gtk::GestureClick::new();
+        let this_art = self.downgrade();
+        art_gesture.connect_released(move |g, n_press, _x, _y| {
+            if n_press == 1 {
+                let Some(this) = this_art.upgrade() else {
+                    return;
+                };
+                if let Some(ref item) = *this.imp().current_item.borrow()
+                    && let Some(ref route) = item.artist_route
+                    && let Some(ref s) = *this.imp().sender.borrow()
+                {
+                    g.set_state(gtk::EventSequenceState::Claimed);
+                    let _ = s.output(FeedOutput::Navigate(route.clone()));
+                }
+            }
+        });
+        self.imp().artist_lbl.add_controller(art_gesture);
+
         // Favorite button click
         let this_fav = self.downgrade();
         self.imp().fav_btn.connect_clicked(move |_| {
             let Some(this_fav) = this_fav.upgrade() else {
                 return;
             };
-            if let Some(ref item) = *this_fav.imp().current_item.borrow() {
+            if let Some(ref mut item) = *this_fav.imp().current_item.borrow_mut() {
                 let media_ref = item.entity.clone().unwrap_or_else(|| {
                     MediaRef::parse(&item.id).unwrap_or_else(|_| MediaRef::Song(item.id.clone()))
                 });
+                let is_fav = item.is_favorite();
+                let next_fav = !is_fav;
+                item.is_favorite = Some(next_fav);
+                for action in &mut item.actions {
+                    match action {
+                        PageActionWire::Favorite(r) if next_fav => {
+                            *action = PageActionWire::Unfavorite(r.clone());
+                        }
+                        PageActionWire::Unfavorite(r) if !next_fav => {
+                            *action = PageActionWire::Favorite(r.clone());
+                        }
+                        _ => {}
+                    }
+                }
+                this_fav.imp().fav_btn.set_icon_name(if next_fav {
+                    ICON_FAVORITE
+                } else {
+                    ICON_FAVORITE_OUTLINE
+                });
+                if next_fav {
+                    this_fav.imp().fav_btn.set_css_classes(&[
+                        "flat",
+                        "track-action-btn",
+                        "favorite-active",
+                    ]);
+                    this_fav.imp().fav_btn.set_tooltip_text(Some("Unfavorite"));
+                } else {
+                    this_fav
+                        .imp()
+                        .fav_btn
+                        .set_css_classes(&["flat", "track-action-btn"]);
+                    this_fav.imp().fav_btn.set_tooltip_text(Some("Favorite"));
+                }
+
                 if let Some(ref s) = *this_fav.imp().sender.borrow() {
-                    let is_fav = item.is_favorite();
                     let action = if is_fav {
                         PageActionWire::Unfavorite(media_ref)
                     } else {
@@ -244,12 +363,15 @@ impl VirtualRowWidget {
                 let media_ref = item.entity.clone().unwrap_or_else(|| {
                     MediaRef::parse(&item.id).unwrap_or_else(|_| MediaRef::Song(item.id.clone()))
                 });
-                let popover = build_action_popover_with_actions(
+                let popover = build_action_popover_full(
                     &media_ref,
                     item.is_favorite(),
                     item.in_library(),
                     true,
                     &item.actions,
+                    None,
+                    item.album_route.clone(),
+                    item.artist_route.clone(),
                     move |cmd| match cmd {
                         ActionMenuCommand::Action(action) => {
                             let _ = s_clone.output(FeedOutput::Action(action));
@@ -271,6 +393,12 @@ impl VirtualRowWidget {
                                 expected_track,
                             });
                         }
+                        ActionMenuCommand::Navigate(r) => {
+                            let _ = s_clone.output(FeedOutput::Navigate(r));
+                        }
+                        ActionMenuCommand::CopyLink(u) => {
+                            let _ = s_clone.output(FeedOutput::CopyLink(u));
+                        }
                     },
                 );
                 popover.set_parent(btn);
@@ -290,6 +418,14 @@ impl VirtualRowWidget {
         self.imp()
             .artist_lbl
             .set_text(item.subtitle.as_deref().unwrap_or(""));
+
+        if item.artist_route.is_some() {
+            self.imp().artist_lbl.add_css_class("metadata-link");
+            self.imp().artist_lbl.set_cursor_from_name(Some("pointer"));
+        } else {
+            self.imp().artist_lbl.remove_css_class("metadata-link");
+            self.imp().artist_lbl.set_cursor_from_name(None);
+        }
 
         let is_explicit = item.badges.iter().any(|b| b.label == "E");
         self.imp().explicit_lbl.set_visible(is_explicit);
@@ -359,6 +495,19 @@ impl VirtualTrackList {
         list_view.set_show_separators(false);
         list_view.add_css_class("track-list-view");
 
+        let s_act = sender.clone();
+        let store_act = store.clone();
+        list_view.connect_activate(move |_lv, pos| {
+            if let Some(track_obj) = store_act.item(pos).and_downcast::<TrackObject>()
+                && let Some(item) = track_obj.item()
+            {
+                let media_ref = item.entity.clone().unwrap_or_else(|| {
+                    MediaRef::parse(&item.id).unwrap_or_else(|_| MediaRef::Song(item.id.clone()))
+                });
+                let _ = s_act.output(FeedOutput::Play(media_ref));
+            }
+        });
+
         let scrolled = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vscrollbar_policy(gtk::PolicyType::Automatic)
@@ -408,9 +557,23 @@ impl VirtualTrackList {
             let Some(mut item) = object.item() else {
                 continue;
             };
-            if item.entity.as_ref() == Some(&state.reference) {
+            let matches = item.id == state.reference.id()
+                || item.entity.as_ref() == Some(&state.reference)
+                || item.entity.as_ref().map(|e| e.id()) == Some(state.reference.id());
+            if matches {
                 item.is_favorite = Some(state.favorite);
                 item.in_library = Some(state.in_library);
+                for action in &mut item.actions {
+                    match action {
+                        PageActionWire::Favorite(r) if state.favorite => {
+                            *action = PageActionWire::Unfavorite(r.clone());
+                        }
+                        PageActionWire::Unfavorite(r) if !state.favorite => {
+                            *action = PageActionWire::Favorite(r.clone());
+                        }
+                        _ => {}
+                    }
+                }
                 self.store
                     .splice(index, 1, &[TrackObject::new(item, index as usize)]);
             }

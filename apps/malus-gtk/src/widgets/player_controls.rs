@@ -1,6 +1,6 @@
 //! Shared player widgets. Metadata and transport read the one application state.
 use super::{
-    actions_menu::{ActionMenuCommand, build_action_popover},
+    actions_menu::{ActionMenuCommand, build_action_popover_full},
     interactive_scale::InteractiveScale,
 };
 use crate::{
@@ -9,7 +9,7 @@ use crate::{
     state::{PlayerCommand, SharedPlayer},
 };
 use malus_ipc::wire::PageActionWire;
-use malus_model::{MediaRef, RepeatMode};
+use malus_model::{MediaRef, PageRoute, PlaybackState, RepeatMode};
 use relm4::gtk::{self, prelude::*};
 use std::{cell::RefCell, rc::Rc};
 
@@ -22,14 +22,16 @@ pub fn icon_button(icon: &str, tooltip: &str, class: &str) -> gtk::Button {
     button.add_css_class(class);
     button.set_tooltip_text(Some(tooltip));
     button.update_property(&[gtk::accessible::Property::Label(tooltip)]);
+    button.set_focus_on_click(false);
     button
 }
 
 pub struct Transport {
     pub root: gtk::Box,
-    play: gtk::Button,
-    shuffle: gtk::Button,
-    repeat: gtk::Button,
+    pub play: gtk::Button,
+    pub shuffle: gtk::Button,
+    pub repeat: gtk::Button,
+    immersive: bool,
 }
 impl Transport {
     pub fn new(player: &SharedPlayer, send: &CommandHandler, immersive: bool) -> Self {
@@ -68,8 +70,8 @@ impl Transport {
         let p = player.clone();
         let cb = send.clone();
         repeat.connect_clicked(move |_| cb(PlayerCommand::Repeat(p.borrow().now.repeat.cycle())));
-        shuffle.set_visible(immersive);
-        repeat.set_visible(immersive);
+        shuffle.set_visible(true);
+        repeat.set_visible(true);
         for b in [&shuffle, &previous, &play, &next, &repeat] {
             root.append(b);
         }
@@ -78,6 +80,7 @@ impl Transport {
             play,
             shuffle,
             repeat,
+            immersive,
         }
     }
     pub fn refresh(&self, player: &SharedPlayer) {
@@ -101,9 +104,14 @@ impl Transport {
         } else {
             "Play"
         }));
+        let base_class = if self.immersive {
+            "np-control"
+        } else {
+            "player-icon-btn"
+        };
         self.shuffle.set_css_classes(&[
             "flat",
-            "np-control",
+            base_class,
             if state.now.shuffle {
                 "control-active"
             } else {
@@ -132,7 +140,7 @@ impl Transport {
             });
         self.repeat.set_css_classes(&[
             "flat",
-            "np-control",
+            base_class,
             if state.now.repeat != RepeatMode::Off {
                 "control-active"
             } else {
@@ -197,7 +205,7 @@ impl SeekControl {
             },
             if immersive { 0 } else { 8 },
         );
-        root.set_hexpand(immersive);
+        root.set_hexpand(true);
         if immersive {
             root.append(&slider.widget);
             let times = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -226,14 +234,16 @@ impl SeekControl {
             *self.track.borrow_mut() = id;
         }
         let duration = p.now.duration_ms;
+        let is_stopped = p.now.playback_state == PlaybackState::Stopped;
         self.slider
             .widget
-            .set_sensitive(duration > 0 && p.now.current_track.is_some());
-        let value = self.slider.sync(
-            p.now.extrapolated_position_ms() as f64,
-            duration as f64,
-            1500.0,
-        ) as u64;
+            .set_sensitive(!is_stopped && duration > 0 && p.now.current_track.is_some());
+        let pos = if is_stopped {
+            0
+        } else {
+            p.now.extrapolated_position_ms()
+        };
+        let value = self.slider.sync(pos as f64, duration as f64, 1500.0) as u64;
         self.elapsed.set_text(&format_time(value));
         self.remaining.set_text(&if duration == 0 {
             "--:--".to_string()
@@ -248,6 +258,7 @@ pub struct VolumeControl {
     pub slider: InteractiveScale,
     icon: gtk::Image,
     fixed_endpoints: bool,
+    _popover: Option<gtk::Popover>,
 }
 impl VolumeControl {
     pub fn new(send: &CommandHandler, width: i32) -> Self {
@@ -278,6 +289,133 @@ impl VolumeControl {
             slider,
             icon,
             fixed_endpoints: false,
+            _popover: None,
+        }
+    }
+    /// Compact volume icon button with a floating popover mini slider and scroll-wheel control.
+    pub fn new_popover(send: &CommandHandler) -> Self {
+        let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        root.set_valign(gtk::Align::Center);
+        let icon = gtk::Image::from_icon_name(ICON_VOLUME_HIGH);
+        icon.set_pixel_size(ICON_GLYPH_SM);
+
+        let button = gtk::MenuButton::new();
+        button.add_css_class("flat");
+        button.add_css_class("player-icon-btn");
+        button.set_tooltip_text(Some("Volume"));
+        button.update_property(&[gtk::accessible::Property::Label("Volume")]);
+        button.set_focus_on_click(false);
+        button.set_always_show_arrow(false);
+        button.set_direction(gtk::ArrowType::Up);
+        button.set_child(Some(&icon));
+
+        let popover = gtk::Popover::new();
+        popover.set_position(gtk::PositionType::Top);
+        popover.set_autohide(true);
+        popover.add_css_class("volume-popover");
+
+        let popover_box = gtk::Box::new(gtk::Orientation::Horizontal, SPACING_XS);
+        popover_box.add_css_class("volume-popover-content");
+        popover_box.set_margin_top(VOLUME_POPOVER_PADDING_V);
+        popover_box.set_margin_bottom(VOLUME_POPOVER_PADDING_V);
+        popover_box.set_margin_start(VOLUME_POPOVER_PADDING_H);
+        popover_box.set_margin_end(VOLUME_POPOVER_PADDING_H);
+
+        let icon_low = gtk::Image::from_icon_name(ICON_VOLUME_MUTED);
+        icon_low.set_pixel_size(ICON_GLYPH_SM);
+        icon_low.add_css_class("volume-popover-icon");
+
+        let icon_high = gtk::Image::from_icon_name(ICON_VOLUME_HIGH);
+        icon_high.set_pixel_size(ICON_GLYPH_SM);
+        icon_high.add_css_class("volume-popover-icon");
+
+        let cb = send.clone();
+        let icon_update = icon.clone();
+        let slider = InteractiveScale::new(
+            1.0,
+            0.01,
+            true,
+            move |v| {
+                icon_update.set_icon_name(Some(if v == 0.0 {
+                    ICON_VOLUME_MUTED
+                } else if v < 0.34 {
+                    ICON_VOLUME_LOW
+                } else if v < 0.67 {
+                    ICON_VOLUME_MED
+                } else {
+                    ICON_VOLUME_HIGH
+                }));
+            },
+            move |v| cb(PlayerCommand::Volume((v * 100.0).round() as u8)),
+        );
+        slider.widget.set_hexpand(false);
+        slider.widget.set_width_request(VOLUME_POPOVER_SLIDER_WIDTH);
+        slider.widget.add_css_class("volume-slider");
+        slider.widget.set_tooltip_text(Some("Volume"));
+        slider
+            .widget
+            .update_property(&[gtk::accessible::Property::Label("Volume")]);
+
+        popover_box.append(&icon_low);
+        popover_box.append(&slider.widget);
+        popover_box.append(&icon_high);
+        popover.set_child(Some(&popover_box));
+        button.set_popover(Some(&popover));
+
+        // Scroll controller for mouse wheel adjustment on the volume button
+        let slider_scroll_btn = slider.clone();
+        let scroll_btn = gtk::EventControllerScroll::new(
+            gtk::EventControllerScrollFlags::VERTICAL | gtk::EventControllerScrollFlags::HORIZONTAL,
+        );
+        scroll_btn.connect_scroll(move |_, dx, dy| {
+            let delta = if dy != 0.0 { -dy } else { dx };
+            let step = if delta > 0.0 {
+                (delta * 0.04).max(0.02)
+            } else if delta < 0.0 {
+                (delta * 0.04).min(-0.02)
+            } else {
+                0.0
+            };
+            if step != 0.0 {
+                let current = slider_scroll_btn.value();
+                let new_value = (current + step).clamp(0.0, 1.0);
+                slider_scroll_btn.set_value(new_value);
+            }
+            gtk::glib::Propagation::Stop
+        });
+        button.add_controller(scroll_btn);
+
+        // Scroll controller inside the popover box
+        let slider_scroll_pop = slider.clone();
+        let scroll_pop = gtk::EventControllerScroll::new(
+            gtk::EventControllerScrollFlags::VERTICAL | gtk::EventControllerScrollFlags::HORIZONTAL,
+        );
+        scroll_pop.connect_scroll(move |_, dx, dy| {
+            let delta = if dy != 0.0 { -dy } else { dx };
+            let step = if delta > 0.0 {
+                (delta * 0.04).max(0.02)
+            } else if delta < 0.0 {
+                (delta * 0.04).min(-0.02)
+            } else {
+                0.0
+            };
+            if step != 0.0 {
+                let current = slider_scroll_pop.value();
+                let new_value = (current + step).clamp(0.0, 1.0);
+                slider_scroll_pop.set_value(new_value);
+            }
+            gtk::glib::Propagation::Stop
+        });
+        popover_box.add_controller(scroll_pop);
+
+        root.append(&button);
+
+        Self {
+            root,
+            slider,
+            icon,
+            fixed_endpoints: false,
+            _popover: Some(popover),
         }
     }
     /// Wide volume with speaker icons on both sides, expanding to fill width.
@@ -314,11 +452,14 @@ impl VolumeControl {
             slider,
             icon,
             fixed_endpoints: true,
+            _popover: None,
         }
     }
     pub fn refresh(&self, player: &SharedPlayer) {
         let p = player.borrow();
-        self.root.set_sensitive(p.now.current_track.is_some());
+        if self._popover.is_none() {
+            self.root.set_sensitive(p.now.current_track.is_some());
+        }
         let v = self
             .slider
             .sync(f64::from(p.now.volume) / 100.0, 1.0, 0.011);
@@ -359,9 +500,13 @@ pub fn refresh_favorite(button: &gtk::Button, player: &SharedPlayer) {
     if p.now.is_favorite {
         button.set_icon_name(ICON_FAVORITE);
         button.add_css_class("favorite-active");
+        button.add_css_class("control-active");
+        button.remove_css_class("control-inactive");
     } else {
         button.set_icon_name(ICON_FAVORITE_OUTLINE);
         button.remove_css_class("favorite-active");
+        button.remove_css_class("control-active");
+        button.add_css_class("control-inactive");
     }
     button.update_property(&[gtk::accessible::Property::Label(if p.now.is_favorite {
         "Unfavorite"
@@ -378,7 +523,12 @@ pub fn more_button(player: &SharedPlayer, on_menu: &MenuHandler) -> gtk::MenuBut
     let button = gtk::MenuButton::new();
     button.set_icon_name(ICON_MORE);
     button.add_css_class("flat");
+    button.add_css_class("player-icon-btn");
+    button.add_css_class("player-more-btn");
     button.add_css_class("np-control");
+    button.set_focus_on_click(false);
+    button.set_always_show_arrow(false);
+    button.set_direction(gtk::ArrowType::Up);
     button.set_tooltip_text(Some("More actions"));
     button.update_property(&[gtk::accessible::Property::Label("More actions")]);
     let p = player.clone();
@@ -387,14 +537,98 @@ pub fn more_button(player: &SharedPlayer, on_menu: &MenuHandler) -> gtk::MenuBut
         let state = p.borrow();
         if let Some(t) = &state.now.current_track {
             let cb = cb.clone();
-            button.set_popover(Some(&build_action_popover(
+            let album_route = t
+                .album
+                .as_ref()
+                .and_then(|a| a.id.as_ref())
+                .map(|r| PageRoute::Album(r.id().to_string()))
+                .or_else(|| {
+                    t.uri.as_deref().and_then(|u| {
+                        let clean = u.split('?').next()?.trim_end_matches('/');
+                        let idx = clean.find("/album/")?;
+                        let after = &clean[idx + "/album/".len()..];
+                        let segs: Vec<&str> = after.split('/').filter(|s| !s.is_empty()).collect();
+                        let id = segs.last()?;
+                        if id.chars().all(|c| c.is_ascii_digit()) || id.starts_with("l.") {
+                            Some(PageRoute::Album(id.to_string()))
+                        } else {
+                            None
+                        }
+                    })
+                });
+            let artist_route = t
+                .artists
+                .first()
+                .and_then(|a| a.id.as_ref())
+                .map(|r| PageRoute::Artist(r.id().to_string()));
+            let popover = build_action_popover_full(
                 &t.id,
                 state.now.is_favorite,
                 state.now.in_library,
                 true,
+                &[],
+                None,
+                album_route,
+                artist_route,
                 move |a| cb(a),
-            )));
+            );
+            popover.set_position(gtk::PositionType::Top);
+            button.set_popover(Some(&popover));
         }
     });
     button
+}
+
+pub fn popup_track_context_menu(
+    parent: &impl IsA<gtk::Widget>,
+    x: f64,
+    y: f64,
+    player: &SharedPlayer,
+    on_menu: &MenuHandler,
+) {
+    let state = player.borrow();
+    if let Some(t) = &state.now.current_track {
+        let cb = on_menu.clone();
+        let album_route = t
+            .album
+            .as_ref()
+            .and_then(|a| a.id.as_ref())
+            .map(|r| PageRoute::Album(r.id().to_string()))
+            .or_else(|| {
+                t.uri.as_deref().and_then(|u| {
+                    let clean = u.split('?').next()?.trim_end_matches('/');
+                    let idx = clean.find("/album/")?;
+                    let after = &clean[idx + "/album/".len()..];
+                    let segs: Vec<&str> = after.split('/').filter(|s| !s.is_empty()).collect();
+                    let id = segs.last()?;
+                    if id.chars().all(|c| c.is_ascii_digit()) || id.starts_with("l.") {
+                        Some(PageRoute::Album(id.to_string()))
+                    } else {
+                        None
+                    }
+                })
+            });
+        let artist_route = t
+            .artists
+            .first()
+            .and_then(|a| a.id.as_ref())
+            .map(|r| PageRoute::Artist(r.id().to_string()));
+        let popover = build_action_popover_full(
+            &t.id,
+            state.now.is_favorite,
+            state.now.in_library,
+            true,
+            &[],
+            None,
+            album_route,
+            artist_route,
+            move |a| cb(a),
+        );
+        popover.set_parent(parent);
+        popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+        popover.connect_closed(|p| {
+            p.unparent();
+        });
+        popover.popup();
+    }
 }

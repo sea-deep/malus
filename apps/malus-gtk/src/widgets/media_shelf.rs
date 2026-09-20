@@ -2,11 +2,12 @@
 
 use crate::widgets::media_card::MediaCardInput;
 use relm4::gtk::{self, prelude::*};
+use std::cell::Cell;
+use std::rc::Rc;
 
-/// Creates a horizontal scrolling container for media cards.
 pub fn create_shelf_container() -> (gtk::ScrolledWindow, gtk::Box) {
     let scrolled = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Automatic)
+        .hscrollbar_policy(gtk::PolicyType::External)
         .vscrollbar_policy(gtk::PolicyType::Never)
         .hexpand(true)
         .vexpand(false)
@@ -24,8 +25,73 @@ pub fn create_shelf_container() -> (gtk::ScrolledWindow, gtk::Box) {
         .build();
     container.add_css_class("media-shelf-box");
 
+    attach_drag_scroll(&scrolled);
+
     scrolled.set_child(Some(&container));
     (scrolled, container)
+}
+
+fn attach_drag_scroll(scrolled: &gtk::ScrolledWindow) {
+    let drag_start = Rc::new(Cell::new(0.0));
+    let is_horizontal = Rc::new(Cell::new(false));
+
+    let gesture = gtk::GestureDrag::new();
+    gesture.set_button(1);
+    gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
+
+    {
+        let drag_start = drag_start.clone();
+        let is_horizontal = is_horizontal.clone();
+        let sw = scrolled.downgrade();
+        gesture.connect_drag_begin(move |_, _, _| {
+            is_horizontal.set(false);
+            if let Some(sw) = sw.upgrade() {
+                drag_start.set(sw.hadjustment().value());
+            }
+        });
+    }
+
+    {
+        let drag_start = drag_start.clone();
+        let is_horizontal = is_horizontal.clone();
+        let sw = scrolled.downgrade();
+        gesture.connect_drag_update(move |g, dx, dy| {
+            if !is_horizontal.get() {
+                if dx.abs() < 8.0 && dy.abs() < 8.0 {
+                    return;
+                }
+                if dx.abs() > dy.abs() {
+                    is_horizontal.set(true);
+                    g.set_state(gtk::EventSequenceState::Claimed);
+                    if let Some(sw) = sw.upgrade() {
+                        sw.set_cursor_from_name(Some("grabbing"));
+                    }
+                } else {
+                    g.set_state(gtk::EventSequenceState::Denied);
+                    return;
+                }
+            }
+            if let Some(sw) = sw.upgrade() {
+                let adj = sw.hadjustment();
+                let max = (adj.upper() - adj.page_size()).max(adj.lower());
+                adj.set_value((drag_start.get() - dx).clamp(adj.lower(), max));
+            }
+        });
+    }
+
+    {
+        let is_horizontal = is_horizontal.clone();
+        let sw = scrolled.downgrade();
+        gesture.connect_drag_end(move |_, _, _| {
+            is_horizontal.set(false);
+            if let Some(sw) = sw.upgrade() {
+                sw.set_cursor_from_name(Some("grab"));
+            }
+        });
+    }
+
+    scrolled.set_cursor_from_name(Some("grab"));
+    scrolled.add_controller(gesture);
 }
 
 pub type ShelfSenders =
