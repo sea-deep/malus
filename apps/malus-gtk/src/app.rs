@@ -1081,12 +1081,13 @@ impl Component for MalusApp {
         match message {
             AppCmd::ConnectionStatusChanged(status) => {
                 let was_disconnected = self.connection_status == ConnectionStatus::Disconnected;
+                let was_not_connected = self.connection_status != ConnectionStatus::Connected;
                 self.connection_status = status;
                 if status == ConnectionStatus::Connected {
                     if was_disconnected {
                         sender.input(AppInput::ShowToast("Connected to Malus daemon".to_string()));
                     }
-                    if was_disconnected {
+                    if was_not_connected {
                         self.feed_page.emit(FeedInput::Reload);
                         self.sidebar.emit(SidebarInput::ReloadPlaylists);
                         if let AppDestination::Search(query) = self.history.current() {

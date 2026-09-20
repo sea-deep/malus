@@ -363,35 +363,43 @@ impl Component for Sidebar {
 
 impl Sidebar {
     async fn fetch_playlists(client: &MalusClient) -> Vec<PlaylistEntry> {
-        let mut entries = Vec::new();
-        if let Ok(page) = client.get_page(&PageRoute::LibraryPlaylists).await {
-            for section in page.sections {
-                for item in section.items {
-                    let route_id = match item.open_route {
-                        Some(PageRoute::Playlist(ref pid)) => pid.clone(),
-                        _ => match item.entity {
-                            Some(malus_model::MediaRef::Playlist(ref pid)) => pid.clone(),
-                            _ => continue,
-                        },
-                    };
-                    let title_lower = item.title.trim().to_lowercase();
-                    let is_favorite_songs = (!item.can_edit
-                        && (title_lower.contains("favor") || title_lower.contains("favour")))
-                        || title_lower == "favorite songs"
-                        || title_lower == "favourite songs";
-                    entries.push(PlaylistEntry {
-                        id: route_id,
-                        title: item.title,
-                        is_favorite_songs,
-                    });
+        for attempt in 0..3 {
+            let mut entries = Vec::new();
+            if let Ok(page) = client.get_page(&PageRoute::LibraryPlaylists).await {
+                for section in page.sections {
+                    for item in section.items {
+                        let route_id = match item.open_route {
+                            Some(PageRoute::Playlist(ref pid)) => pid.clone(),
+                            _ => match item.entity {
+                                Some(malus_model::MediaRef::Playlist(ref pid)) => pid.clone(),
+                                _ => continue,
+                            },
+                        };
+                        let title_lower = item.title.trim().to_lowercase();
+                        let is_favorite_songs = (!item.can_edit
+                            && (title_lower.contains("favor") || title_lower.contains("favour")))
+                            || title_lower == "favorite songs"
+                            || title_lower == "favourite songs";
+                        entries.push(PlaylistEntry {
+                            id: route_id,
+                            title: item.title,
+                            is_favorite_songs,
+                        });
+                    }
                 }
             }
+            if !entries.is_empty() {
+                if let Some(pos) = entries.iter().position(|e| e.is_favorite_songs) {
+                    let fav = entries.remove(pos);
+                    entries.insert(0, fav);
+                }
+                return entries;
+            }
+            if attempt < 2 {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            }
         }
-        if let Some(pos) = entries.iter().position(|e| e.is_favorite_songs) {
-            let fav = entries.remove(pos);
-            entries.insert(0, fav);
-        }
-        entries
+        Vec::new()
     }
 
     fn render_content(&self, widgets: &mut SidebarWidgets, _sender: ComponentSender<Self>) {

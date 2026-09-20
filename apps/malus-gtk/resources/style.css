@@ -185,7 +185,6 @@ popover.volume-popover contents {
 /* --- Content Surfaces and Typography --- */
 .feed-scrolled-window, .search-scrolled-window {
     background-color: @view_bg_color;
-    background-image: linear-gradient(155deg, alpha(@accent_bg_color, 0.055), transparent 420px);
     color: @view_fg_color;
 }
 

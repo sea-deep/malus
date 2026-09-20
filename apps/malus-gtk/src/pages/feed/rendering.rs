@@ -383,8 +383,8 @@ impl FeedPage {
             widgets.main_box.set_vexpand(true);
             widgets.main_box.set_margin_bottom(0);
             widgets.sections_container.set_vexpand(true);
-            let albums_view = self.build_library_albums_view(&page, sender.clone());
-            widgets.sections_container.append(&albums_view);
+            let genres_view = self.build_library_genres_view(&page, sender.clone());
+            widgets.sections_container.append(&genres_view);
             return;
         } else {
             widgets
@@ -1071,7 +1071,7 @@ impl FeedPage {
         row
     }
 
-    fn build_library_albums_view(
+    fn build_library_genres_view(
         &mut self,
         page: &PageWire,
         sender: ComponentSender<Self>,
@@ -1287,7 +1287,7 @@ impl FeedPage {
             .hexpand(true)
             .build();
 
-        let display_title = self.selected_genre.as_deref().unwrap_or("Albums");
+        let display_title = self.selected_genre.as_deref().unwrap_or("All Genres");
         let title_lbl = gtk::Label::builder()
             .label(display_title)
             .xalign(0.0)
