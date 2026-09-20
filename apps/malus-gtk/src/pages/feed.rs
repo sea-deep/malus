@@ -109,6 +109,13 @@ pub struct FeedPage {
     selected_genre: Option<String>,
     genre_search_query: String,
     show_genre_detail: bool,
+    pub(super) active_artist_split: Option<adw::OverlaySplitView>,
+    pub(super) active_artist_back_box: Option<gtk::Box>,
+    pub(super) show_artist_detail_cell: Option<std::rc::Rc<std::cell::Cell<bool>>>,
+    pub(super) active_genre_split: Option<adw::OverlaySplitView>,
+    pub(super) active_genre_list: Option<gtk::Box>,
+    pub(super) active_genre_back_box: Option<gtk::Box>,
+    pub(super) show_genre_detail_cell: Option<std::rc::Rc<std::cell::Cell<bool>>>,
 }
 
 #[derive(Debug)]
@@ -333,6 +340,13 @@ impl Component for FeedPage {
             selected_genre: None,
             genre_search_query: String::new(),
             show_genre_detail: false,
+            active_artist_split: None,
+            active_artist_back_box: None,
+            show_artist_detail_cell: None,
+            active_genre_split: None,
+            active_genre_list: None,
+            active_genre_back_box: None,
+            show_genre_detail_cell: None,
         };
 
         let widgets = view_output!();
@@ -451,6 +465,9 @@ impl Component for FeedPage {
                 if self.selected_artist_id.as_deref() != Some(&id) || self.artist_detail.is_none() {
                     self.selected_artist_id = Some(id.clone());
                     self.show_artist_detail = true;
+                    if let Some(cell) = &self.show_artist_detail_cell {
+                        cell.set(true);
+                    }
                     self.artist_detail_loading = true;
                     self.artist_detail = None;
                     self.artist_error = None;
@@ -471,6 +488,9 @@ impl Component for FeedPage {
                     });
                 } else {
                     self.show_artist_detail = true;
+                    if let Some(cell) = &self.show_artist_detail_cell {
+                        cell.set(true);
+                    }
                 }
             }
             FeedInput::ArtistSearchChanged(query) => {
@@ -478,16 +498,25 @@ impl Component for FeedPage {
             }
             FeedInput::BackToArtistList => {
                 self.show_artist_detail = false;
+                if let Some(cell) = &self.show_artist_detail_cell {
+                    cell.set(false);
+                }
             }
             FeedInput::SelectGenre(genre) => {
                 self.selected_genre = genre;
                 self.show_genre_detail = true;
+                if let Some(cell) = &self.show_genre_detail_cell {
+                    cell.set(true);
+                }
             }
             FeedInput::GenreSearchChanged(query) => {
                 self.genre_search_query = query;
             }
             FeedInput::BackToGenreList => {
                 self.show_genre_detail = false;
+                if let Some(cell) = &self.show_genre_detail_cell {
+                    cell.set(false);
+                }
             }
             FeedInput::LoadRoute(route) => {
                 if self.route != route || (self.page_data.is_none() && !self.is_loading) {
@@ -679,6 +708,18 @@ impl Component for FeedPage {
         if route_changes {
             widgets.scrolled_window.vadjustment().set_value(0.0);
         }
+        if is_artist_nav
+            && let Some(split) = self.active_artist_split.clone()
+        {
+            self.update_artist_view_inplace(&split, sender);
+            return;
+        }
+        if (is_genre_nav || (is_sort_change && self.route == PageRoute::LibraryGenres))
+            && let Some(split) = self.active_genre_split.clone()
+        {
+            self.update_genre_view_inplace(&split, sender);
+            return;
+        }
         if is_sort_change || is_artist_nav || is_genre_nav {
             self.render_content(widgets, sender);
         }
@@ -711,6 +752,7 @@ impl Component for FeedPage {
         if !current {
             return;
         }
+        let is_artist_loaded = matches!(&message, FeedCmd::ArtistDetailLoaded { .. });
         let continuation_failed =
             matches!(&message, FeedCmd::SectionContinued { result: Err(_), .. });
         let should_render = matches!(
@@ -735,6 +777,12 @@ impl Component for FeedPage {
 
         self.update_cmd(message, sender.clone(), root);
         self.update_view(widgets, sender.clone());
+        if is_artist_loaded
+            && let Some(split) = self.active_artist_split.clone()
+        {
+            self.update_artist_view_inplace(&split, sender);
+            return;
+        }
         if should_render {
             self.render_content(widgets, sender.clone());
             if self.continuation_error.is_none() {

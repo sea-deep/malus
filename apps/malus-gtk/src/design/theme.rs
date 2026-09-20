@@ -457,6 +457,12 @@ fn soft_surfaces_css(is_dark: bool) -> &'static str {
              border-right: 1px solid rgba(255, 255, 255, 0.06);\n\
              transition: background-color 200ms ease;\n\
          }\n\
+         .master-split-view > .sidebar,\n\
+         .master-split-view .sidebar {\n\
+             background-color: transparent !important;\n\
+             background-image: none !important;\n\
+             border-right: none !important;\n\
+         }\n\
          .sidebar-search {\n\
              background-color: alpha(currentColor, 0.055);\n\
              border: 1px solid alpha(currentColor, 0.06);\n\
@@ -492,6 +498,12 @@ fn soft_surfaces_css(is_dark: bool) -> &'static str {
              background-color: alpha(mix(@window_bg_color, @view_bg_color, 0.30), 0.86);\n\
              border-right: 1px solid rgba(0, 0, 0, 0.07);\n\
              transition: background-color 200ms ease;\n\
+         }\n\
+         .master-split-view > .sidebar,\n\
+         .master-split-view .sidebar {\n\
+             background-color: transparent !important;\n\
+             background-image: none !important;\n\
+             border-right: none !important;\n\
          }\n\
          .sidebar-search {\n\
              background-color: alpha(currentColor, 0.045);\n\

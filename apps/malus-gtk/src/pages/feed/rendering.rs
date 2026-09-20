@@ -25,10 +25,10 @@ impl FeedPage {
             .spacing(12)
             .css_classes(vec!["artist-row".to_string()])
             .build();
-        row.set_widget_name(&item.title);
-        row.set_cursor_from_name(Some("pointer"));
-
         let artist_id = artist_route_id(item);
+        let id_str = artist_id.as_deref().unwrap_or("");
+        row.set_widget_name(&format!("{id_str}:{}", item.title));
+        row.set_cursor_from_name(Some("pointer"));
         let is_selected = self.selected_artist_id == artist_id && artist_id.is_some();
         if is_selected {
             row.add_css_class("artist-row-active");
@@ -338,6 +338,14 @@ impl FeedPage {
         self.mounted_sections.clear();
         self.deferred_sections.borrow_mut().clear();
         self.active_artist_list = None;
+        self.active_artist_spinner = None;
+        self.active_artist_split = None;
+        self.active_artist_back_box = None;
+        self.show_artist_detail_cell = None;
+        self.active_genre_split = None;
+        self.active_genre_list = None;
+        self.active_genre_back_box = None;
+        self.show_genre_detail_cell = None;
         self.virtual_track_list = None;
         self.library_subtitle_lbl = None;
 
@@ -753,6 +761,7 @@ impl FeedPage {
             .sidebar_width_fraction(0.24)
             .enable_show_gesture(true)
             .enable_hide_gesture(true)
+            .css_classes(vec!["master-split-view".to_string()])
             .vexpand(true)
             .hexpand(true)
             .build();
@@ -845,7 +854,51 @@ impl FeedPage {
         sidebar_box.append(&scroll);
         split.set_sidebar(Some(&sidebar_box));
 
-        // 2. Detail Content
+        let (detail_scroll, back_box_opt) = self.build_artist_detail_content(sender);
+        self.active_artist_back_box = back_box_opt.clone();
+        split.set_content(Some(&detail_scroll));
+
+        let show_cell = std::rc::Rc::new(std::cell::Cell::new(self.show_artist_detail));
+        self.show_artist_detail_cell = Some(show_cell.clone());
+        self.active_artist_split = Some(split.clone());
+
+        // Responsive behavior
+        let split_ref = split.clone();
+        let last_w = std::cell::Cell::new(0);
+        let back_box_ref = back_box_opt;
+        let show_cell_ref = show_cell;
+        split.add_tick_callback(move |widget, _| {
+            let win_w = widget
+                .root()
+                .and_then(|r| r.downcast::<gtk::Window>().ok())
+                .map(|w| w.width())
+                .unwrap_or_else(|| widget.width());
+            if win_w > 0 && last_w.replace(win_w) != win_w {
+                let is_narrow = win_w < 850;
+                let show_detail = show_cell_ref.get();
+                split_ref.set_collapsed(is_narrow);
+                if is_narrow {
+                    split_ref.set_show_sidebar(!show_detail);
+                    if let Some(b) = &back_box_ref {
+                        b.set_visible(show_detail);
+                    }
+                } else {
+                    split_ref.set_show_sidebar(true);
+                    if let Some(b) = &back_box_ref {
+                        b.set_visible(false);
+                    }
+                }
+            }
+            relm4::gtk::glib::ControlFlow::Continue
+        });
+
+        split.upcast()
+    }
+
+    pub(super) fn build_artist_detail_content(
+        &mut self,
+        sender: ComponentSender<Self>,
+    ) -> (gtk::ScrolledWindow, Option<gtk::Box>) {
         let detail_scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vscrollbar_policy(gtk::PolicyType::Automatic)
@@ -987,38 +1040,46 @@ impl FeedPage {
         }
 
         detail_scroll.set_child(Some(&detail_box));
+        (detail_scroll, back_box_opt)
+    }
+
+    pub(super) fn update_artist_view_inplace(
+        &mut self,
+        split: &adw::OverlaySplitView,
+        sender: ComponentSender<Self>,
+    ) {
+        if let Some(list) = &self.active_artist_list {
+            let mut child = list.first_child();
+            while let Some(w) = child {
+                let name = w.widget_name();
+                let row_id = name.split(':').next().unwrap_or("");
+                let is_active = self.selected_artist_id.as_deref() == Some(row_id)
+                    && self.selected_artist_id.is_some();
+                if is_active {
+                    w.add_css_class("artist-row-active");
+                } else {
+                    w.remove_css_class("artist-row-active");
+                }
+                child = w.next_sibling();
+            }
+        }
+
+        let (detail_scroll, back_box) = self.build_artist_detail_content(sender);
+        self.active_artist_back_box = back_box.clone();
         split.set_content(Some(&detail_scroll));
 
-        // Responsive behavior
-        let split_ref = split.clone();
-        let show_detail = self.show_artist_detail;
-        let last_w = std::cell::Cell::new(0);
-        let back_box_ref = back_box_opt.clone();
-        split.add_tick_callback(move |widget, _| {
-            let win_w = widget
-                .root()
-                .and_then(|r| r.downcast::<gtk::Window>().ok())
-                .map(|w| w.width())
-                .unwrap_or_else(|| widget.width());
-            if win_w > 0 && last_w.replace(win_w) != win_w {
-                let is_narrow = win_w < 850;
-                split_ref.set_collapsed(is_narrow);
-                if is_narrow {
-                    split_ref.set_show_sidebar(!show_detail);
-                    if let Some(b) = &back_box_ref {
-                        b.set_visible(show_detail);
-                    }
-                } else {
-                    split_ref.set_show_sidebar(true);
-                    if let Some(b) = &back_box_ref {
-                        b.set_visible(false);
-                    }
-                }
+        let is_narrow = split.is_collapsed();
+        if is_narrow {
+            split.set_show_sidebar(!self.show_artist_detail);
+            if let Some(b) = &back_box {
+                b.set_visible(self.show_artist_detail);
             }
-            relm4::gtk::glib::ControlFlow::Continue
-        });
-
-        split.upcast()
+        } else {
+            split.set_show_sidebar(true);
+            if let Some(b) = &back_box {
+                b.set_visible(false);
+            }
+        }
     }
 
     fn build_genre_row(
@@ -1083,6 +1144,7 @@ impl FeedPage {
             .sidebar_width_fraction(0.24)
             .enable_show_gesture(true)
             .enable_hide_gesture(true)
+            .css_classes(vec!["master-split-view".to_string()])
             .vexpand(true)
             .hexpand(true)
             .build();
@@ -1195,9 +1257,64 @@ impl FeedPage {
             list_box.append(&row);
         }
 
+        self.active_genre_list = Some(list_box.clone());
+
         scroll.set_child(Some(&list_box));
         sidebar_box.append(&scroll);
         split.set_sidebar(Some(&sidebar_box));
+
+        let (detail_scroll, back_box_opt) = self.build_genre_detail_content(page, sender);
+        self.active_genre_back_box = back_box_opt.clone();
+        split.set_content(Some(&detail_scroll));
+
+        let show_cell = std::rc::Rc::new(std::cell::Cell::new(self.show_genre_detail));
+        self.show_genre_detail_cell = Some(show_cell.clone());
+        self.active_genre_split = Some(split.clone());
+
+        // Responsive behavior
+        let split_ref = split.clone();
+        let last_w = std::cell::Cell::new(0);
+        let back_box_ref = back_box_opt;
+        let show_cell_ref = show_cell;
+        split.add_tick_callback(move |widget, _| {
+            let win_w = widget
+                .root()
+                .and_then(|r| r.downcast::<gtk::Window>().ok())
+                .map(|w| w.width())
+                .unwrap_or_else(|| widget.width());
+            if win_w > 0 && last_w.replace(win_w) != win_w {
+                let is_narrow = win_w < 850;
+                let show_detail = show_cell_ref.get();
+                split_ref.set_collapsed(is_narrow);
+                if is_narrow {
+                    split_ref.set_show_sidebar(!show_detail);
+                    if let Some(b) = &back_box_ref {
+                        b.set_visible(show_detail);
+                    }
+                } else {
+                    split_ref.set_show_sidebar(true);
+                    if let Some(b) = &back_box_ref {
+                        b.set_visible(false);
+                    }
+                }
+            }
+            relm4::gtk::glib::ControlFlow::Continue
+        });
+
+        split.upcast()
+    }
+
+    pub(super) fn build_genre_detail_content(
+        &mut self,
+        page: &PageWire,
+        sender: ComponentSender<Self>,
+    ) -> (gtk::ScrolledWindow, Option<gtk::Box>) {
+        let all_items: Vec<_> = page
+            .sections
+            .iter()
+            .flat_map(|s| &s.items)
+            .cloned()
+            .collect();
 
         // 2. Detail Content
         let detail_scroll = gtk::ScrolledWindow::builder()
@@ -1347,32 +1464,30 @@ impl FeedPage {
                 0 => LibrarySortMethod::RecentlyAdded,
                 1 => LibrarySortMethod::Title,
                 2 => LibrarySortMethod::Artist,
-                _ => LibrarySortMethod::RecentlyAdded,
+                _ => return,
             };
             s_sort.input(FeedInput::ChangeSort(method));
         });
         sort_box.append(&dropdown);
         header_row.append(&sort_box);
-
         detail_box.append(&header_row);
 
-        // Grid of Albums
+        // Grid of albums
         if filtered_items.is_empty() {
             let empty = crate::widgets::empty_state::create_empty_state(
-                "media-optical-cd-audio-symbolic",
-                "No albums found",
-                Some("No albums match the selected genre."),
+                "media-optical-symbolic",
+                "No albums in this genre",
+                None,
             );
             detail_box.append(&empty);
         } else {
             let flow = gtk::FlowBox::builder()
                 .valign(gtk::Align::Start)
-                .max_children_per_line(12)
-                .min_children_per_line(1)
+                .max_children_per_line(30)
+                .min_children_per_line(2)
                 .selection_mode(gtk::SelectionMode::None)
-                .homogeneous(true)
-                .column_spacing(GRID_GAP)
-                .row_spacing(GRID_GAP + 6)
+                .column_spacing(16)
+                .row_spacing(16)
                 .build();
 
             let mut grid_deferred = Vec::new();
@@ -1423,7 +1538,7 @@ impl FeedPage {
         // Hook lazy artwork loading for detail scroll
         let vadj = detail_scroll.vadjustment();
         let deferred_clone = self.deferred_sections.clone();
-        let detail_box_clone = detail_box.clone();
+        let detail_box_clone = detail_box;
         let check_scroll = move |adj: &gtk::Adjustment| {
             let mut deferred = deferred_clone.borrow_mut();
             if deferred.is_empty() {
@@ -1446,41 +1561,56 @@ impl FeedPage {
         vadj.connect_value_changed(move |adj| c1(adj));
         let c2 = check_scroll.clone();
         vadj.connect_page_size_notify(move |adj| c2(adj));
-        let vadj_c = vadj.clone();
+        let vadj_c = vadj;
         detail_scroll.connect_map(move |_| check_scroll(&vadj_c));
 
+        (detail_scroll, back_box_opt)
+    }
+
+    pub(super) fn update_genre_view_inplace(
+        &mut self,
+        split: &adw::OverlaySplitView,
+        sender: ComponentSender<Self>,
+    ) {
+        let page = match self.page_data.as_ref() {
+            Some(p) => p.clone(),
+            None => return,
+        };
+
+        if let Some(list) = &self.active_genre_list {
+            let mut child = list.first_child();
+            while let Some(w) = child {
+                let name = w.widget_name();
+                let is_active = match (&self.selected_genre, name.as_str()) {
+                    (None, "All Genres") => true,
+                    (Some(g), n) => g.eq_ignore_ascii_case(n),
+                    _ => false,
+                };
+                if is_active {
+                    w.add_css_class("genre-row-active");
+                } else {
+                    w.remove_css_class("genre-row-active");
+                }
+                child = w.next_sibling();
+            }
+        }
+
+        let (detail_scroll, back_box) = self.build_genre_detail_content(&page, sender);
+        self.active_genre_back_box = back_box.clone();
         split.set_content(Some(&detail_scroll));
 
-        // Responsive behavior
-        let split_ref = split.clone();
-        let show_detail = self.show_genre_detail;
-        let last_w = std::cell::Cell::new(0);
-        let back_box_ref = back_box_opt.clone();
-        split.add_tick_callback(move |widget, _| {
-            let win_w = widget
-                .root()
-                .and_then(|r| r.downcast::<gtk::Window>().ok())
-                .map(|w| w.width())
-                .unwrap_or_else(|| widget.width());
-            if win_w > 0 && last_w.replace(win_w) != win_w {
-                let is_narrow = win_w < 850;
-                split_ref.set_collapsed(is_narrow);
-                if is_narrow {
-                    split_ref.set_show_sidebar(!show_detail);
-                    if let Some(b) = &back_box_ref {
-                        b.set_visible(show_detail);
-                    }
-                } else {
-                    split_ref.set_show_sidebar(true);
-                    if let Some(b) = &back_box_ref {
-                        b.set_visible(false);
-                    }
-                }
+        let is_narrow = split.is_collapsed();
+        if is_narrow {
+            split.set_show_sidebar(!self.show_genre_detail);
+            if let Some(b) = &back_box {
+                b.set_visible(self.show_genre_detail);
             }
-            relm4::gtk::glib::ControlFlow::Continue
-        });
-
-        split.upcast()
+        } else {
+            split.set_show_sidebar(true);
+            if let Some(b) = &back_box {
+                b.set_visible(false);
+            }
+        }
     }
 
     pub(super) fn item_to_track(&self, item: &PageItemWire) -> Track {

@@ -502,8 +502,17 @@ flowboxchild {
 }
 
 /* --- Artist and Genre Master-Detail Layout --- */
-.artist-master-list,
-.genre-master-list {
+.master-split-view > .sidebar,
+.master-split-view .sidebar {
+    background-color: transparent !important;
+    background-image: none !important;
+    border-right: none !important;
+}
+
+.master-split-view .artist-master-list,
+.master-split-view .genre-master-list {
+    background-color: transparent !important;
+    background-image: none !important;
     border-right: 1px solid alpha(currentColor, 0.08);
 }
 
