@@ -458,9 +458,11 @@ fn soft_surfaces_css(is_dark: bool) -> &'static str {
              transition: background-color 200ms ease;\n\
          }\n\
          .master-split-view > .sidebar,\n\
-         .master-split-view .sidebar {\n\
+         .master-split-view .sidebar,\n\
+         .master-split-view .sidebar-pane {\n\
              background-color: transparent !important;\n\
              background-image: none !important;\n\
+             box-shadow: none !important;\n\
              border-right: none !important;\n\
          }\n\
          .sidebar-search {\n\
@@ -500,9 +502,11 @@ fn soft_surfaces_css(is_dark: bool) -> &'static str {
              transition: background-color 200ms ease;\n\
          }\n\
          .master-split-view > .sidebar,\n\
-         .master-split-view .sidebar {\n\
+         .master-split-view .sidebar,\n\
+         .master-split-view .sidebar-pane {\n\
              background-color: transparent !important;\n\
              background-image: none !important;\n\
+             box-shadow: none !important;\n\
              border-right: none !important;\n\
          }\n\
          .sidebar-search {\n\

@@ -509,6 +509,12 @@ flowboxchild {
     border-radius: 0;
 }
 
+.master-split-view .sidebar-pane {
+    background-color: transparent;
+    background-image: none;
+    box-shadow: none;
+}
+
 .master-split-view .artist-master-list,
 .master-split-view .genre-master-list {
     background-color: transparent;

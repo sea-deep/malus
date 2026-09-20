@@ -1080,8 +1080,14 @@ impl FeedPage {
         self.active_artist_back_box = back_box.clone();
         split.set_content(Some(&detail_scroll));
 
-        let is_narrow = split.is_collapsed();
+        let win_narrow = split
+            .root()
+            .and_then(|r| r.downcast::<gtk::Window>().ok())
+            .map(|w| w.width() > 0 && w.width() < 850)
+            .unwrap_or(false);
+        let is_narrow = split.is_collapsed() || win_narrow;
         if is_narrow {
+            split.set_collapsed(true);
             split.set_show_sidebar(!self.show_artist_detail);
             if let Some(b) = &back_box {
                 b.set_visible(self.show_artist_detail);
@@ -1611,8 +1617,14 @@ impl FeedPage {
         self.active_genre_back_box = back_box.clone();
         split.set_content(Some(&detail_scroll));
 
-        let is_narrow = split.is_collapsed();
+        let win_narrow = split
+            .root()
+            .and_then(|r| r.downcast::<gtk::Window>().ok())
+            .map(|w| w.width() > 0 && w.width() < 850)
+            .unwrap_or(false);
+        let is_narrow = split.is_collapsed() || win_narrow;
         if is_narrow {
+            split.set_collapsed(true);
             split.set_show_sidebar(!self.show_genre_detail);
             if let Some(b) = &back_box {
                 b.set_visible(self.show_genre_detail);
