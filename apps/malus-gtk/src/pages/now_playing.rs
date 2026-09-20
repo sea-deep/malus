@@ -153,7 +153,7 @@ impl NowPlayingPage {
 
         let subtitle_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         subtitle_box.set_hexpand(true);
-        subtitle_box.set_halign(gtk::Align::Start);
+        subtitle_box.set_halign(gtk::Align::Fill);
 
         let text_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
         text_box.set_hexpand(true);
@@ -225,14 +225,14 @@ impl NowPlayingPage {
         let compact_art_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
         compact_art_box.set_halign(gtk::Align::Center);
         compact_art_box.set_valign(gtk::Align::Center);
-        compact_art_box.set_margin_top(48);
+        compact_art_box.set_margin_bottom(16);
         let compact_player_artwork = SquareArtwork::new(280, "nowplaying-artwork");
         compact_art_box.append(&compact_player_artwork);
         compact_player_view.append(&compact_art_box);
 
         let compact_meta_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        compact_meta_row.set_margin_top(4);
-        compact_meta_row.set_margin_bottom(8);
+        compact_meta_row.set_margin_top(0);
+        compact_meta_row.set_margin_bottom(14);
         compact_meta_row.set_halign(gtk::Align::Fill);
         compact_meta_row.set_hexpand(true);
 
@@ -249,7 +249,7 @@ impl NowPlayingPage {
 
         let compact_subtitle_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         compact_subtitle_box.set_hexpand(true);
-        compact_subtitle_box.set_halign(gtk::Align::Start);
+        compact_subtitle_box.set_halign(gtk::Align::Fill);
 
         compact_meta.append(&compact_title);
         compact_meta.append(&compact_subtitle_box);
@@ -311,7 +311,7 @@ impl NowPlayingPage {
 
         let compact_mini_subtitle_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         compact_mini_subtitle_box.set_hexpand(true);
-        compact_mini_subtitle_box.set_halign(gtk::Align::Start);
+        compact_mini_subtitle_box.set_halign(gtk::Align::Fill);
 
         compact_mini_meta.append(&compact_mini_title);
         compact_mini_meta.append(&compact_mini_subtitle_box);
@@ -350,8 +350,9 @@ impl NowPlayingPage {
 
         // --- Compact Controls Box (Scrubber, Transport, Volume) ---
         let compact_controls_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        compact_controls_box.set_halign(gtk::Align::Center);
-        compact_controls_box.set_margin_top(12);
+        compact_controls_box.set_halign(gtk::Align::Fill);
+        compact_controls_box.set_hexpand(true);
+        compact_controls_box.set_margin_top(0);
 
         // Compact seek bar
         let compact_seek = SeekControl::new(player, send, true);
@@ -360,16 +361,16 @@ impl NowPlayingPage {
         // Compact transport: Prev / Play / Next / Shuffle / Repeat
         let compact_transport = Transport::new(player, send, true);
         compact_transport.root.set_margin_top(6);
-        compact_transport.root.set_margin_bottom(4);
+        compact_transport.root.set_margin_bottom(6);
         compact_controls_box.append(&compact_transport.root);
 
         // Compact volume: wide with speaker icons on both sides
         let compact_volume = VolumeControl::new_wide(send);
         compact_volume.root.set_margin_top(4);
-        compact_volume.root.set_margin_bottom(8);
+        compact_volume.root.set_margin_bottom(0);
         compact_controls_box.append(&compact_volume.root);
 
-        compact_root.append(&compact_controls_box);
+        compact_player_view.append(&compact_controls_box);
 
         // Bottom row: Lyrics / Queue toggle buttons
         let compact_bottom = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -613,14 +614,10 @@ impl NowPlayingPage {
                         + compact_trans_ref.measure(gtk::Orientation::Vertical, -1).1
                         + compact_vol_ref.measure(gtk::Orientation::Vertical, -1).1
                         + compact_bottom_ref.measure(gtk::Orientation::Vertical, -1).1
-                        + 60)
+                        + 72)
                         .max(280);
                     let available_compact_art = (height - controls_h).max(96);
-                    let full_mode_art = (height - 96 - 216).max(96);
-                    let side = (width - 48)
-                        .min(available_compact_art)
-                        .min(full_mode_art)
-                        .clamp(96, 460);
+                    let side = (width - 48).min(available_compact_art).clamp(96, 460);
 
                     compact_art.set_side(side);
                     compact_art_box_ref.set_width_request(side);
@@ -631,24 +628,30 @@ impl NowPlayingPage {
                     compact_lyrics_root.set_width_request(side);
                     compact_qw_ref.set_width_request(side);
 
-                    if queue_layout {
+                    if queue_layout || lyric_layout {
                         compact_player_view_ref.set_visible(false);
                         compact_mini_hdr_ref.set_visible(true);
-                        compact_lyrics_root.set_visible(false);
-                        compact_qw_ref.set_visible(true);
+                        compact_lyrics_root.set_visible(lyric_layout);
+                        compact_qw_ref.set_visible(queue_layout);
                         compact_controls_ref.set_visible(true);
-                    } else if lyric_layout {
-                        compact_player_view_ref.set_visible(false);
-                        compact_mini_hdr_ref.set_visible(true);
-                        compact_lyrics_root.set_visible(true);
-                        compact_qw_ref.set_visible(false);
-                        compact_controls_ref.set_visible(true);
+                        compact_controls_ref.set_halign(gtk::Align::Center);
+                        if compact_controls_ref.parent().as_ref() != Some(cr_ref.upcast_ref()) {
+                            compact_controls_ref.unparent();
+                            cr_ref.insert_child_after(&compact_controls_ref, Some(&compact_qw_ref));
+                        }
                     } else {
                         compact_player_view_ref.set_visible(true);
                         compact_mini_hdr_ref.set_visible(false);
                         compact_lyrics_root.set_visible(false);
                         compact_qw_ref.set_visible(false);
                         compact_controls_ref.set_visible(true);
+                        compact_controls_ref.set_halign(gtk::Align::Fill);
+                        if compact_controls_ref.parent().as_ref()
+                            != Some(compact_player_view_ref.upcast_ref())
+                        {
+                            compact_controls_ref.unparent();
+                            compact_player_view_ref.append(&compact_controls_ref);
+                        }
                     }
                 }
             }
@@ -897,7 +900,7 @@ fn populate_artists_box(
     track: Option<&Track>,
     navigate: &Rc<dyn Fn(AppDestination) + 'static>,
     artist_css_class: &str,
-    sep_css_class: &str,
+    _sep_css_class: &str,
 ) {
     while let Some(child) = container.first_child() {
         container.remove(&child);
@@ -907,9 +910,14 @@ fn populate_artists_box(
         let lbl = gtk::Label::new(Some("Choose a song from your library"));
         lbl.add_css_class(artist_css_class);
         lbl.set_xalign(0.0);
+        lbl.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        lbl.set_max_width_chars(1);
+        lbl.set_hexpand(true);
         container.append(&lbl);
         return;
     };
+
+    let mut markup_parts = Vec::new();
 
     if t.artists.is_empty() {
         let disp = t.artist_display();
@@ -918,66 +926,61 @@ fn populate_artists_box(
         } else {
             disp
         };
-        let lbl = gtk::Label::new(Some(&name));
-        lbl.add_css_class(artist_css_class);
-        lbl.set_xalign(0.0);
-        lbl.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        container.append(&lbl);
+        markup_parts.push(gtk::glib::markup_escape_text(&name).to_string());
     } else {
-        for (i, artist) in t.artists.iter().enumerate() {
-            if i > 0 {
-                let sep = gtk::Label::new(Some(", "));
-                sep.add_css_class(sep_css_class);
-                container.append(&sep);
-            }
-            let lbl = gtk::Label::new(Some(&artist.name));
-            lbl.add_css_class(artist_css_class);
-            lbl.set_xalign(0.0);
-            lbl.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        let mut artist_links = Vec::new();
+        for artist in &t.artists {
+            let escaped_name = gtk::glib::markup_escape_text(&artist.name);
             if let Some(ref id) = artist.id {
-                lbl.add_css_class("metadata-link");
-                lbl.set_cursor_from_name(Some("pointer"));
-                let nav = navigate.clone();
-                let dest = AppDestination::Page(PageRoute::Artist(id.id().to_string()));
-                let g = gtk::GestureClick::new();
-                g.connect_released(move |g, n, _, _| {
-                    if n == 1 {
-                        g.set_state(gtk::EventSequenceState::Claimed);
-                        nav(dest.clone());
-                    }
-                });
-                lbl.add_controller(g);
+                artist_links.push(format!(
+                    "<a href=\"artist:{}\">{}</a>",
+                    gtk::glib::markup_escape_text(id.id()),
+                    escaped_name
+                ));
+            } else {
+                artist_links.push(escaped_name.to_string());
             }
-            container.append(&lbl);
         }
+        markup_parts.push(artist_links.join(", "));
     }
 
     if let Some(album) = t.album_title()
         && album != t.title
         && !album.is_empty()
     {
-        let sep = gtk::Label::new(Some(" · "));
-        sep.add_css_class(sep_css_class);
-        container.append(&sep);
-
-        let lbl = gtk::Label::new(Some(album));
-        lbl.add_css_class(artist_css_class);
-        lbl.set_xalign(0.0);
-        lbl.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        let escaped_album = gtk::glib::markup_escape_text(album);
         if let Some(id) = t.album.as_ref().and_then(|a| a.id.as_ref()) {
-            lbl.add_css_class("metadata-link");
-            lbl.set_cursor_from_name(Some("pointer"));
-            let nav = navigate.clone();
-            let dest = AppDestination::Page(PageRoute::Album(id.id().to_string()));
-            let g = gtk::GestureClick::new();
-            g.connect_released(move |g, n, _, _| {
-                if n == 1 {
-                    g.set_state(gtk::EventSequenceState::Claimed);
-                    nav(dest.clone());
-                }
-            });
-            lbl.add_controller(g);
+            markup_parts.push(format!(
+                "<a href=\"album:{}\">{}</a>",
+                gtk::glib::markup_escape_text(id.id()),
+                escaped_album
+            ));
+        } else {
+            markup_parts.push(escaped_album.to_string());
         }
-        container.append(&lbl);
     }
+
+    let full_markup = markup_parts.join(" · ");
+    let lbl = gtk::Label::new(None);
+    lbl.set_use_markup(true);
+    lbl.set_markup(&full_markup);
+    lbl.add_css_class(artist_css_class);
+    lbl.set_xalign(0.0);
+    lbl.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    lbl.set_max_width_chars(1);
+    lbl.set_hexpand(true);
+
+    let nav = navigate.clone();
+    lbl.connect_activate_link(move |_, uri| {
+        if let Some(artist_id) = uri.strip_prefix("artist:") {
+            nav(AppDestination::Page(PageRoute::Artist(
+                artist_id.to_string(),
+            )));
+        } else if let Some(album_id) = uri.strip_prefix("album:") {
+            nav(AppDestination::Page(PageRoute::Album(album_id.to_string())));
+        }
+        gtk::glib::Propagation::Stop
+    });
+
+    container.append(&lbl);
 }

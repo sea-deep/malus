@@ -708,9 +708,7 @@ impl Component for FeedPage {
         if route_changes {
             widgets.scrolled_window.vadjustment().set_value(0.0);
         }
-        if is_artist_nav
-            && let Some(split) = self.active_artist_split.clone()
-        {
+        if is_artist_nav && let Some(split) = self.active_artist_split.clone() {
             self.update_artist_view_inplace(&split, sender);
             return;
         }
@@ -777,9 +775,7 @@ impl Component for FeedPage {
 
         self.update_cmd(message, sender.clone(), root);
         self.update_view(widgets, sender.clone());
-        if is_artist_loaded
-            && let Some(split) = self.active_artist_split.clone()
-        {
+        if is_artist_loaded && let Some(split) = self.active_artist_split.clone() {
             self.update_artist_view_inplace(&split, sender);
             return;
         }
