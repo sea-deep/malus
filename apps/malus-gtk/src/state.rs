@@ -115,6 +115,7 @@ pub struct NowPlayingState {
     pub in_library: bool,
     pub rating: Rating,
     pub clock: PresentationClock,
+    pub action_in_flight: bool,
 }
 
 impl Default for NowPlayingState {
@@ -131,6 +132,7 @@ impl Default for NowPlayingState {
             in_library: false,
             rating: Rating::Neutral,
             clock: PresentationClock::new(),
+            action_in_flight: false,
         }
     }
 }
@@ -151,6 +153,7 @@ impl NowPlayingState {
             in_library: false,
             rating: Rating::Neutral,
             clock,
+            action_in_flight: false,
         }
     }
 
@@ -169,6 +172,7 @@ impl NowPlayingState {
         self.repeat = status.repeat;
         self.autoplay = status.autoplay;
         self.clock.update(status);
+        self.action_in_flight = false;
 
         if track_changed {
             self.is_favorite = false;

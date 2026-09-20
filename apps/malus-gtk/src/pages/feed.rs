@@ -116,6 +116,8 @@ pub struct FeedPage {
     pub(super) active_genre_list: Option<gtk::Box>,
     pub(super) active_genre_back_box: std::rc::Rc<std::cell::RefCell<Option<gtk::Box>>>,
     pub(super) show_genre_detail_cell: Option<std::rc::Rc<std::cell::Cell<bool>>>,
+    pub(super) page_cache: crate::services::PageCache,
+    pub(super) skeleton_route: Option<PageRoute>,
 }
 
 #[derive(Debug)]
@@ -219,21 +221,13 @@ impl Component for FeedPage {
                 set_margin_top: 24,
                 set_margin_bottom: 48,
 
-                // Loading Spinner
-                #[name(spinner_box)]
+                // Skeleton Container
+                #[name(skeleton_container)]
                 gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
-                    set_halign: gtk::Align::Center,
-                    set_valign: gtk::Align::Center,
-                    set_margin_top: 64,
-                    set_margin_bottom: 64,
+                    set_spacing: 24,
                     #[watch]
                     set_visible: model.is_loading,
-
-                    gtk::Spinner {
-                        set_spinning: true,
-                        set_size_request: (32, 32),
-                    },
                 },
 
                 gtk::Box {
@@ -347,9 +341,14 @@ impl Component for FeedPage {
             active_genre_list: None,
             active_genre_back_box: std::rc::Rc::new(std::cell::RefCell::new(None)),
             show_genre_detail_cell: None,
+            page_cache: crate::services::PageCache::new(),
+            skeleton_route: Some(route.clone()),
         };
 
         let widgets = view_output!();
+        let skeleton = crate::widgets::skeleton::build_route_skeleton(&model.route);
+        widgets.skeleton_container.append(&skeleton);
+
         let content = widgets.main_box.clone();
         let last_narrow = std::cell::Cell::new(None::<bool>);
         root.add_tick_callback(move |page, _| {
@@ -705,6 +704,22 @@ impl Component for FeedPage {
         );
         self.update(message, sender.clone(), root);
         self.update_view(widgets, sender.clone());
+        if self.is_loading {
+            if self.skeleton_route.as_ref() != Some(&self.route) {
+                while let Some(child) = widgets.skeleton_container.first_child() {
+                    widgets.skeleton_container.remove(&child);
+                }
+                let skeleton = crate::widgets::skeleton::build_route_skeleton(&self.route);
+                widgets.skeleton_container.append(&skeleton);
+                self.skeleton_route = Some(self.route.clone());
+            }
+        } else if self.page_data.is_some() && route_changes {
+            self.skeleton_route = None;
+            while let Some(child) = widgets.skeleton_container.first_child() {
+                widgets.skeleton_container.remove(&child);
+            }
+            self.render_content(widgets, sender.clone());
+        }
         if route_changes {
             widgets.scrolled_window.vadjustment().set_value(0.0);
         }
@@ -775,6 +790,12 @@ impl Component for FeedPage {
 
         self.update_cmd(message, sender.clone(), root);
         self.update_view(widgets, sender.clone());
+        if !self.is_loading && self.skeleton_route.is_some() {
+            self.skeleton_route = None;
+            while let Some(child) = widgets.skeleton_container.first_child() {
+                widgets.skeleton_container.remove(&child);
+            }
+        }
         if is_artist_loaded && let Some(split) = self.active_artist_split.clone() {
             self.update_artist_view_inplace(&split, sender);
             return;
@@ -836,9 +857,7 @@ impl FeedPage {
     fn load_page(&mut self, sender: &ComponentSender<Self>) {
         self.generation = self.generation.wrapping_add(1);
         self.artist_generation = self.artist_generation.wrapping_add(1);
-        self.page_data = None;
         self.header_actions_host = None;
-        self.is_loading = true;
         self.error_message = None;
         self.continuation_error = None;
         self.artist_error = None;
@@ -853,13 +872,32 @@ impl FeedPage {
         self.active_artist_spinner = None;
         self.virtual_track_list = None;
         self.library_subtitle_lbl = None;
+
+        // Check speculative client-side page cache
+        let cached = self.page_cache.try_get(&self.route);
+        if let Some(ref page) = cached {
+            self.page_data = Some(page.clone());
+            self.is_loading = false;
+        } else {
+            self.page_data = None;
+            self.is_loading = true;
+        }
+
+        // Prefetch related routes
+        self.page_cache.prefetch_related(&self.client, &self.route);
+
         let client = self.client.clone();
+        let cache = self.page_cache.clone();
         let route = self.route.clone();
         let generation = self.generation;
         sender.oneshot_command(async move {
+            let res = client.get_page(&route).await.map_err(|e| e.to_string());
+            if let Ok(ref page) = res {
+                cache.insert(route.clone(), page.clone()).await;
+            }
             FeedCmd::PageLoaded {
                 generation,
-                result: client.get_page(&route).await.map_err(|e| e.to_string()),
+                result: res,
                 route,
             }
         });

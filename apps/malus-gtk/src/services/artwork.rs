@@ -246,6 +246,22 @@ impl ArtworkService {
         Some(Arc::new(decoded))
     }
 
+    /// Asynchronously prefetches and caches raw artwork bytes without decoding.
+    pub fn prefetch(&self, url: &str, target_size: u32) {
+        let service = self.clone();
+        let url = url.to_string();
+        tokio::spawn(async move {
+            let _ = service.load_bytes_sized(&url, target_size).await;
+        });
+    }
+
+    /// Batch prefetches artwork items in the background.
+    pub fn prefetch_batch(&self, urls: impl IntoIterator<Item = (String, u32)>) {
+        for (url, size) in urls {
+            self.prefetch(&url, size);
+        }
+    }
+
     async fn fetch_raw_bytes(
         &self,
         original_url: &str,

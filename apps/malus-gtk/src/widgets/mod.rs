@@ -6,6 +6,7 @@ pub mod loading;
 pub mod media_card;
 pub mod media_shelf;
 pub mod section_header;
+pub mod skeleton;
 pub mod track_row;
 
 pub use actions_menu::{
@@ -16,6 +17,7 @@ pub use loading::create_loading_spinner;
 pub use media_card::{MediaCard, MediaCardInit, MediaCardInput, MediaCardOutput};
 pub use media_shelf::{create_shelf_container, hook_shelf_artwork_trigger};
 pub use section_header::{SectionHeader, SectionHeaderInit, SectionHeaderInput};
+pub use skeleton::build_route_skeleton;
 pub use track_row::{TrackRow, TrackRowInit, TrackRowInput, TrackRowOutput};
 
 pub mod category_card;

@@ -351,6 +351,32 @@ impl FeedPage {
 
         let page = self.page_data.as_ref().unwrap().clone();
 
+        // Proactively prefetch top artwork images in the background
+        {
+            let mut artwork_urls = Vec::new();
+            if let Some(ref header) = page.header
+                && let Some(ref art) = header.artwork
+            {
+                artwork_urls.push((art.url.clone(), crate::services::THUMB_LARGE));
+            }
+            for section in &page.sections {
+                for item in &section.items {
+                    if let Some(ref art) = item.artwork {
+                        artwork_urls.push((art.url.clone(), crate::services::THUMB_MEDIUM));
+                        if artwork_urls.len() >= 24 {
+                            break;
+                        }
+                    }
+                }
+                if artwork_urls.len() >= 24 {
+                    break;
+                }
+            }
+            if !artwork_urls.is_empty() {
+                self.artwork_service.prefetch_batch(artwork_urls);
+            }
+        }
+
         // Clear existing sections
         self.card_controllers.clear();
         self.track_controllers.clear();

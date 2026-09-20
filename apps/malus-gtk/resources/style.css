@@ -38,7 +38,10 @@ window.malus-window {
     transition: background-color 120ms ease;
 }
 .player-play-btn image { -gtk-icon-size: 22px; }
+.player-play-btn spinner { color: @accent_fg_color; -gtk-icon-size: 20px; }
+.np-play spinner { color: currentColor; -gtk-icon-size: 26px; }
 .player-play-btn:hover { background-color: shade(@accent_bg_color, 1.12); }
+.btn-active-pulse { opacity: 0.35; transition: opacity 200ms ease-out; }
 .player-favorite-btn { min-width: 30px; min-height: 30px; padding: 5px; color: alpha(currentColor, 0.55); border-radius: 8px; }
 .player-favorite-btn:hover { background-color: alpha(currentColor, 0.06); color: currentColor; }
 /* Universal active & inactive toggle button states (matching favorite standard) */
@@ -1512,4 +1515,41 @@ toastoverlay > toast {
     border: none;
     background: transparent;
 }
+
+/* ── Skeleton Loading Shimmer / Pulse ─────────────────────────────── */
+@keyframes skeleton_pulse {
+    0% {
+        opacity: 0.32;
+    }
+    50% {
+        opacity: 0.72;
+    }
+    100% {
+        opacity: 0.32;
+    }
+}
+
+.skeleton-block {
+    background-color: alpha(currentColor, 0.08);
+    border-radius: 8px;
+    animation: skeleton_pulse 1.5s ease-in-out infinite;
+}
+
+.skeleton-circle {
+    border-radius: 9999px;
+}
+
+.skeleton-text {
+    border-radius: 4px;
+}
+
+.skeleton-artwork {
+    border-radius: 8px;
+}
+
+.skeleton-track-row {
+    padding: 4px 8px;
+    border-radius: 6px;
+}
+
 

@@ -29,9 +29,13 @@ pub fn icon_button(icon: &str, tooltip: &str, class: &str) -> gtk::Button {
 pub struct Transport {
     pub root: gtk::Box,
     pub play: gtk::Button,
+    play_stack: gtk::Stack,
+    play_icon: gtk::Image,
+    spinner: gtk::Spinner,
     pub shuffle: gtk::Button,
     pub repeat: gtk::Button,
     immersive: bool,
+    timeout_id: Rc<RefCell<Option<relm4::gtk::glib::SourceId>>>,
 }
 impl Transport {
     pub fn new(player: &SharedPlayer, send: &CommandHandler, immersive: bool) -> Self {
@@ -45,25 +49,148 @@ impl Transport {
         };
         let shuffle = icon_button(ICON_SHUFFLE, "Shuffle", class);
         let previous = icon_button(ICON_PREVIOUS, "Previous", class);
-        let play = icon_button(
-            ICON_PLAY,
-            "Play / Pause",
-            if immersive {
-                "np-play"
-            } else {
-                "player-play-btn"
-            },
-        );
+
+        let play = gtk::Button::new();
+        play.add_css_class("flat");
+        play.add_css_class(if immersive {
+            "np-play"
+        } else {
+            "player-play-btn"
+        });
+        play.set_tooltip_text(Some("Play / Pause"));
+        play.update_property(&[gtk::accessible::Property::Label("Play / Pause")]);
+        play.set_focus_on_click(false);
+
+        let play_stack = gtk::Stack::new();
+        play_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+        play_stack.set_transition_duration(120);
+
+        let play_icon = gtk::Image::from_icon_name(ICON_PLAY);
+        let spinner = gtk::Spinner::new();
+        spinner.add_css_class("play-spinner");
+
+        play_stack.add_named(&play_icon, Some("icon"));
+        play_stack.add_named(&spinner, Some("spinner"));
+        play_stack.set_visible_child_name("icon");
+        play.set_child(Some(&play_stack));
+
         let next = icon_button(ICON_NEXT, "Next", class);
         let repeat = icon_button(ICON_REPEAT, "Repeat", class);
-        for (button, command) in [
-            (&previous, PlayerCommand::Previous),
-            (&play, PlayerCommand::TogglePlay),
-            (&next, PlayerCommand::Next),
-        ] {
-            let send = send.clone();
-            button.connect_clicked(move |_| send(command.clone()));
+
+        let timeout_id: Rc<RefCell<Option<relm4::gtk::glib::SourceId>>> =
+            Rc::new(RefCell::new(None));
+        let last_click = Rc::new(std::cell::Cell::new(
+            std::time::Instant::now() - std::time::Duration::from_secs(5),
+        ));
+
+        // Skip Previous with debounce & pulse
+        {
+            let prev_click = last_click.clone();
+            let prev_btn = previous.clone();
+            let p_send = send.clone();
+            let p_stack = play_stack.clone();
+            let p_spin = spinner.clone();
+            let p_timeout = timeout_id.clone();
+            previous.connect_clicked(move |_| {
+                let now = std::time::Instant::now();
+                if now.duration_since(prev_click.get()) < std::time::Duration::from_millis(300) {
+                    return;
+                }
+                prev_click.set(now);
+                prev_btn.add_css_class("btn-active-pulse");
+                let b = prev_btn.clone();
+                relm4::gtk::glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(220),
+                    move || {
+                        b.remove_css_class("btn-active-pulse");
+                    },
+                );
+                p_spin.set_spinning(true);
+                p_stack.set_visible_child_name("spinner");
+                let mut timeout = p_timeout.borrow_mut();
+                if let Some(id) = timeout.take() {
+                    id.remove();
+                }
+                let s = p_stack.clone();
+                let sp = p_spin.clone();
+                *timeout = Some(relm4::gtk::glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(4500),
+                    move || {
+                        sp.set_spinning(false);
+                        s.set_visible_child_name("icon");
+                    },
+                ));
+                p_send(PlayerCommand::Previous);
+            });
         }
+
+        // Play/Pause with loading circle
+        {
+            let pl_send = send.clone();
+            let pl_stack = play_stack.clone();
+            let pl_spin = spinner.clone();
+            let pl_timeout = timeout_id.clone();
+            play.connect_clicked(move |_| {
+                pl_spin.set_spinning(true);
+                pl_stack.set_visible_child_name("spinner");
+                let mut timeout = pl_timeout.borrow_mut();
+                if let Some(id) = timeout.take() {
+                    id.remove();
+                }
+                let s = pl_stack.clone();
+                let sp = pl_spin.clone();
+                *timeout = Some(relm4::gtk::glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(4500),
+                    move || {
+                        sp.set_spinning(false);
+                        s.set_visible_child_name("icon");
+                    },
+                ));
+                pl_send(PlayerCommand::TogglePlay);
+            });
+        }
+
+        // Skip Next with debounce & pulse
+        {
+            let next_click = last_click.clone();
+            let next_btn = next.clone();
+            let n_send = send.clone();
+            let n_stack = play_stack.clone();
+            let n_spin = spinner.clone();
+            let n_timeout = timeout_id.clone();
+            next.connect_clicked(move |_| {
+                let now = std::time::Instant::now();
+                if now.duration_since(next_click.get()) < std::time::Duration::from_millis(300) {
+                    return;
+                }
+                next_click.set(now);
+                next_btn.add_css_class("btn-active-pulse");
+                let b = next_btn.clone();
+                relm4::gtk::glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(220),
+                    move || {
+                        b.remove_css_class("btn-active-pulse");
+                    },
+                );
+                n_spin.set_spinning(true);
+                n_stack.set_visible_child_name("spinner");
+                let mut timeout = n_timeout.borrow_mut();
+                if let Some(id) = timeout.take() {
+                    id.remove();
+                }
+                let s = n_stack.clone();
+                let sp = n_spin.clone();
+                *timeout = Some(relm4::gtk::glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(4500),
+                    move || {
+                        sp.set_spinning(false);
+                        s.set_visible_child_name("icon");
+                    },
+                ));
+                n_send(PlayerCommand::Next);
+            });
+        }
+
         let p = player.clone();
         let cb = send.clone();
         shuffle.connect_clicked(move |_| cb(PlayerCommand::Shuffle(!p.borrow().now.shuffle)));
@@ -78,19 +205,57 @@ impl Transport {
         Self {
             root,
             play,
+            play_stack,
+            play_icon,
+            spinner,
             shuffle,
             repeat,
             immersive,
+            timeout_id,
         }
     }
+
+    pub fn set_loading(&self, loading: bool) {
+        if loading {
+            self.spinner.set_spinning(true);
+            self.play_stack.set_visible_child_name("spinner");
+            let mut timeout = self.timeout_id.borrow_mut();
+            if let Some(id) = timeout.take() {
+                id.remove();
+            }
+            let s = self.play_stack.clone();
+            let sp = self.spinner.clone();
+            *timeout = Some(relm4::gtk::glib::timeout_add_local_once(
+                std::time::Duration::from_millis(4500),
+                move || {
+                    sp.set_spinning(false);
+                    s.set_visible_child_name("icon");
+                },
+            ));
+        } else {
+            let mut timeout = self.timeout_id.borrow_mut();
+            if let Some(id) = timeout.take() {
+                id.remove();
+            }
+            self.spinner.set_spinning(false);
+            self.play_stack.set_visible_child_name("icon");
+        }
+    }
+
     pub fn refresh(&self, player: &SharedPlayer) {
         let state = player.borrow();
         self.root.set_sensitive(state.now.current_track.is_some());
-        self.play.set_icon_name(if state.now.is_playing() {
-            ICON_PAUSE
+        self.play_icon
+            .set_icon_name(Some(if state.now.is_playing() {
+                ICON_PAUSE
+            } else {
+                ICON_PLAY
+            }));
+        if state.now.action_in_flight {
+            self.set_loading(true);
         } else {
-            ICON_PLAY
-        });
+            self.set_loading(false);
+        }
         self.play
             .update_property(&[gtk::accessible::Property::Label(
                 if state.now.is_playing() {

@@ -179,6 +179,7 @@ pub struct PageSectionWire {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtitle: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<PageItemWire>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuation: Option<PageCursorWire>,

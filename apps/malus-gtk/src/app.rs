@@ -838,6 +838,8 @@ impl Component for MalusApp {
                 widgets.toast_overlay.add_toast(adw::Toast::new(&message));
             }
             AppInput::PlayCollection { reference, shuffle } => {
+                self.player.borrow_mut().now.action_in_flight = true;
+                self.refresh_player();
                 let client = self.client.clone();
                 sender.oneshot_command(async move {
                     AppCmd::PlayerFinished(
@@ -849,6 +851,8 @@ impl Component for MalusApp {
                 });
             }
             AppInput::PlayMedia(media_ref) => {
+                self.player.borrow_mut().now.action_in_flight = true;
+                self.refresh_player();
                 let c = self.client.clone();
                 let s = sender.clone();
                 relm4::spawn(async move {
@@ -864,6 +868,8 @@ impl Component for MalusApp {
                 collection,
                 index,
             } => {
+                self.player.borrow_mut().now.action_in_flight = true;
+                self.refresh_player();
                 let c = self.client.clone();
                 let s = sender.clone();
                 relm4::spawn(async move {
@@ -1208,6 +1214,8 @@ impl Component for MalusApp {
             }
             AppCmd::PlayerFinished(result) => {
                 if let Err(error) = result {
+                    self.player.borrow_mut().now.action_in_flight = false;
+                    self.refresh_player();
                     self.player_bar.cancel_interactions();
                     self.now_playing_page.cancel_interactions();
                     sender.input(AppInput::ShowToast(format!("Playback failed: {error}")));
@@ -1396,6 +1404,16 @@ impl MalusApp {
                 != Some(track)
         {
             return;
+        }
+        if matches!(
+            command,
+            PlayerCommand::TogglePlay
+                | PlayerCommand::Pause
+                | PlayerCommand::Previous
+                | PlayerCommand::Next
+        ) {
+            self.player.borrow_mut().now.action_in_flight = true;
+            self.refresh_player();
         }
         let c = self.client.clone();
         sender.oneshot_command(async move {
