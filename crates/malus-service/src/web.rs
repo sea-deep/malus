@@ -712,7 +712,19 @@ fn track_from_snapshot(t: &Value) -> Option<Track> {
         } else {
             None
         };
-        artists.push(ArtistRef::new(mref_art, name));
+        let tokens: Vec<&str> = name
+            .split(", ")
+            .flat_map(|part| part.split(" & "))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if mref_art.is_none() && tokens.len() > 1 {
+            for token in tokens {
+                artists.push(ArtistRef::new(None, token));
+            }
+        } else {
+            artists.push(ArtistRef::new(mref_art, name));
+        }
     }
 
     let mut track = Track::with_artists(mref, title, artists);

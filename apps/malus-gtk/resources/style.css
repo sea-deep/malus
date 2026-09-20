@@ -870,16 +870,20 @@ listview.track-list-view > row:selected {
 .nowplaying-artwork { border-radius: 10px; background-color: alpha(white, 0.035); }
 .nowplaying-title { font-size: 24px; font-weight: 700; color: white; }
 .nowplaying-artist { font-size: 16px; color: alpha(white, 0.65); }
+.nowplaying-artist link,
 .nowplaying-artist a,
+.compact-mini-artist link,
 .compact-mini-artist a {
     color: alpha(white, 0.65);
     text-decoration: none;
     transition: color 120ms ease;
 }
+.nowplaying-artist link:hover,
 .nowplaying-artist a:hover,
+.compact-mini-artist link:hover,
 .compact-mini-artist a:hover {
-    color: white;
-    text-decoration: underline;
+    color: @accent_color;
+    text-decoration: none;
 }
 .np-large .nowplaying-title { font-size: 32px; font-weight: 800; }
 .np-large .nowplaying-artist { font-size: 19px; }

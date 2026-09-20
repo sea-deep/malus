@@ -646,3 +646,62 @@ fn test_canonical_parsers() {
     assert_eq!(playlist.title, "Electronic Hits");
     assert_eq!(playlist.curator.as_deref(), Some("Apple Music"));
 }
+
+#[test]
+fn test_parse_apple_track_collab_and_relationships() {
+    // 1. Direct relationships artists & albums
+    let track_json = serde_json::json!({
+        "id": "1753765105",
+        "type": "songs",
+        "attributes": {
+            "name": "Radha",
+            "artistName": "Natkhat & Chaar Diwaari"
+        },
+        "relationships": {
+            "artists": {
+                "data": [
+                    { "id": "1560945939", "type": "artists", "attributes": { "name": "Natkhat" } },
+                    { "id": "1612345678", "type": "artists", "attributes": { "name": "Chaar Diwaari" } }
+                ]
+            },
+            "albums": {
+                "data": [
+                    { "id": "1753765104", "type": "albums", "attributes": { "name": "Radha - Single" } }
+                ]
+            }
+        }
+    });
+
+    let track = parse_apple_track(&track_json).expect("track");
+    assert_eq!(track.artists.len(), 2);
+    assert_eq!(track.artists[0].name, "Natkhat");
+    assert_eq!(
+        track.artists[0].id,
+        Some(MediaRef::Artist("1560945939".to_string()))
+    );
+    assert_eq!(track.artists[1].name, "Chaar Diwaari");
+    assert_eq!(
+        track.artists[1].id,
+        Some(MediaRef::Artist("1612345678".to_string()))
+    );
+    assert_eq!(
+        track.album.as_ref().and_then(|a| a.id.as_ref()),
+        Some(&MediaRef::Album("1753765104".to_string()))
+    );
+
+    // 2. Fallback tokenization when relationships are absent
+    let raw_collab = serde_json::json!({
+        "id": "999",
+        "type": "songs",
+        "attributes": {
+            "name": "Collab Song",
+            "artistName": "Artist A & Artist B"
+        }
+    });
+    let track_fallback = parse_apple_track(&raw_collab).expect("track");
+    assert_eq!(track_fallback.artists.len(), 2);
+    assert_eq!(track_fallback.artists[0].name, "Artist A");
+    assert!(track_fallback.artists[0].id.is_none());
+    assert_eq!(track_fallback.artists[1].name, "Artist B");
+    assert!(track_fallback.artists[1].id.is_none());
+}

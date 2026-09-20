@@ -34,8 +34,15 @@ pub fn parse_apple_track(item: &Value) -> Option<Track> {
         .unwrap_or("Unknown Title")
         .to_string();
 
+    let catalog_item = item["relationships"]["catalog"]["data"]
+        .as_array()
+        .and_then(|arr| arr.first());
+
     let mut artists = Vec::new();
-    if let Some(art_arr) = item["relationships"]["artists"]["data"].as_array() {
+    let art_arr = item["relationships"]["artists"]["data"]
+        .as_array()
+        .or_else(|| catalog_item.and_then(|c| c["relationships"]["artists"]["data"].as_array()));
+    if let Some(art_arr) = art_arr {
         for a in art_arr {
             let name = a["attributes"]["name"]
                 .as_str()
@@ -58,10 +65,25 @@ pub fn parse_apple_track(item: &Value) -> Option<Track> {
             .or_else(|| item["artistUrl"].as_str())
             .and_then(extract_artist_id_from_url)
             .map(MediaRef::Artist);
-        artists.push(ArtistRef::new(id, name));
+        let tokens: Vec<&str> = name
+            .split(", ")
+            .flat_map(|part| part.split(" & "))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if id.is_none() && tokens.len() > 1 {
+            for token in tokens {
+                artists.push(ArtistRef::new(None, token));
+            }
+        } else {
+            artists.push(ArtistRef::new(id, name));
+        }
     }
 
-    let album = if let Some(alb_arr) = item["relationships"]["albums"]["data"].as_array()
+    let alb_arr = item["relationships"]["albums"]["data"]
+        .as_array()
+        .or_else(|| catalog_item.and_then(|c| c["relationships"]["albums"]["data"].as_array()));
+    let album = if let Some(alb_arr) = alb_arr
         && let Some(first_alb) = alb_arr.first()
     {
         let title = first_alb["attributes"]["name"]

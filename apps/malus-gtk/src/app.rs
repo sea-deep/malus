@@ -1205,7 +1205,10 @@ impl Component for MalusApp {
                     {
                         cur.album = Some(alb);
                     }
-                    if !track.artists.is_empty() && cur.artists.iter().any(|a| a.id.is_none()) {
+                    if !track.artists.is_empty()
+                        && (cur.artists.iter().any(|a| a.id.is_none())
+                            || track.artists.len() > cur.artists.len())
+                    {
                         cur.artists = track.artists;
                     }
                     drop(p);
@@ -1309,7 +1312,10 @@ impl MalusApp {
                     }
                 });
                 let needs_enrichment = track.album.as_ref().and_then(|a| a.id.as_ref()).is_none()
-                    || track.artists.iter().any(|a| a.id.is_none());
+                    || track.artists.iter().any(|a| a.id.is_none())
+                    || (track.artists.len() == 1
+                        && (track.artists[0].name.contains(" & ")
+                            || track.artists[0].name.contains(", ")));
                 if needs_enrichment {
                     let id = track.id.clone();
                     let c = self.client.clone();

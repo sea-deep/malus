@@ -20,7 +20,7 @@ use crate::{
     widgets::{player_controls::*, square_artwork::SquareArtwork},
 };
 use malus_client::MalusClient;
-use malus_model::{PageRoute, PlaybackState, Queue, Track};
+use malus_model::{MediaRef, PageRoute, PlaybackState, Queue, Track};
 use relm4::{
     Controller,
     gtk::{self, prelude::*},
@@ -917,31 +917,60 @@ fn populate_artists_box(
         return;
     };
 
+    let mut artist_items: Vec<(Option<&MediaRef>, &str)> = Vec::new();
+    for a in &t.artists {
+        let name = a.name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        if a.id.is_none() && (name.contains(" & ") || name.contains(", ")) {
+            for token in name
+                .split(", ")
+                .flat_map(|p| p.split(" & "))
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                artist_items.push((None, token));
+            }
+        } else {
+            artist_items.push((a.id.as_ref(), name));
+        }
+    }
+
     let mut markup_parts = Vec::new();
 
-    if t.artists.is_empty() {
+    if artist_items.is_empty() {
         let disp = t.artist_display();
         let name = if disp.is_empty() {
-            "Unknown Artist".to_string()
+            "Unknown Artist"
         } else {
-            disp
+            disp.as_str()
         };
-        markup_parts.push(gtk::glib::markup_escape_text(&name).to_string());
+        markup_parts.push(gtk::glib::markup_escape_text(name).to_string());
     } else {
-        let mut artist_links = Vec::new();
-        for artist in &t.artists {
-            let escaped_name = gtk::glib::markup_escape_text(&artist.name);
-            if let Some(ref id) = artist.id {
-                artist_links.push(format!(
-                    "<a href=\"artist:{}\">{}</a>",
+        let mut links = Vec::new();
+        for (id_opt, name) in &artist_items {
+            let escaped_name = gtk::glib::markup_escape_text(name);
+            if let Some(id) = id_opt {
+                links.push(format!(
+                    "<a href=\"artist:{}\"><span underline=\"none\">{}</span></a>",
                     gtk::glib::markup_escape_text(id.id()),
                     escaped_name
                 ));
             } else {
-                artist_links.push(escaped_name.to_string());
+                links.push(escaped_name.to_string());
             }
         }
-        markup_parts.push(artist_links.join(", "));
+        let formatted_artists = match links.len() {
+            0 => String::new(),
+            1 => links.remove(0),
+            2 => format!("{} &amp; {}", links[0], links[1]),
+            _ => {
+                let last = links.pop().unwrap();
+                format!("{} &amp; {}", links.join(", "), last)
+            }
+        };
+        markup_parts.push(formatted_artists);
     }
 
     if let Some(album) = t.album_title()
@@ -951,7 +980,7 @@ fn populate_artists_box(
         let escaped_album = gtk::glib::markup_escape_text(album);
         if let Some(id) = t.album.as_ref().and_then(|a| a.id.as_ref()) {
             markup_parts.push(format!(
-                "<a href=\"album:{}\">{}</a>",
+                "<a href=\"album:{}\"><span underline=\"none\">{}</span></a>",
                 gtk::glib::markup_escape_text(id.id()),
                 escaped_album
             ));

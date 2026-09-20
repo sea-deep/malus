@@ -1234,11 +1234,20 @@ impl OfficialAppleMusicApi {
             || raw_id.starts_with("l.")
             || (raw_id.starts_with("p.") && !raw_id.starts_with("pl."));
 
-        let path = if is_library {
+        let (path, query_params) = if is_library {
             match kind {
-                "song" | "track" => format!("/v1/me/library/songs/{raw_id}"),
-                "album" => format!("/v1/me/library/albums/{raw_id}"),
-                "playlist" => format!("/v1/me/library/playlists/{raw_id}"),
+                "song" | "track" => (
+                    format!("/v1/me/library/songs/{raw_id}"),
+                    vec![("include", "catalog,artists,albums")],
+                ),
+                "album" => (
+                    format!("/v1/me/library/albums/{raw_id}"),
+                    vec![("include", "artists,tracks")],
+                ),
+                "playlist" => (
+                    format!("/v1/me/library/playlists/{raw_id}"),
+                    vec![("include", "tracks")],
+                ),
                 other => {
                     return Err(AppleApiError::NotFound(format!(
                         "Unsupported library kind '{other}'"
@@ -1247,10 +1256,22 @@ impl OfficialAppleMusicApi {
             }
         } else {
             match kind {
-                "song" | "track" => format!("/v1/catalog/{{storefront}}/songs/{raw_id}"),
-                "album" => format!("/v1/catalog/{{storefront}}/albums/{raw_id}"),
-                "artist" => format!("/v1/catalog/{{storefront}}/artists/{raw_id}"),
-                "playlist" => format!("/v1/catalog/{{storefront}}/playlists/{raw_id}"),
+                "song" | "track" => (
+                    format!("/v1/catalog/{{storefront}}/songs/{raw_id}"),
+                    vec![("include", "artists,albums")],
+                ),
+                "album" => (
+                    format!("/v1/catalog/{{storefront}}/albums/{raw_id}"),
+                    vec![("include", "artists,tracks")],
+                ),
+                "artist" => (
+                    format!("/v1/catalog/{{storefront}}/artists/{raw_id}"),
+                    vec![],
+                ),
+                "playlist" => (
+                    format!("/v1/catalog/{{storefront}}/playlists/{raw_id}"),
+                    vec![("include", "tracks")],
+                ),
                 other => {
                     return Err(AppleApiError::NotFound(format!(
                         "Unsupported catalog kind '{other}'"
@@ -1259,7 +1280,7 @@ impl OfficialAppleMusicApi {
             }
         };
 
-        let res = self.send_request(&path, &[]).await?;
+        let res = self.send_request(&path, &query_params).await?;
         let item = res
             .get("data")
             .and_then(|d| d.as_array())
