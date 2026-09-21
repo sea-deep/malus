@@ -26,6 +26,8 @@ pub struct Track {
     pub artwork: Option<Artwork>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_live: Option<bool>,
 }
 
 impl Track {
@@ -42,6 +44,7 @@ impl Track {
             explicit: None,
             artwork: None,
             uri: None,
+            is_live: None,
         }
     }
 
@@ -58,6 +61,7 @@ impl Track {
             explicit: None,
             artwork: None,
             uri: None,
+            is_live: None,
         }
     }
 
@@ -76,6 +80,11 @@ impl Track {
 
     pub fn album_title(&self) -> Option<&str> {
         self.album.as_ref().map(|a| a.title.as_str())
+    }
+
+    pub fn is_live(&self) -> bool {
+        self.is_live
+            .unwrap_or(matches!(self.id, MediaRef::Station(_)))
     }
 
     pub fn with_album(mut self, album: impl Into<String>) -> Self {

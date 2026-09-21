@@ -74,13 +74,19 @@ pub enum ClientRequest {
     GetQueue,
     QueueJump {
         index: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_id: Option<String>,
     },
     QueueRemove {
         index: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_id: Option<String>,
     },
     QueueMove {
         from: usize,
         to: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_id: Option<String>,
     },
     QueueClearUpcoming,
     GetAuthStatus,

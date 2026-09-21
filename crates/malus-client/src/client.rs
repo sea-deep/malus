@@ -500,21 +500,59 @@ impl MalusClient {
     }
 
     pub async fn queue_jump(&self, index: usize) -> Result<(), ClientError> {
-        match self.send(&ClientRequest::QueueJump { index }).await? {
+        self.queue_jump_checked(index, None).await
+    }
+
+    pub async fn queue_jump_checked(
+        &self,
+        index: usize,
+        expected_id: Option<String>,
+    ) -> Result<(), ClientError> {
+        match self
+            .send(&ClientRequest::QueueJump { index, expected_id })
+            .await?
+        {
             ClientResponse::Ok => Ok(()),
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
         }
     }
 
     pub async fn queue_remove(&self, index: usize) -> Result<(), ClientError> {
-        match self.send(&ClientRequest::QueueRemove { index }).await? {
+        self.queue_remove_checked(index, None).await
+    }
+
+    pub async fn queue_remove_checked(
+        &self,
+        index: usize,
+        expected_id: Option<String>,
+    ) -> Result<(), ClientError> {
+        match self
+            .send(&ClientRequest::QueueRemove { index, expected_id })
+            .await?
+        {
             ClientResponse::Ok => Ok(()),
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
         }
     }
 
     pub async fn queue_move(&self, from: usize, to: usize) -> Result<(), ClientError> {
-        match self.send(&ClientRequest::QueueMove { from, to }).await? {
+        self.queue_move_checked(from, to, None).await
+    }
+
+    pub async fn queue_move_checked(
+        &self,
+        from: usize,
+        to: usize,
+        expected_id: Option<String>,
+    ) -> Result<(), ClientError> {
+        match self
+            .send(&ClientRequest::QueueMove {
+                from,
+                to,
+                expected_id,
+            })
+            .await?
+        {
             ClientResponse::Ok => Ok(()),
             other => Err(ClientError::UnexpectedResponse(Box::new(other))),
         }

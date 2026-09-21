@@ -3,10 +3,12 @@
 
 pub mod client;
 pub mod framing;
+pub mod preferences;
 pub mod wire;
 
 // Re-export common framing and wire types for convenient access
 pub use framing::*;
+pub use preferences::PlayerPreferences;
 pub use wire::*;
 
 #[cfg(test)]
@@ -55,6 +57,7 @@ mod tests {
             shuffle: false,
             repeat: RepeatMode::Off,
             autoplay: false,
+            is_live: false,
             timeline_id: 1,
             sequence: 1,
         });

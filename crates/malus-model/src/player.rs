@@ -21,6 +21,8 @@ pub struct PlayerStatus {
     #[serde(default)]
     pub autoplay: bool,
     #[serde(default)]
+    pub is_live: bool,
+    #[serde(default)]
     pub timeline_id: u64,
     #[serde(default)]
     pub sequence: u64,
@@ -38,6 +40,7 @@ impl Default for PlayerStatus {
             shuffle: false,
             repeat: RepeatMode::Off,
             autoplay: false,
+            is_live: false,
             timeline_id: 0,
             sequence: 0,
         }
@@ -45,6 +48,9 @@ impl Default for PlayerStatus {
 }
 
 impl PlayerStatus {
+    pub fn is_live(&self) -> bool {
+        self.is_live || self.current_track.as_ref().is_some_and(|t| t.is_live())
+    }
     pub fn new() -> Self {
         Self::default()
     }

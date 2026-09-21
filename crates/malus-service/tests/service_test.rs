@@ -177,6 +177,7 @@ impl AppleWebSession for MockAppleWebSession {
                 shuffle: false,
                 repeat: RepeatMode::Off,
                 autoplay: false,
+                is_live: false,
                 timeline_id: 1,
                 sequence: 1,
             }));
@@ -272,6 +273,7 @@ impl AppleWebSession for MockAppleWebSession {
             shuffle: *self.shuffle.lock().await,
             repeat: *self.repeat.lock().await,
             autoplay: *self.autoplay.lock().await,
+            is_live: false,
             timeline_id: 1,
             sequence: 1,
         })
@@ -308,17 +310,26 @@ impl AppleWebSession for MockAppleWebSession {
         Ok(())
     }
 
-    async fn queue_jump(&self, index: usize) -> Result<(), AppleError> {
+    async fn queue_jump(&self, index: usize, _expected_id: Option<&str>) -> Result<(), AppleError> {
         *self.last_jump_idx.lock().await = Some(index);
         Ok(())
     }
 
-    async fn queue_remove(&self, index: usize) -> Result<(), AppleError> {
+    async fn queue_remove(
+        &self,
+        index: usize,
+        _expected_id: Option<&str>,
+    ) -> Result<(), AppleError> {
         *self.last_remove_idx.lock().await = Some(index);
         Ok(())
     }
 
-    async fn queue_move(&self, from: usize, to: usize) -> Result<(), AppleError> {
+    async fn queue_move(
+        &self,
+        from: usize,
+        to: usize,
+        _expected_id: Option<&str>,
+    ) -> Result<(), AppleError> {
         *self.last_move.lock().await = Some((from, to));
         Ok(())
     }
@@ -536,6 +547,20 @@ async fn test_playback_all_media_kinds() {
     assert_eq!(
         mock.last_played_track.lock().await.as_deref(),
         Some("ra.101")
+    );
+
+    // 5. Artist
+    service
+        .play(&MediaRef::Artist("art.202".to_string()))
+        .await
+        .unwrap();
+    assert_eq!(
+        mock.last_played_kind.lock().await.as_deref(),
+        Some("artist")
+    );
+    assert_eq!(
+        mock.last_played_track.lock().await.as_deref(),
+        Some("art.202")
     );
 }
 
@@ -1432,7 +1457,7 @@ fn test_radio_editorial_groupings_and_live_stations() {
     assert_eq!(on_air_sec.title.as_deref(), Some("On Air Now"));
     assert_eq!(
         on_air_sec.presentation_hint.as_deref(),
-        Some("stations-shelf")
+        Some("featured-banner-shelf")
     );
     assert_eq!(on_air_sec.items.len(), 1);
     let show_item = &on_air_sec.items[0];
@@ -1450,5 +1475,121 @@ fn test_radio_editorial_groupings_and_live_stations() {
     assert_eq!(
         show_item.artwork.as_ref().map(|a| a.url.as_str()),
         Some("https://is1-ssl.mzstatic.com/image/thumb/Show/v4/source/600x600.jpg")
+    );
+}
+
+#[test]
+fn test_station_shelf_hints_preserve_artwork() {
+    use malus_service::pages::groupings;
+    use serde_json::json;
+
+    let fixture = json!({
+        "data": [{ "id": "radio-root", "type": "groupings" }],
+        "resources": {
+            "groupings": {
+                "radio-root": {
+                    "id": "radio-root",
+                    "type": "groupings",
+                    "relationships": {
+                        "tabs": {
+                            "data": [{ "id": "radio-tab", "type": "editorial-elements" }]
+                        }
+                    }
+                }
+            },
+            "editorial-elements": {
+                "radio-tab": {
+                    "id": "radio-tab",
+                    "relationships": {
+                        "children": {
+                            "data": [
+                                { "id": "elem-hero", "type": "editorial-elements" },
+                                { "id": "elem-episodes", "type": "editorial-elements" },
+                                { "id": "elem-top-stations", "type": "editorial-elements" },
+                                { "id": "elem-genre-stations", "type": "editorial-elements" }
+                            ]
+                        }
+                    }
+                },
+                "elem-hero": {
+                    "id": "elem-hero",
+                    "attributes": {},
+                    "relationships": {
+                        "contents": { "data": [{ "id": "ra.1", "type": "stations" }] }
+                    }
+                },
+                "elem-episodes": {
+                    "id": "elem-episodes",
+                    "attributes": { "title": "Latest Radio Episodes" },
+                    "relationships": {
+                        "contents": { "data": [{ "id": "ra.1", "type": "stations" }] }
+                    }
+                },
+                "elem-top-stations": {
+                    "id": "elem-top-stations",
+                    "attributes": { "title": "Top Stations" },
+                    "relationships": {
+                        "contents": { "data": [{ "id": "ra.1", "type": "stations" }] }
+                    }
+                },
+                "elem-genre-stations": {
+                    "id": "elem-genre-stations",
+                    "attributes": { "title": "Stations by Genre" },
+                    "relationships": {
+                        "contents": { "data": [{ "id": "ra.2-no-art", "type": "stations" }] }
+                    }
+                }
+            },
+            "stations": {
+                "ra.1": {
+                    "id": "ra.1",
+                    "type": "stations",
+                    "attributes": {
+                        "name": "Hip-Hop Station",
+                        "artwork": {
+                            "url": "https://is1-ssl.mzstatic.com/image/thumb/Features/v4/source/{w}x{h}{c}.{f}",
+                            "width": 1000,
+                            "height": 1000,
+                            "bgColor": "5b7bdc"
+                        }
+                    }
+                },
+                "ra.2-no-art": {
+                    "id": "ra.2-no-art",
+                    "type": "stations",
+                    "attributes": {
+                        "name": "Pop Genre",
+                        "artwork": null
+                    }
+                }
+            }
+        }
+    });
+
+    let sections = groupings::map_groupings_response(&fixture, "radio");
+    assert_eq!(sections.len(), 4);
+
+    // Hero: live-stations-shelf
+    assert_eq!(
+        sections[0].presentation_hint.as_deref(),
+        Some("live-stations-shelf")
+    );
+
+    // Latest Radio Episodes: multi-row-episode-shelf
+    assert_eq!(sections[1].title.as_deref(), Some("Latest Radio Episodes"));
+    assert_eq!(
+        sections[1].presentation_hint.as_deref(),
+        Some("multi-row-episode-shelf")
+    );
+
+    // Top Stations with real artwork: "shelf" (not gradient-stations-shelf!)
+    assert_eq!(sections[2].title.as_deref(), Some("Top Stations"));
+    assert_eq!(sections[2].presentation_hint.as_deref(), Some("shelf"));
+
+    // Stations by Genre without artwork: "gradient-stations-shelf"
+    assert_eq!(sections[3].title.as_deref(), Some("Stations by Genre"));
+    assert_eq!(
+        sections[3].presentation_hint.as_deref(),
+        Some("gradient-stations-shelf")
     );
 }

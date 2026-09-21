@@ -38,6 +38,7 @@ async fn test_client_ping_and_get_status() {
                             shuffle: false,
                             repeat: RepeatMode::Off,
                             autoplay: false,
+                            is_live: false,
                             timeline_id: 1,
                             sequence: 1,
                         }),
@@ -295,6 +296,7 @@ async fn test_event_subscription_and_reconnect() {
         shuffle: false,
         repeat: RepeatMode::Off,
         autoplay: false,
+        is_live: false,
         timeline_id: 1,
         sequence: 1,
     };

@@ -260,17 +260,45 @@ impl AppleService {
 
     /// Jump to a specific queue index.
     pub async fn queue_jump(&self, index: usize) -> Result<(), AppleError> {
-        self.session.queue_jump(index).await
+        self.session.queue_jump(index, None).await
+    }
+
+    /// Jump to a specific queue index verifying expected item ID.
+    pub async fn queue_jump_checked(
+        &self,
+        index: usize,
+        expected_id: Option<&str>,
+    ) -> Result<(), AppleError> {
+        self.session.queue_jump(index, expected_id).await
     }
 
     /// Remove item at index from queue.
     pub async fn queue_remove(&self, index: usize) -> Result<(), AppleError> {
-        self.session.queue_remove(index).await
+        self.session.queue_remove(index, None).await
+    }
+
+    /// Remove item at index from queue verifying expected item ID.
+    pub async fn queue_remove_checked(
+        &self,
+        index: usize,
+        expected_id: Option<&str>,
+    ) -> Result<(), AppleError> {
+        self.session.queue_remove(index, expected_id).await
     }
 
     /// Move a queue item.
     pub async fn queue_move(&self, from: usize, to: usize) -> Result<(), AppleError> {
-        self.session.queue_move(from, to).await
+        self.session.queue_move(from, to, None).await
+    }
+
+    /// Move a queue item verifying expected item ID.
+    pub async fn queue_move_checked(
+        &self,
+        from: usize,
+        to: usize,
+        expected_id: Option<&str>,
+    ) -> Result<(), AppleError> {
+        self.session.queue_move(from, to, expected_id).await
     }
 
     /// Clear all upcoming items in the queue.

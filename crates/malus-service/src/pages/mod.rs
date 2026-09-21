@@ -129,7 +129,61 @@ async fn build_home(api: &OfficialAppleMusicApi) -> Result<PageWire, AppleError>
         .send_request(home::CANONICAL_LISTEN_NOW_URL, &query_refs)
         .await?;
 
-    let sections = home::map_listen_now_response(&resp);
+    let mut sections = home::map_listen_now_response(&resp);
+
+    // Fetch real-time Recently Played items to update or insert the Recently Played shelf
+    let recent_req = api
+        .send_request("/v1/me/recent/played/tracks", &[("limit", "15")])
+        .await;
+    let recent_res = match recent_req {
+        Ok(v)
+            if v.get("data")
+                .and_then(|d| d.as_array())
+                .map(|a| !a.is_empty())
+                .unwrap_or(false) =>
+        {
+            Ok(v)
+        }
+        _ => {
+            api.send_request("/v1/me/recent/played", &[("limit", "15")])
+                .await
+        }
+    };
+    if let Ok(recent_data) = recent_res {
+        let recent_items = mapper::map_apple_data_to_items(&recent_data);
+        if !recent_items.is_empty() {
+            if let Some(existing_recent) = sections.iter_mut().find(|s| {
+                s.title
+                    .as_deref()
+                    .map(|t| t.to_lowercase().contains("recently played"))
+                    .unwrap_or(false)
+                    || s.id == "shelf-recently-played"
+                    || s.id == "recently-played"
+            }) {
+                existing_recent.items = recent_items;
+            } else {
+                let recent_shelf = PageSectionWire::new(
+                    "recently-played",
+                    Some("Recently Played".to_string()),
+                    recent_items,
+                )
+                .with_hint("shelf");
+                let insert_pos = if !sections.is_empty()
+                    && sections[0]
+                        .presentation_hint
+                        .as_deref()
+                        .map(|h| h.contains("hero") || h.contains("top-picks"))
+                        .unwrap_or(false)
+                {
+                    1
+                } else {
+                    0
+                };
+                sections.insert(insert_pos, recent_shelf);
+            }
+        }
+    }
+
     page.sections = sections;
 
     if let Some(next) = resp.get("next").and_then(|n| n.as_str()) {

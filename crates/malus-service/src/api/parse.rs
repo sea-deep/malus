@@ -5,15 +5,27 @@ use serde_json::Value;
 
 /// Parse Apple artwork JSON into normalized Artwork.
 ///
-/// Expands `{w}x{h}` placeholders to `600x600`.
+/// Expands `{w}x{h}` placeholders with aspect-ratio aware dimensions and formats.
 pub fn parse_apple_artwork(art: &Value) -> Option<Artwork> {
     let raw_url = art["url"].as_str()?;
     let width = art["width"].as_u64().map(|w| w as u32);
     let height = art["height"].as_u64().map(|h| h as u32);
+
+    let (w_str, h_str, crop) = match (width, height) {
+        (Some(w), Some(h)) if w > 0 && h > 0 && w != h => {
+            let max_dim = 1200.0;
+            let scale = (max_dim / (w.max(h) as f64)).min(1.0);
+            let rw = ((w as f64) * scale).round() as u32;
+            let rh = ((h as f64) * scale).round() as u32;
+            (rw.to_string(), rh.to_string(), "sr")
+        }
+        _ => ("600".to_string(), "600".to_string(), ""),
+    };
+
     let url = raw_url
-        .replace("{w}", "600")
-        .replace("{h}", "600")
-        .replace("{c}", "")
+        .replace("{w}", &w_str)
+        .replace("{h}", &h_str)
+        .replace("{c}", crop)
         .replace("{f}", "jpg");
     Some(Artwork { url, width, height })
 }
@@ -129,6 +141,13 @@ pub fn parse_apple_track(item: &Value) -> Option<Track> {
         .as_str()
         .or_else(|| item["url"].as_str())
         .map(str::to_string);
+    let is_live = attrs.get("isLive").and_then(|v| v.as_bool()).or(
+        if matches!(media_ref, MediaRef::Station(_)) {
+            Some(true)
+        } else {
+            None
+        },
+    );
 
     Some(Track {
         id: media_ref,
@@ -141,6 +160,7 @@ pub fn parse_apple_track(item: &Value) -> Option<Track> {
         explicit,
         artwork,
         uri,
+        is_live,
     })
 }
 

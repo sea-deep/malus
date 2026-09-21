@@ -105,14 +105,20 @@ pub trait AppleWebSession: Send + Sync {
     /// Append a media item to the end of the queue.
     async fn play_later(&self, kind: &str, id: &str) -> Result<(), AppleError>;
 
-    /// Jump to a specific index in the queue.
-    async fn queue_jump(&self, index: usize) -> Result<(), AppleError>;
+    /// Jump to a specific index in the queue with optional identity verification.
+    async fn queue_jump(&self, index: usize, expected_id: Option<&str>) -> Result<(), AppleError>;
 
-    /// Remove an item at the specified index from the queue.
-    async fn queue_remove(&self, index: usize) -> Result<(), AppleError>;
+    /// Remove an item at the specified index from the queue with optional identity verification.
+    async fn queue_remove(&self, index: usize, expected_id: Option<&str>)
+    -> Result<(), AppleError>;
 
-    /// Move a queue item from one index to another.
-    async fn queue_move(&self, from: usize, to: usize) -> Result<(), AppleError>;
+    /// Move a queue item from one index to another with optional identity verification.
+    async fn queue_move(
+        &self,
+        from: usize,
+        to: usize,
+        expected_id: Option<&str>,
+    ) -> Result<(), AppleError>;
 
     /// Clear all upcoming items in the queue (preserve current).
     async fn queue_clear_upcoming(&self) -> Result<(), AppleError>;
@@ -301,8 +307,9 @@ async fn bootstrap_minimal_page(
     .map_err(AppleError::Web)?;
 
     // 6. Configure MusicKit via call_function with structured runtime host arguments
+    let pref_autoplay = malus_ipc::PlayerPreferences::load().autoplay;
     let config_func = r#"
-        async function(devToken, userToken, expectedStorefront, appName, appBuild) {
+        async function(devToken, userToken, expectedStorefront, appName, appBuild, prefAutoplay) {
             try {
                 const configOpts = {
                     developerToken: devToken,
@@ -320,6 +327,8 @@ async fn bootstrap_minimal_page(
                 window.music = music;
                 music.musicUserToken = userToken;
                 music.assertUserStorefront = () => {};
+                music.autoplayEnabled = !!prefAutoplay;
+                window.__malusAutoplayPref = !!prefAutoplay;
                 return { ok: true, version: window.MusicKit.version || "unknown" };
             } catch (e) {
                 return { ok: false, error: e.message || String(e) };
@@ -336,6 +345,7 @@ async fn bootstrap_minimal_page(
                 serde_json::Value::String(tokens.storefront.clone()),
                 serde_json::Value::String("Malus".to_string()),
                 serde_json::Value::String(env!("CARGO_PKG_VERSION").to_string()),
+                serde_json::Value::Bool(pref_autoplay),
             ],
         )
         .await
@@ -606,6 +616,23 @@ impl ProductionAppleWebSession {
             .await
             .map_err(AppleError::Web)?;
 
+        let pref_autoplay = malus_ipc::PlayerPreferences::load().autoplay;
+        let init_pref_script = format!(
+            r#"
+            (() => {{
+                try {{
+                    const mk = window.MusicKit && window.MusicKit.getInstance();
+                    if (mk) {{
+                        mk.autoplayEnabled = {pref_autoplay};
+                        const pc = (mk.getPlaybackController && mk.getPlaybackController()) || mk.player || mk._playbackController;
+                        if (pc) pc.autoplayEnabled = {pref_autoplay};
+                    }}
+                }} catch (_) {{}}
+            }})()
+            "#
+        );
+        let _ = page.evaluate(&init_pref_script).await;
+
         // Apply visual suppression only if full-page fallback was used in headless mode
         if !minimal_active && launch_mode == LaunchMode::Headless {
             let opt_script = r#"
@@ -757,6 +784,11 @@ fn track_from_snapshot(t: &Value) -> Option<Track> {
     {
         track = track.with_disc_number(dn as u32);
     }
+    if let Some(is_live) = t["isLive"].as_bool() {
+        track.is_live = Some(is_live);
+    } else if matches!(track.id, MediaRef::Station(_)) {
+        track.is_live = Some(true);
+    }
     Some(track)
 }
 
@@ -804,6 +836,8 @@ fn parse_player_status(payload: &Value) -> Option<PlayerStatus> {
     let timeline_id = payload["timelineId"].as_u64().unwrap_or(0);
     let sequence = payload["sequence"].as_u64().unwrap_or(0);
     let autoplay = payload["autoplay"].as_bool().unwrap_or(false);
+    let is_live = payload["isLive"].as_bool().unwrap_or(false)
+        || current_track.as_ref().is_some_and(|t| t.is_live());
 
     Some(PlayerStatus {
         state,
@@ -815,6 +849,7 @@ fn parse_player_status(payload: &Value) -> Option<PlayerStatus> {
         shuffle,
         repeat,
         autoplay,
+        is_live,
         timeline_id,
         sequence,
     })
@@ -1243,72 +1278,137 @@ impl AppleWebSession for ProductionAppleWebSession {
                     .map_err(AppleError::Web)?;
             }
         }
+        let pref_autoplay = malus_ipc::PlayerPreferences::load().autoplay;
         let func = r#"
-            async function(kind, itemId, startIndex) {
+            async function(kind, itemId, startIndex, prefAutoplay) {
                 const mk = window.MusicKit && window.MusicKit.getInstance();
                 if (!mk) throw new Error("MusicKit instance not available");
 
-                // For library song IDs (i.xxx / l.xxx), resolve catalog ID first
-                let resolvedId = itemId;
-                if (kind === "song" && (itemId.startsWith("i.") || itemId.startsWith("l."))) {
-                    try {
-                        const res = await mk.api.music(`/v1/me/library/songs/${itemId}`);
-                        const item = res?.data?.data?.[0];
-                        const catId = item?.attributes?.playParams?.catalogId;
-                        if (catId) resolvedId = catId;
-                    } catch (_) {}
-                }
+                const shouldAutoplay = (typeof prefAutoplay === "boolean") ? prefAutoplay : (window.__malusAutoplayPref ?? !!mk.autoplayEnabled);
+                mk.autoplayEnabled = shouldAutoplay;
+                window.__malusAutoplayPref = shouldAutoplay;
 
-                // Cleanly pause if currently playing to prevent MusicKit "The play() method was called without a previous stop() or pause() call" error
-                if (mk.isPlaying || mk.playbackState === 2) {
-                    try {
-                        await mk.pause();
-                    } catch (_) {}
-                }
-
-                // Build MusicKit setQueue descriptor based on kind
-                let descriptor;
-                switch (kind) {
-                    case "song":
-                        descriptor = { song: resolvedId, startPlaying: true };
-                        break;
-                    case "album":
-                        descriptor = { album: resolvedId, startPlaying: true };
-                        break;
-                    case "playlist":
-                        descriptor = { playlist: resolvedId, startPlaying: true };
-                        break;
-                    case "station":
-                        descriptor = { station: resolvedId, startPlaying: true };
-                        break;
-                    default:
-                        throw new Error("Unsupported media kind: " + kind);
-                }
-                if (typeof startIndex === "number" && startIndex > 0) {
-                    descriptor.startPosition = startIndex;
-                }
-
-                await mk.setQueue(descriptor);
-
-                if (!mk.isPlaying) {
-                    try {
-                        await mk.play();
-                    } catch (e) {
-                        console.warn("mk.play error after setQueue:", e);
+                // Mark transitioning to suppress transient empty status / empty queue events during MusicKit queue teardown
+                window.__malusTransitioning = true;
+                try {
+                    // For library song IDs (i.xxx / l.xxx) or library artist IDs (r.xxx / l.xxx), resolve catalog ID first
+                    let resolvedId = itemId;
+                    if (kind === "song" && (itemId.startsWith("i.") || itemId.startsWith("l."))) {
+                        try {
+                            const res = await mk.api.music(`/v1/me/library/songs/${itemId}`);
+                            const item = res?.data?.data?.[0];
+                            const catId = item?.attributes?.playParams?.catalogId;
+                            if (catId) resolvedId = catId;
+                        } catch (_) {}
+                    } else if (kind === "artist" && (itemId.startsWith("r.") || itemId.startsWith("l."))) {
+                        try {
+                            const res = await mk.api.music(`/v1/me/library/artists/${itemId}?include=catalog`);
+                            const item = res?.data?.data?.[0];
+                            const catId = item?.relationships?.catalog?.data?.[0]?.id;
+                            if (catId) resolvedId = catId;
+                        } catch (_) {}
                     }
-                }
 
-                if (mk.autoplayEnabled) {
-                    try {
-                        const pc = mk.getPlaybackController && mk.getPlaybackController();
-                        if (pc && !pc.autoplayStation && !pc.loadingAutoplayStation) {
-                            await pc.startAutoplay();
+                    // Pause cleanly without awaiting to minimize track-switch audio sink transition latency
+                    if (mk.isPlaying || mk.playbackState === 2) {
+                        try {
+                            const p = mk.pause();
+                            if (p && typeof p.catch === "function") p.catch(() => {});
+                        } catch (_) {}
+                    }
+
+                    // Build MusicKit setQueue descriptor based on kind
+                    let descriptor;
+                    switch (kind) {
+                        case "song":
+                            descriptor = { song: resolvedId, startPlaying: true };
+                            break;
+                        case "album":
+                            descriptor = { album: resolvedId, startPlaying: true };
+                            break;
+                        case "playlist":
+                            descriptor = { playlist: resolvedId, startPlaying: true };
+                            break;
+                        case "station":
+                            descriptor = { station: resolvedId, startPlaying: true };
+                            break;
+                        case "artist": {
+                            const storefront = mk.storefrontId || "us";
+                            let songIds = [];
+                            try {
+                                const res = await mk.api.music(`/v1/catalog/${storefront}/artists/${resolvedId}?views=top-songs`);
+                                const data = res?.data?.data?.[0]?.views?.['top-songs']?.data;
+                                if (Array.isArray(data) && data.length > 0) {
+                                    songIds = data.map(item => item.id).filter(Boolean);
+                                }
+                            } catch (e) {
+                                console.warn("Failed to fetch artist top-songs for playback:", e);
+                            }
+                            if (songIds.length === 0 && (itemId.startsWith("r.") || itemId.startsWith("l."))) {
+                                try {
+                                    const res = await mk.api.music(`/v1/me/library/artists/${itemId}/songs`);
+                                    const data = res?.data?.data;
+                                    if (Array.isArray(data) && data.length > 0) {
+                                        songIds = data.map(s => s.attributes?.playParams?.catalogId || s.id).filter(Boolean);
+                                    }
+                                } catch (_) {}
+                            }
+                            if (songIds.length > 0) {
+                                descriptor = { songs: songIds, startPlaying: true };
+                            } else {
+                                descriptor = { station: `ra.a-${resolvedId}`, startPlaying: true };
+                            }
+                            break;
                         }
-                    } catch (_) {}
+                        default:
+                            throw new Error("Unsupported media kind: " + kind);
+                    }
+                    if (typeof startIndex === "number" && startIndex > 0) {
+                        descriptor.startPosition = startIndex;
+                    }
+
+                    await mk.setQueue(descriptor);
+
+                    if (!mk.isPlaying) {
+                        try {
+                            const p = mk.play();
+                            if (p && typeof p.catch === "function") p.catch(() => {});
+                        } catch (e) {
+                            console.warn("mk.play error after setQueue:", e);
+                        }
+                    }
+
+                    if (shouldAutoplay && kind !== "station") {
+                        try {
+                            const pc = (mk.getPlaybackController && mk.getPlaybackController()) || mk.player || mk._playbackController;
+                            if (pc) {
+                                pc.autoplayEnabled = true;
+                                if (!pc.autoplayStation && !pc.loadingAutoplayStation && typeof pc.startAutoplay === "function") {
+                                    try {
+                                        await pc.startAutoplay();
+                                    } catch (_) {}
+                                } else if (pc.autoplayStation && typeof pc.queueAutoplayTracks === "function") {
+                                    try {
+                                        await pc.queueAutoplayTracks();
+                                    } catch (_) {}
+                                }
+                            }
+                        } catch (_) {}
+                    }
+
+                    // Await briefly until nowPlayingItem is populated or playback starts before lifting transition lock
+                    for (let i = 0; i < 30; i++) {
+                        if (mk.nowPlayingItem || mk.isPlaying || mk.playbackState === 2) {
+                            break;
+                        }
+                        await new Promise(r => setTimeout(r, 50));
+                    }
+                } finally {
+                    window.__malusTransitioning = false;
                 }
 
                 if (window.__malusPlaybackNotify) {
-                    window.__malusPlaybackNotify();
+                    window.__malusPlaybackNotify("queue_load");
                 }
             }
         "#;
@@ -1318,6 +1418,7 @@ impl AppleWebSession for ProductionAppleWebSession {
                 Value::String(kind.to_string()),
                 Value::String(id.to_string()),
                 serde_json::json!(start_index),
+                serde_json::json!(pref_autoplay),
             ],
         )
         .await
@@ -1437,29 +1538,49 @@ impl AppleWebSession for ProductionAppleWebSession {
     }
 
     async fn set_autoplay(&self, autoplay: bool) -> Result<(), AppleError> {
-        let page = self.ensure_playback_session().await?;
+        let guard = self.active_session.lock().await;
+        let page = match *guard {
+            Some(ref s) => {
+                if let Ok(health) = s.runtime.check_health().await
+                    && health.alive
+                {
+                    s.runtime.page_handle()
+                } else {
+                    return Ok(());
+                }
+            }
+            None => return Ok(()),
+        };
+        drop(guard);
         let func = r#"
             async function(auto) {
                 const mk = window.MusicKit && window.MusicKit.getInstance();
                 if (!mk) throw new Error("MusicKit instance not available");
                 mk.autoplayEnabled = !!auto;
+                window.__malusAutoplayPref = !!auto;
                 try {
-                    const pc = mk.getPlaybackController && mk.getPlaybackController();
+                    const pc = (mk.getPlaybackController && mk.getPlaybackController()) || mk.player || mk._playbackController;
                     if (pc) {
                         pc.autoplayEnabled = !!auto;
                         if (auto) {
-                            if (!pc.autoplayStation && !pc.loadingAutoplayStation) {
-                                await pc.startAutoplay();
-                            } else if (pc.autoplayStation) {
-                                await pc.queueAutoplayTracks();
+                            if (!pc.autoplayStation && !pc.loadingAutoplayStation && typeof pc.startAutoplay === 'function') {
+                                try {
+                                    await pc.startAutoplay();
+                                } catch (_) {}
+                            } else if (pc.autoplayStation && typeof pc.queueAutoplayTracks === 'function') {
+                                try {
+                                    await pc.queueAutoplayTracks();
+                                } catch (_) {}
                             }
                         } else {
-                            await pc.stopAutoplay();
+                            if (typeof pc.stopAutoplay === 'function') {
+                                await pc.stopAutoplay();
+                            }
                         }
                     }
                 } catch (_) {}
                 if (window.__malusPlaybackNotify) {
-                    window.__malusPlaybackNotify();
+                    window.__malusPlaybackNotify('autoplay');
                 }
             }
         "#;
@@ -1546,6 +1667,18 @@ impl AppleWebSession for ProductionAppleWebSession {
             async function(posSeconds) {
                 const mk = window.MusicKit && window.MusicKit.getInstance();
                 if (!mk) throw new Error("MusicKit instance not available");
+                const current = mk.nowPlayingItem;
+                const a = current?.attributes || current || {};
+                const isLive = !!(
+                    a.isLive ||
+                    current?.isLive ||
+                    (current?.type === 'stations' && a.isLive !== false) ||
+                    (a.playParams?.kind === 'radioStation' && a.isLive !== false) ||
+                    String(current?.id || a.playParams?.id || '').startsWith('ra.')
+                );
+                if (isLive) {
+                    return; // Seeking is disabled on live shows
+                }
                 const targetMs = Math.round(posSeconds * 1000);
                 if (window.__malusPlaybackDiscontinuity) {
                     window.__malusPlaybackDiscontinuity('seek', targetMs);
@@ -1623,6 +1756,9 @@ impl AppleWebSession for ProductionAppleWebSession {
                 let descriptor = {};
                 descriptor[kind] = itemId;
                 await mk.playNext(descriptor);
+                if (window.__malusPlaybackNotify) {
+                    window.__malusPlaybackNotify();
+                }
             }
         "#;
         page.call_function(
@@ -1663,15 +1799,20 @@ impl AppleWebSession for ProductionAppleWebSession {
         Ok(())
     }
 
-    async fn queue_jump(&self, index: usize) -> Result<(), AppleError> {
+    async fn queue_jump(&self, index: usize, expected_id: Option<&str>) -> Result<(), AppleError> {
         let page = self.ensure_playback_session().await?;
         let func = r#"
-            async function(idx) {
+            async function(idx, expectedId) {
                 const mk = window.MusicKit && window.MusicKit.getInstance();
                 if (!mk) throw new Error("MusicKit instance not available");
                 const q = mk.queue;
                 if (!q || idx < 0 || idx >= q.items.length) {
                     throw new Error("Queue index out of bounds: " + idx);
+                }
+                const item = q.items[idx];
+                const itemId = String(item?.id || item?.attributes?.playParams?.id || '');
+                if (expectedId && itemId && itemId !== expectedId) {
+                    throw new Error("Queue item identity mismatch at index " + idx + ": expected " + expectedId + ", found " + itemId);
                 }
                 await mk.changeToMediaAtIndex(idx);
                 if (window.__malusPlaybackNotify) {
@@ -1679,35 +1820,58 @@ impl AppleWebSession for ProductionAppleWebSession {
                 }
             }
         "#;
-        page.call_function(func, &[serde_json::json!(index)])
-            .await
-            .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
+        page.call_function(
+            func,
+            &[serde_json::json!(index), serde_json::json!(expected_id)],
+        )
+        .await
+        .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
         Ok(())
     }
 
-    async fn queue_remove(&self, index: usize) -> Result<(), AppleError> {
+    async fn queue_remove(
+        &self,
+        index: usize,
+        expected_id: Option<&str>,
+    ) -> Result<(), AppleError> {
         let page = self.ensure_playback_session().await?;
         let func = r#"
-            async function(idx) {
+            async function(idx, expectedId) {
                 const mk = window.MusicKit && window.MusicKit.getInstance();
                 if (!mk) throw new Error("MusicKit instance not available");
                 const q = mk.queue;
                 if (!q || idx < 0 || idx >= q.items.length) {
                     throw new Error("Queue index out of bounds: " + idx);
                 }
-                q.splice(idx, 1);
+                const item = q.items[idx];
+                const itemId = String(item?.id || item?.attributes?.playParams?.id || '');
+                if (expectedId && itemId && itemId !== expectedId) {
+                    throw new Error("Queue item identity mismatch at index " + idx + ": expected " + expectedId + ", found " + itemId);
+                }
+                q.splice(idx, 1, []);
+                if (window.__malusPlaybackNotify) {
+                    window.__malusPlaybackNotify();
+                }
             }
         "#;
-        page.call_function(func, &[serde_json::json!(index)])
-            .await
-            .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
+        page.call_function(
+            func,
+            &[serde_json::json!(index), serde_json::json!(expected_id)],
+        )
+        .await
+        .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
         Ok(())
     }
 
-    async fn queue_move(&self, from: usize, to: usize) -> Result<(), AppleError> {
+    async fn queue_move(
+        &self,
+        from: usize,
+        to: usize,
+        expected_id: Option<&str>,
+    ) -> Result<(), AppleError> {
         let page = self.ensure_playback_session().await?;
         let func = r#"
-            async function(fromIdx, toIdx) {
+            async function(fromIdx, toIdx, expectedId) {
                 const mk = window.MusicKit && window.MusicKit.getInstance();
                 if (!mk) throw new Error("MusicKit instance not available");
                 const q = mk.queue;
@@ -1716,14 +1880,34 @@ impl AppleWebSession for ProductionAppleWebSession {
                 if (fromIdx < 0 || fromIdx >= len || toIdx < 0 || toIdx >= len) {
                     throw new Error("Queue index out of bounds: from=" + fromIdx + " to=" + toIdx);
                 }
+                if (fromIdx === toIdx) return;
                 const item = q.items[fromIdx];
-                q.splice(fromIdx, 1);
-                q.splice(toIdx, 0, [item]);
+                const itemId = String(item?.id || item?.attributes?.playParams?.id || '');
+                if (expectedId && itemId && itemId !== expectedId) {
+                    throw new Error("Queue item identity mismatch at index " + fromIdx + ": expected " + expectedId + ", found " + itemId);
+                }
+                const start = Math.min(fromIdx, toIdx);
+                const end = Math.max(fromIdx, toIdx);
+                const count = end - start + 1;
+                const subItems = q.items.slice(start, end + 1);
+                const [moved] = subItems.splice(fromIdx - start, 1);
+                subItems.splice(toIdx - start, 0, moved);
+                q.splice(start, count, subItems);
+                if (window.__malusPlaybackNotify) {
+                    window.__malusPlaybackNotify();
+                }
             }
         "#;
-        page.call_function(func, &[serde_json::json!(from), serde_json::json!(to)])
-            .await
-            .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
+        page.call_function(
+            func,
+            &[
+                serde_json::json!(from),
+                serde_json::json!(to),
+                serde_json::json!(expected_id),
+            ],
+        )
+        .await
+        .map_err(|e| AppleError::PlaybackFailed(e.to_string()))?;
         Ok(())
     }
 
@@ -1738,7 +1922,10 @@ impl AppleWebSession for ProductionAppleWebSession {
                 const pos = typeof q.position === "number" ? q.position : 0;
                 // Remove everything after the current position
                 if (pos + 1 < q.items.length) {
-                    q.splice(pos + 1, q.items.length - pos - 1);
+                    q.splice(pos + 1, q.items.length - pos - 1, []);
+                }
+                if (window.__malusPlaybackNotify) {
+                    window.__malusPlaybackNotify();
                 }
             }
         "#;

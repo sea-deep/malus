@@ -4,6 +4,7 @@
 //! native client applications (CLI, TUI, GUI) over Unix domain socket IPC.
 
 use malus_ipc::{
+    PlayerPreferences,
     client::{ClientEvent, ClientRequest, ClientResponse},
     wire::{ActionResultWire, PageActionWire},
 };
@@ -81,6 +82,31 @@ impl Default for Engine {
     }
 }
 
+fn is_track_fully_enriched(track: &Track) -> bool {
+    let has_album_id = track.album.as_ref().and_then(|a| a.id.as_ref()).is_some();
+    let has_artist_ids = !track.artists.is_empty() && track.artists.iter().all(|a| a.id.is_some());
+    let not_delims = if track.artists.len() == 1 {
+        !track.artists[0].name.contains(" & ") && !track.artists[0].name.contains(", ")
+    } else {
+        true
+    };
+    has_album_id && has_artist_ids && not_delims
+}
+
+fn merge_cached_metadata(track: &mut Track, cached: &Track) {
+    if track.album.as_ref().and_then(|a| a.id.as_ref()).is_none() && cached.album.is_some() {
+        track.album = cached.album.clone();
+    }
+    let cur_has_ids = track.artists.iter().any(|a| a.id.is_some());
+    let cached_has_ids = cached.artists.iter().any(|a| a.id.is_some());
+    if cached.artists.len() > track.artists.len() || (!cur_has_ids && cached_has_ids) {
+        track.artists = cached.artists.clone();
+    }
+    if track.artwork.is_none() && cached.artwork.is_some() {
+        track.artwork = cached.artwork.clone();
+    }
+}
+
 impl Engine {
     async fn finish_player_setting(
         &self,
@@ -108,10 +134,19 @@ impl Engine {
     /// Initialize the engine with an explicit AppleService instance (test seam).
     pub fn with_apple(apple: Arc<AppleService>) -> Self {
         let (event_tx, _) = broadcast::channel(128);
-        let mirrored_player: Arc<RwLock<Option<MirroredPlayerState>>> = Arc::new(RwLock::new(None));
+        let prefs = PlayerPreferences::load();
+        let initial_status = PlayerStatus {
+            autoplay: prefs.autoplay,
+            ..Default::default()
+        };
+        let mirrored_player: Arc<RwLock<Option<MirroredPlayerState>>> =
+            Arc::new(RwLock::new(Some(MirroredPlayerState::new(initial_status))));
         let mirrored_queue = Arc::new(RwLock::new(Queue::new()));
         let queue_context = Arc::new(RwLock::new(QueueContext::default()));
         let playback_mutex = Arc::new(tokio::sync::Mutex::new(()));
+
+        // Note: WPE stays dormant until playback or auth is requested (Invariant 10).
+        // Autoplay preference from PlayerPreferences is applied when session starts.
 
         // Fetch recently played track from Apple Music to seed player bar in stopped state
         let apple_init = apple.clone();
@@ -127,9 +162,11 @@ impl Engine {
                         .is_none()
                     {
                         let duration_ms = track.duration_ms.unwrap_or(0);
+                        let autoplay = PlayerPreferences::load().autoplay;
                         let status = PlayerStatus {
                             current_track: Some(track),
                             duration_ms,
+                            autoplay,
                             ..Default::default()
                         };
                         *guard = Some(MirroredPlayerState::new(status.clone()));
@@ -163,22 +200,15 @@ impl Engine {
                 match event {
                     malus_service::PlaybackEvent::Status(mut status) => {
                         if let Some(ref mut track) = status.current_track {
-                            let has_album_id =
-                                track.album.as_ref().and_then(|a| a.id.as_ref()).is_some();
-                            if has_album_id {
+                            if let Some(cached) = track_cache_clone.read().await.get(track.id.id())
+                            {
+                                merge_cached_metadata(track, cached);
+                            }
+                            if is_track_fully_enriched(track) {
                                 track_cache_clone
                                     .write()
                                     .await
                                     .insert(track.id.id().to_string(), track.clone());
-                            } else if let Some(cached) =
-                                track_cache_clone.read().await.get(track.id.id())
-                            {
-                                if let Some(ref alb) = cached.album {
-                                    track.album = Some(alb.clone());
-                                }
-                                if !cached.artists.is_empty() {
-                                    track.artists = cached.artists.clone();
-                                }
                             } else {
                                 let tid = track.id.id().to_string();
                                 let mut in_flight = in_flight_clone.lock().await;
@@ -206,17 +236,7 @@ impl Engine {
                                                     state.status.current_track
                                                 && cur.id == enriched.id
                                             {
-                                                if cur
-                                                    .album
-                                                    .as_ref()
-                                                    .and_then(|a| a.id.as_ref())
-                                                    .is_none()
-                                                {
-                                                    cur.album = enriched.album.clone();
-                                                }
-                                                if cur.artists.iter().any(|a| a.id.is_none()) {
-                                                    cur.artists = enriched.artists.clone();
-                                                }
+                                                merge_cached_metadata(cur, &enriched);
                                                 let updated_status = state.status.clone();
                                                 drop(guard);
                                                 let _ = event_tx_task.send(
@@ -232,6 +252,13 @@ impl Engine {
 
                         let mut guard = mirrored_clone.write().await;
                         if let Some(ref mut state) = *guard {
+                            // Guard: don't overwrite a known mirrored track with a transient empty snapshot
+                            if status.current_track.is_none()
+                                && state.status.current_track.is_some()
+                            {
+                                status.current_track = state.status.current_track.clone();
+                                status.duration_ms = state.status.duration_ms;
+                            }
                             state.update(status.clone());
                         } else {
                             *guard = Some(MirroredPlayerState::new(status.clone()));
@@ -240,7 +267,13 @@ impl Engine {
                         let _ = event_tx_clone.send(ClientEvent::StatusChanged(status));
                     }
                     malus_service::PlaybackEvent::Queue(queue) => {
-                        *mirrored_queue_clone.write().await = queue.clone();
+                        let mut guard = mirrored_queue_clone.write().await;
+                        if queue.items.is_empty() && !guard.items.is_empty() {
+                            // Suppress transient empty queue during MusicKit teardown
+                            return;
+                        }
+                        *guard = queue.clone();
+                        drop(guard);
                         let _ = event_tx_clone.send(ClientEvent::QueueChanged(queue));
                     }
                     malus_service::PlaybackEvent::Error { source, message } => {
@@ -267,20 +300,24 @@ impl Engine {
         &self.apple
     }
 
+    pub async fn enrich_status_from_cache(&self, status: &mut PlayerStatus) {
+        if let Some(ref mut track) = status.current_track
+            && let Some(cached) = self.track_cache.read().await.get(track.id.id())
+        {
+            merge_cached_metadata(track, cached);
+        }
+    }
+
     pub async fn update_mirrored_status(&self, mut status: PlayerStatus) {
         if let Some(ref mut track) = status.current_track {
-            if track.album.as_ref().and_then(|a| a.id.as_ref()).is_some() {
+            if let Some(cached) = self.track_cache.read().await.get(track.id.id()) {
+                merge_cached_metadata(track, cached);
+            }
+            if is_track_fully_enriched(track) {
                 self.track_cache
                     .write()
                     .await
                     .insert(track.id.id().to_string(), track.clone());
-            } else if let Some(cached) = self.track_cache.read().await.get(track.id.id()) {
-                if let Some(ref alb) = cached.album {
-                    track.album = Some(alb.clone());
-                }
-                if !cached.artists.is_empty() {
-                    track.artists = cached.artists.clone();
-                }
             }
         }
         let mut guard = self.mirrored_player.write().await;
@@ -370,7 +407,7 @@ impl Engine {
             }
         } else if matches!(
             reference,
-            MediaRef::Album(_) | MediaRef::Playlist(_) | MediaRef::Station(_)
+            MediaRef::Album(_) | MediaRef::Playlist(_) | MediaRef::Station(_) | MediaRef::Artist(_)
         ) {
             match index {
                 Some(idx) => {
@@ -500,7 +537,7 @@ impl Engine {
                 PageActionWire::Play(reference) => {
                     let _lock = self.playback_mutex.lock().await;
                     let res = match reference {
-                        MediaRef::Album(_) | MediaRef::Playlist(_) => {
+                        MediaRef::Album(_) | MediaRef::Playlist(_) | MediaRef::Artist(_) => {
                             self.play_collection_internal(&reference, false).await
                         }
                         _ => self.play_media_internal(&reference, None, None).await,
@@ -765,17 +802,7 @@ impl Engine {
                     .play_media_internal(&reference, collection, index)
                     .await
                 {
-                    Ok(()) => {
-                        if let Ok(status) = self.apple.get_status().await {
-                            self.update_mirrored_status(status.clone()).await;
-                            self.emit(ClientEvent::StatusChanged(status));
-                        }
-                        if let Ok(queue) = self.apple.get_queue().await {
-                            self.update_mirrored_queue(queue.clone()).await;
-                            self.emit(ClientEvent::QueueChanged(queue));
-                        }
-                        ClientResponse::Ok
-                    }
+                    Ok(()) => ClientResponse::Ok,
                     Err(e) => ClientResponse::err("PLAY_FAILED", e.to_string()),
                 }
             }
@@ -783,17 +810,7 @@ impl Engine {
             ClientRequest::PlayCollection { reference, shuffle } => {
                 let _lock = self.playback_mutex.lock().await;
                 match self.play_collection_internal(&reference, shuffle).await {
-                    Ok(()) => {
-                        if let Ok(status) = self.apple.get_status().await {
-                            self.update_mirrored_status(status.clone()).await;
-                            self.emit(ClientEvent::StatusChanged(status));
-                        }
-                        if let Ok(queue) = self.apple.get_queue().await {
-                            self.update_mirrored_queue(queue.clone()).await;
-                            self.emit(ClientEvent::QueueChanged(queue));
-                        }
-                        ClientResponse::Ok
-                    }
+                    Ok(()) => ClientResponse::Ok,
                     Err(error) => ClientResponse::err("PLAY_FAILED", error.to_string()),
                 }
             }
@@ -838,13 +855,7 @@ impl Engine {
                 if current_state == PlaybackState::Playing {
                     // ── Pause path ──
                     match self.apple.pause().await {
-                        Ok(()) => {
-                            if let Ok(status) = self.apple.get_status().await {
-                                self.update_mirrored_status(status.clone()).await;
-                                self.emit(ClientEvent::StatusChanged(status));
-                            }
-                            ClientResponse::Ok
-                        }
+                        Ok(()) => ClientResponse::Ok,
                         Err(e) => ClientResponse::err("TOGGLE_FAILED", e.to_string()),
                     }
                 } else {
@@ -872,14 +883,12 @@ impl Engine {
 
                     match res {
                         Ok(()) => {
-                            if let Ok(status) = self.apple.get_status().await {
-                                // Guard: don't overwrite a known mirrored track
-                                // with a transient empty snapshot right after
-                                // loading a track into MusicKit.
-                                if status.current_track.is_some() || !loaded_from_stopped {
-                                    self.update_mirrored_status(status.clone()).await;
-                                    self.emit(ClientEvent::StatusChanged(status));
-                                }
+                            if let Ok(mut status) = self.apple.get_status().await
+                                && (status.current_track.is_some() || !loaded_from_stopped)
+                            {
+                                self.enrich_status_from_cache(&mut status).await;
+                                self.update_mirrored_status(status.clone()).await;
+                                self.emit(ClientEvent::StatusChanged(status));
                             }
                             if loaded_from_stopped && let Ok(queue) = self.apple.get_queue().await {
                                 self.update_mirrored_queue(queue.clone()).await;
@@ -895,13 +904,7 @@ impl Engine {
             ClientRequest::Stop => {
                 let _lock = self.playback_mutex.lock().await;
                 match self.apple.stop().await {
-                    Ok(()) => {
-                        if let Ok(status) = self.apple.get_status().await {
-                            self.update_mirrored_status(status.clone()).await;
-                            self.emit(ClientEvent::StatusChanged(status));
-                        }
-                        ClientResponse::Ok
-                    }
+                    Ok(()) => ClientResponse::Ok,
                     Err(e) => ClientResponse::err("STOP_FAILED", e.to_string()),
                 }
             }
@@ -909,17 +912,7 @@ impl Engine {
             ClientRequest::Next => {
                 let _lock = self.playback_mutex.lock().await;
                 match self.apple.skip_to_next().await {
-                    Ok(()) => {
-                        if let Ok(status) = self.apple.get_status().await {
-                            self.update_mirrored_status(status.clone()).await;
-                            self.emit(ClientEvent::StatusChanged(status));
-                        }
-                        if let Ok(queue) = self.apple.get_queue().await {
-                            self.update_mirrored_queue(queue.clone()).await;
-                            self.emit(ClientEvent::QueueChanged(queue));
-                        }
-                        ClientResponse::Ok
-                    }
+                    Ok(()) => ClientResponse::Ok,
                     Err(e) => ClientResponse::err("NEXT_FAILED", e.to_string()),
                 }
             }
@@ -927,23 +920,22 @@ impl Engine {
             ClientRequest::Previous => {
                 let _lock = self.playback_mutex.lock().await;
                 match self.apple.skip_to_previous().await {
-                    Ok(()) => {
-                        if let Ok(status) = self.apple.get_status().await {
-                            self.update_mirrored_status(status.clone()).await;
-                            self.emit(ClientEvent::StatusChanged(status));
-                        }
-                        if let Ok(queue) = self.apple.get_queue().await {
-                            self.update_mirrored_queue(queue.clone()).await;
-                            self.emit(ClientEvent::QueueChanged(queue));
-                        }
-                        ClientResponse::Ok
-                    }
+                    Ok(()) => ClientResponse::Ok,
                     Err(e) => ClientResponse::err("PREVIOUS_FAILED", e.to_string()),
                 }
             }
 
             ClientRequest::Seek { position_ms } => {
                 let _lock = self.playback_mutex.lock().await;
+                if self
+                    .mirrored_player
+                    .read()
+                    .await
+                    .as_ref()
+                    .is_some_and(|m| m.status.is_live())
+                {
+                    return ClientResponse::Ok;
+                }
                 match self.apple.seek(position_ms).await {
                     Ok(()) => {
                         if let Ok(status) = self.apple.get_status().await {
@@ -977,6 +969,7 @@ impl Engine {
             }
             ClientRequest::SetAutoplay { autoplay } => {
                 let _lock = self.playback_mutex.lock().await;
+                let _ = PlayerPreferences { autoplay }.save();
                 let res = self
                     .finish_player_setting(self.apple.set_autoplay(autoplay).await)
                     .await;
@@ -1056,35 +1049,29 @@ impl Engine {
                 Err(error) => ClientResponse::err("QUEUE_FAILED", error.to_string()),
             },
 
-            ClientRequest::QueueJump { index } => {
+            ClientRequest::QueueJump { index, expected_id } => {
                 let _lock = self.playback_mutex.lock().await;
-                match self.apple.queue_jump(index).await {
-                    Ok(()) => {
-                        if let Ok(status) = self.apple.get_status().await {
-                            self.update_mirrored_status(status.clone()).await;
-                            self.emit(ClientEvent::StatusChanged(status));
-                        }
-                        if let Ok(queue) = self.apple.get_queue().await {
-                            self.update_mirrored_queue(queue.clone()).await;
-                            self.emit(ClientEvent::QueueChanged(queue));
-                        }
-                        ClientResponse::Ok
-                    }
+                match self
+                    .apple
+                    .queue_jump_checked(index, expected_id.as_deref())
+                    .await
+                {
+                    Ok(()) => ClientResponse::Ok,
                     Err(e) => ClientResponse::err("QUEUE_JUMP_FAILED", e.to_string()),
                 }
             }
 
-            ClientRequest::QueueRemove { index } => {
+            ClientRequest::QueueRemove { index, expected_id } => {
                 let _lock = self.playback_mutex.lock().await;
-                match self.apple.queue_remove(index).await {
+                match self
+                    .apple
+                    .queue_remove_checked(index, expected_id.as_deref())
+                    .await
+                {
                     Ok(()) => {
                         {
                             let mut ctx = self.queue_context.write().await;
                             ctx.pristine = false;
-                        }
-                        if let Ok(queue) = self.apple.get_queue().await {
-                            self.update_mirrored_queue(queue.clone()).await;
-                            self.emit(ClientEvent::QueueChanged(queue));
                         }
                         ClientResponse::Ok
                     }
@@ -1092,17 +1079,21 @@ impl Engine {
                 }
             }
 
-            ClientRequest::QueueMove { from, to } => {
+            ClientRequest::QueueMove {
+                from,
+                to,
+                expected_id,
+            } => {
                 let _lock = self.playback_mutex.lock().await;
-                match self.apple.queue_move(from, to).await {
+                match self
+                    .apple
+                    .queue_move_checked(from, to, expected_id.as_deref())
+                    .await
+                {
                     Ok(()) => {
                         {
                             let mut ctx = self.queue_context.write().await;
                             ctx.pristine = false;
-                        }
-                        if let Ok(queue) = self.apple.get_queue().await {
-                            self.update_mirrored_queue(queue.clone()).await;
-                            self.emit(ClientEvent::QueueChanged(queue));
                         }
                         ClientResponse::Ok
                     }
@@ -1117,10 +1108,6 @@ impl Engine {
                         {
                             let mut ctx = self.queue_context.write().await;
                             ctx.pristine = false;
-                        }
-                        if let Ok(queue) = self.apple.get_queue().await {
-                            self.update_mirrored_queue(queue.clone()).await;
-                            self.emit(ClientEvent::QueueChanged(queue));
                         }
                         ClientResponse::Ok
                     }
@@ -1316,6 +1303,7 @@ mod tests {
             shuffle: false,
             repeat: RepeatMode::Off,
             autoplay: false,
+            is_live: false,
             timeline_id: 1,
             sequence: 1,
         }
@@ -1332,6 +1320,7 @@ mod tests {
             shuffle: false,
             repeat: RepeatMode::Off,
             autoplay: false,
+            is_live: false,
             timeline_id: 1,
             sequence: 1,
         }

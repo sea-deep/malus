@@ -101,11 +101,15 @@ enum QueueCommands {
     Jump {
         #[arg(help = "Target queue index (0-based)")]
         index: usize,
+        #[arg(long, help = "Expected track ID for identity verification")]
+        expected_id: Option<String>,
     },
     /// Remove an item at the specified index from the queue
     Remove {
         #[arg(help = "Queue index to remove (0-based)")]
         index: usize,
+        #[arg(long, help = "Expected track ID for identity verification")]
+        expected_id: Option<String>,
     },
     /// Move a queue item from one index to another
     Move {
@@ -113,6 +117,8 @@ enum QueueCommands {
         from: usize,
         #[arg(help = "Destination queue index (0-based)")]
         to: usize,
+        #[arg(long, help = "Expected track ID for identity verification")]
+        expected_id: Option<String>,
     },
     /// Clear all upcoming items in the queue (preserving current)
     #[command(name = "clear-upcoming")]
@@ -627,8 +633,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("Item queued to play later.");
                 }
             }
-            Some(QueueCommands::Jump { index }) => {
-                let resp = client.send(&ClientRequest::QueueJump { index }).await?;
+            Some(QueueCommands::Jump { index, expected_id }) => {
+                let resp = client
+                    .send(&ClientRequest::QueueJump { index, expected_id })
+                    .await?;
                 match resp {
                     ClientResponse::Ok => {
                         let q_resp = client.send(&ClientRequest::GetQueue).await?;
@@ -643,8 +651,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     other => print_response(&other),
                 }
             }
-            Some(QueueCommands::Remove { index }) => {
-                let resp = client.send(&ClientRequest::QueueRemove { index }).await?;
+            Some(QueueCommands::Remove { index, expected_id }) => {
+                let resp = client
+                    .send(&ClientRequest::QueueRemove { index, expected_id })
+                    .await?;
                 match resp {
                     ClientResponse::Ok => {
                         let q_resp = client.send(&ClientRequest::GetQueue).await?;
@@ -659,8 +669,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     other => print_response(&other),
                 }
             }
-            Some(QueueCommands::Move { from, to }) => {
-                let resp = client.send(&ClientRequest::QueueMove { from, to }).await?;
+            Some(QueueCommands::Move {
+                from,
+                to,
+                expected_id,
+            }) => {
+                let resp = client
+                    .send(&ClientRequest::QueueMove {
+                        from,
+                        to,
+                        expected_id,
+                    })
+                    .await?;
                 match resp {
                     ClientResponse::Ok => {
                         let q_resp = client.send(&ClientRequest::GetQueue).await?;

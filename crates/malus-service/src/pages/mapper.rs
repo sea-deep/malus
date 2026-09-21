@@ -345,7 +345,17 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
                 .get("curatorName")
                 .and_then(|c| c.as_str())
                 .map(str::to_string);
-            page_item.artwork = attrs.get("artwork").and_then(parse_apple_artwork);
+            page_item.artwork = attrs
+                .get("artwork")
+                .or_else(|| {
+                    attrs.get("editorialArtwork").and_then(|ea| {
+                        ea.get("subscriptionCover")
+                            .or_else(|| ea.get("subscriptionHero"))
+                            .or_else(|| ea.get("storeFlowcase"))
+                            .or_else(|| ea.as_object().and_then(|o| o.values().next()))
+                    })
+                })
+                .and_then(parse_apple_artwork);
             let open_id = catalog_id.unwrap_or(id);
             let mref = MediaRef::Playlist(open_id.to_string());
             page_item.entity = Some(mref.clone());
@@ -390,6 +400,19 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
             page_item.actions = actions;
             page_item.presentation_hint = Some("card".to_string());
 
+            let bg_color = attrs
+                .get("artwork")
+                .and_then(|a| a.get("bgColor"))
+                .and_then(|c| c.as_str())
+                .map(|hex| {
+                    if hex.starts_with('#') {
+                        hex.to_string()
+                    } else {
+                        format!("#{hex}")
+                    }
+                });
+            page_item.bg_color = bg_color;
+
             Some(page_item)
         }
 
@@ -429,6 +452,11 @@ pub fn map_apple_resource_to_item(item: &Value) -> Option<PageItemWire> {
                     attrs.get("editorialArtwork").and_then(|ea| {
                         ea.get("subscriptionCover")
                             .or_else(|| ea.get("subscriptionHero"))
+                            .or_else(|| ea.get("storeFlowcase"))
+                            .or_else(|| ea.get("bannerUber"))
+                            .or_else(|| ea.get("static"))
+                            .or_else(|| ea.get("original"))
+                            .or_else(|| ea.as_object().and_then(|o| o.values().next()))
                     })
                 })
                 .and_then(parse_apple_artwork);

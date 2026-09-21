@@ -327,19 +327,23 @@ pub fn map_groupings_response(resp: &Value, page_kind: &str) -> Vec<PageSectionW
                 .iter()
                 .all(|it| matches!(it.entity, Some(MediaRef::Song(_))));
 
+            let has_artwork = items.iter().any(|it| it.artwork.is_some());
             let has_gradients = items.iter().any(|it| it.bg_color.is_some());
             let is_episodes = title == "Latest Radio Episodes"
                 || title == "New Radio Episodes"
                 || title.contains("Episodes");
 
-            if all_stations
-                && (has_gradients || title == "Top Stations" || title == "Stations by Genre")
-            {
-                "gradient-stations-shelf"
+            if is_on_air {
+                "featured-banner-shelf"
             } else if all_stations && is_episodes {
                 "multi-row-episode-shelf"
+            } else if all_stations
+                && !has_artwork
+                && (has_gradients || title == "Stations by Genre")
+            {
+                "gradient-stations-shelf"
             } else if all_stations {
-                "stations-shelf"
+                "shelf"
             } else if all_artists {
                 "artist-shelf"
             } else if all_songs && items.len() >= 4 {
