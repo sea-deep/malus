@@ -10,12 +10,12 @@
 
 <p align="center">
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.80%2B-DEA584?style=flat-square&logo=rust&logoColor=white" alt="Rust 1.80+"></a>
-  <a href="https://gtk.org/"><img src="https://img.shields.io/badge/GTK-4.14%2B-4A90E2?style=flat-square&logo=gnome&logoColor=white" alt="GTK4"></a>
-  <a href="https://gnome.pages.gitlab.gnome.org/libadwaita/"><img src="https://img.shields.io/badge/Libadwaita-1.5%2B-2A76D2?style=flat-square" alt="Libadwaita"></a>
+  <a href="https://gtk.org/"><img src="https://img.shields.io/badge/GTK-4.14%2B-4A90E2?style=flat-square&logo=gtk&logoColor=white" alt="GTK4"></a>
+  <a href="https://gnome.pages.gitlab.gnome.org/libadwaita/"><img src="https://img.shields.io/badge/Libadwaita-1.5%2B-2A76D2?style=flat-square&logo=gnome&logoColor=white" alt="Libadwaita"></a>
   <a href="https://wpewebkit.org/"><img src="https://img.shields.io/badge/WPE%20WebKit-2.52-506B82?style=flat-square&logo=webkit&logoColor=white" alt="WPE WebKit"></a>
   <img src="https://img.shields.io/badge/Platform-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux">
-  <img src="https://img.shields.io/badge/Audio-Widevine%20AAC--LC-FA243C?style=flat-square&logo=apple-music&logoColor=white" alt="Widevine DRM">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0--or--later-blue?style=flat-square" alt="License: GPL-3.0-or-later"></a>
+  <img src="https://img.shields.io/badge/Audio-Widevine%20AAC--LC-FA243C?style=flat-square&logo=applemusic&logoColor=white" alt="Widevine DRM">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue?style=flat-square&logo=gnu&logoColor=white" alt="License: GPLv3"></a>
 </p>
 
 <p align="center">
