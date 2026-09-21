@@ -1,6 +1,5 @@
-//! Error types for `malus-web-runtime`.
+//! Error types for `malus-wpe`.
 
-use std::path::PathBuf;
 use thiserror::Error;
 
 use crate::discovery::BrowserEngine;
@@ -19,9 +18,6 @@ pub enum WebError {
     #[error("No compatible browser candidate discovered")]
     NoCompatibleBrowserFound,
 
-    #[error("Explicit browser binary not found or not executable: {0}")]
-    ExplicitBrowserNotFound(PathBuf),
-
     #[error("Failed to prepare profile directory: {0}")]
     Profile(String),
 
@@ -31,20 +27,11 @@ pub enum WebError {
     #[error("Browser process exited prematurely with code: {0:?}")]
     BrowserExited(Option<i32>),
 
-    #[error("Timed out waiting for DevToolsActivePort at {0}")]
-    PortTimeout(PathBuf),
-
-    #[error("Failed to parse DevToolsActivePort: {0}")]
-    InvalidPortFile(String),
-
-    #[error("Failed to establish WebSocket connection: {0}")]
+    #[error("Failed to establish connection: {0}")]
     Connection(String),
 
     #[error("Runtime disconnected: {0}")]
     Disconnected(String),
-
-    #[error("CDP command failed: {0}")]
-    Protocol(String),
 
     #[error("JavaScript evaluation threw an error: {0}")]
     Evaluation(String),

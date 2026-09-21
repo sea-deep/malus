@@ -500,7 +500,10 @@ static OpenCDMError do_decrypt_sample(
     GstBuffer* subSampleBuffer,
     const uint32_t subSampleCount,
     GstBuffer* IV,
-    GstBuffer* keyID) {
+    GstBuffer* keyID,
+    cdm::EncryptionScheme scheme = cdm::EncryptionScheme::kCenc,
+    uint32_t crypt_byte_block = 0,
+    uint32_t skip_byte_block = 0) {
 
     if (!session || !session->cdm) {
         return ERROR_INVALID_SESSION;
@@ -558,13 +561,21 @@ static OpenCDMError do_decrypt_sample(
     cdm::InputBuffer_2 input_buf = {};
     input_buf.data = dataMap.data;
     input_buf.data_size = dataMap.size;
-    input_buf.encryption_scheme = cdm::EncryptionScheme::kCenc;
+    input_buf.encryption_scheme = scheme;
     input_buf.key_id = actualKeyId;
     input_buf.key_id_size = actualKeyIdSize;
     input_buf.iv = ivMap.data;
     input_buf.iv_size = ivMap.size;
-    input_buf.subsamples = subsamples.empty() ? nullptr : subsamples.data();
-    input_buf.num_subsamples = subsamples.size();
+    cdm::SubsampleEntry whole_sample = { 0, (uint32_t)dataMap.size };
+    if (!subsamples.empty()) {
+        input_buf.subsamples = subsamples.data();
+        input_buf.num_subsamples = subsamples.size();
+    } else {
+        input_buf.subsamples = &whole_sample;
+        input_buf.num_subsamples = 1;
+    }
+    input_buf.pattern.crypt_byte_block = crypt_byte_block;
+    input_buf.pattern.skip_byte_block = skip_byte_block;
 
     CdmSimpleDecryptedBlock dec_block;
     cdm::Status status = session->cdm->Decrypt(input_buf, &dec_block);
@@ -575,17 +586,36 @@ static OpenCDMError do_decrypt_sample(
     if (status == cdm::kSuccess) {
         cdm::Buffer* dec_buffer = dec_block.DecryptedBuffer();
         if (dec_buffer && dec_buffer->Data()) {
-            uint32_t copy_size = dec_buffer->Size() < dataMap.size ? dec_buffer->Size() : dataMap.size;
-            memcpy(dataMap.data, dec_buffer->Data(), copy_size);
+            if (dec_buffer->Size() == dataMap.size || subsamples.empty()) {
+                uint32_t copy_size = std::min<uint32_t>(dec_buffer->Size(), dataMap.size);
+                memcpy(dataMap.data, dec_buffer->Data(), copy_size);
+            } else {
+                // Widevine returned only decrypted cipher bytes; reconstruct back into buffer over clear positions
+                uint8_t* dec_ptr = dec_buffer->Data();
+                uint8_t* out_ptr = dataMap.data;
+                size_t rem_dec = dec_buffer->Size();
+                for (const auto& sub : subsamples) {
+                    out_ptr += sub.clear_bytes;
+                    uint32_t to_copy = std::min<uint32_t>(sub.cipher_bytes, rem_dec);
+                    memcpy(out_ptr, dec_ptr, to_copy);
+                    out_ptr += to_copy;
+                    dec_ptr += to_copy;
+                    rem_dec -= to_copy;
+                    if (rem_dec == 0) break;
+                }
+            }
             dec_buffer->Destroy();
         }
         if (s_sampleCount % 50 == 1) {
-            fprintf(stderr, "[OpenCDM Shim] DECRYPT SUCCESS: sample #%lu (size=%u, subsamples=%zu)\n",
-                    s_sampleCount, (uint32_t)dataMap.size, subsamples.size());
+            fprintf(stderr, "[OpenCDM Shim] DECRYPT SUCCESS: sample #%lu (size=%u, subsamples=%zu, scheme=%s)\n",
+                    s_sampleCount, (uint32_t)dataMap.size, subsamples.size(),
+                    scheme == cdm::EncryptionScheme::kCbcs ? "cbcs" : "cenc");
         }
     } else {
-        fprintf(stderr, "[OpenCDM Shim] DECRYPT FAILED: sample #%lu returned status %d (size=%u)\n",
-                s_sampleCount, (int)status, (uint32_t)dataMap.size);
+        fprintf(stderr, "[OpenCDM Shim] DECRYPT FAILED: sample #%lu returned status %d (size=%u, scheme=%s, iv_len=%u)\n",
+                s_sampleCount, (int)status, (uint32_t)dataMap.size,
+                scheme == cdm::EncryptionScheme::kCbcs ? "cbcs" : "cenc",
+                (uint32_t)ivMap.size);
     }
 
     if (keyID && mappedKeyID) {
@@ -626,6 +656,7 @@ EXTERNAL OpenCDMError opencdm_gstreamer_session_decrypt_buffer(
 
     GstBuffer* ivBuffer = nullptr;
     const GValue* val = gst_structure_get_value(protectionMeta->info, "iv");
+    if (!val) val = gst_structure_get_value(protectionMeta->info, "constant_iv");
     if (val) ivBuffer = gst_value_get_buffer(val);
 
     GstBuffer* keyIDBuffer = nullptr;
@@ -641,7 +672,54 @@ EXTERNAL OpenCDMError opencdm_gstreamer_session_decrypt_buffer(
         if (val) subSamplesBuffer = gst_value_get_buffer(val);
     }
 
-    return do_decrypt_sample(session, buffer, subSamplesBuffer, subSampleCount, ivBuffer, keyIDBuffer);
+    const char* cipher_mode = nullptr;
+    if (gst_structure_has_field(protectionMeta->info, "cipher-mode")) {
+        cipher_mode = gst_structure_get_string(protectionMeta->info, "cipher-mode");
+    } else if (gst_structure_has_field(protectionMeta->info, "cipher_mode")) {
+        cipher_mode = gst_structure_get_string(protectionMeta->info, "cipher_mode");
+    }
+
+    uint32_t crypt_byte_block = 0;
+    uint32_t skip_byte_block = 0;
+    if (!gst_structure_get_uint(protectionMeta->info, "crypt_byte_block", &crypt_byte_block)) {
+        gst_structure_get_uint(protectionMeta->info, "crypt-byte-block", &crypt_byte_block);
+    }
+    if (!gst_structure_get_uint(protectionMeta->info, "skip_byte_block", &skip_byte_block)) {
+        gst_structure_get_uint(protectionMeta->info, "skip-byte-block", &skip_byte_block);
+    }
+
+    if (caps) {
+        GstStructure* caps_s = gst_caps_get_structure(caps, 0);
+        if (caps_s) {
+            if (!cipher_mode) {
+                if (gst_structure_has_field(caps_s, "cipher-mode")) {
+                    cipher_mode = gst_structure_get_string(caps_s, "cipher-mode");
+                } else if (gst_structure_has_field(caps_s, "cipher_mode")) {
+                    cipher_mode = gst_structure_get_string(caps_s, "cipher_mode");
+                }
+            }
+            if (crypt_byte_block == 0 && skip_byte_block == 0) {
+                if (!gst_structure_get_uint(caps_s, "crypt_byte_block", &crypt_byte_block)) {
+                    gst_structure_get_uint(caps_s, "crypt-byte-block", &crypt_byte_block);
+                }
+                if (!gst_structure_get_uint(caps_s, "skip_byte_block", &skip_byte_block)) {
+                    gst_structure_get_uint(caps_s, "skip-byte-block", &skip_byte_block);
+                }
+            }
+        }
+    }
+
+    cdm::EncryptionScheme scheme = cdm::EncryptionScheme::kCenc;
+    if (cipher_mode) {
+        if (strcasecmp(cipher_mode, "cbcs") == 0 || strcasecmp(cipher_mode, "cbc1") == 0) {
+            scheme = cdm::EncryptionScheme::kCbcs;
+        } else if (strcasecmp(cipher_mode, "cenc") == 0 || strcasecmp(cipher_mode, "cens") == 0) {
+            scheme = cdm::EncryptionScheme::kCenc;
+        }
+    }
+
+    return do_decrypt_sample(session, buffer, subSamplesBuffer, subSampleCount, ivBuffer, keyIDBuffer,
+                             scheme, crypt_byte_block, skip_byte_block);
 }
 
 } // extern "C"

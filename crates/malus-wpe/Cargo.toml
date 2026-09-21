@@ -17,7 +17,6 @@ tokio = { version = "1.43", features = [
     "net",
     "fs",
 ] }
-tokio-tungstenite = { version = "0.26", features = ["connect"] }
 futures-util = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -26,7 +25,6 @@ tracing = "0.1"
 libc = "0.2"
 url = "2.5"
 directories = "6.0"
-base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 ar = "0.9"
 tar = "0.4"

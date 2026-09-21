@@ -1,15 +1,14 @@
-//! # malus-web-runtime
+//! # malus-wpe
 //!
-//! Provider-agnostic web runtime for Malus providers requiring browser execution.
+//! Native WPE WebKit runtime for Malus providers requiring browser execution.
 //!
 //! This crate provides:
-//! - Discovered native WPE WebKit primary and Chromium fallback engines
+//! - Discovered native WPE WebKit runtime engine
 //! - XDG-isolated and permission-hardened profile lifecycle
 //! - Best-effort process group leadership, parent death signaling, and graceful shutdown escalation
 //! - Capability-oriented facade (`WebRuntime`, `WebPage`, `WebEvent`) completely concealing
-//!   underlying browser engines, CDP, and IPC mechanics
+//!   underlying IPC mechanics
 
-pub mod cdp;
 pub mod discovery;
 pub mod error;
 pub mod page;
@@ -19,10 +18,7 @@ pub mod runtime;
 pub mod widevine;
 pub mod wpe;
 
-pub use discovery::{
-    BrowserCandidate, BrowserEngine, BrowserProduct, EnginePreference, LaunchMechanism,
-    WpeCandidate, discover_browsers, discover_wpe, select_best_browser,
-};
+pub use discovery::{BrowserEngine, BrowserProduct, EnginePreference, WpeCandidate, discover_wpe};
 pub use error::WebError;
 pub use page::{PageHealth, WebEvent, WebPage};
 pub use process::LaunchMode;

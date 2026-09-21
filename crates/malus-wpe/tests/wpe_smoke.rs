@@ -140,29 +140,13 @@ async fn test_wpe_load_document() {
 }
 
 #[tokio::test]
-async fn test_engine_selection_fallback_and_failfast() {
+async fn test_engine_failfast_when_wpe_unavailable() {
     let tmp = tempfile::tempdir().expect("Failed to create tempdir for test profile");
     let profile_path = tmp.path().join("profile");
 
-    // 1. Auto mode with invalid WPE dir falls back cleanly to Chromium
-    let auto_options = RuntimeOptions {
+    // When WPE runtime is unavailable, launch must fail fast with WebError::Initialization
+    let options = RuntimeOptions {
         engine: Some(EnginePreference::Auto),
-        wpe_dir: Some(PathBuf::from("/nonexistent/wpe/dir/malus_test")),
-        launch_mode: LaunchMode::Headless,
-        initial_url: "about:blank".to_string(),
-        custom_profile_path: Some(profile_path.clone()),
-        ..Default::default()
-    };
-
-    let auto_runtime = WebRuntime::launch(auto_options)
-        .await
-        .expect("Auto should cleanly fall back to Chromium when WPE is unavailable");
-    assert_eq!(auto_runtime.engine(), BrowserEngine::Chromium);
-    auto_runtime.shutdown().await.expect("Shutdown failed");
-
-    // 2. Explicit WPE with invalid WPE dir fails fast with explicit error
-    let wpe_options = RuntimeOptions {
-        engine: Some(EnginePreference::Wpe),
         wpe_dir: Some(PathBuf::from("/nonexistent/wpe/dir/malus_test")),
         launch_mode: LaunchMode::Headless,
         initial_url: "about:blank".to_string(),
@@ -170,16 +154,18 @@ async fn test_engine_selection_fallback_and_failfast() {
         ..Default::default()
     };
 
-    let res = WebRuntime::launch(wpe_options).await;
+    let res = WebRuntime::launch(options).await;
     let err = match res {
         Err(e) => e,
-        Ok(_) => panic!("Explicit WPE must fail fast when unavailable"),
+        Ok(_) => {
+            panic!("WebRuntime launch must fail fast without fallback when WPE is unavailable")
+        }
     };
 
     match err {
         WebError::Initialization { engine, message } => {
             assert_eq!(engine, BrowserEngine::Wpe);
-            assert!(message.contains("no WPE candidate was discovered"));
+            assert!(message.contains("WPE WebKit runtime candidate was not discovered"));
         }
         other => panic!("Expected Initialization error, got: {:?}", other),
     }

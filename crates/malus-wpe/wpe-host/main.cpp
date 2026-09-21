@@ -328,6 +328,7 @@ int main(int argc, char* argv[]) {
                             " window.webkit.messageHandlers.malus.postMessage(JSON.stringify({id: %" G_GUINT64_FORMAT ", error: (err && err.message) ? err.message : String(err)}));"
                             "});",
                             exprStr ? exprStr : "null",
+                            reqId,
                             reqId
                         );
                         webkit_web_view_evaluate_javascript(view, evalScript, -1, nullptr, nullptr, nullptr, nullptr, nullptr);
@@ -348,6 +349,7 @@ int main(int argc, char* argv[]) {
                             "});",
                             fnStr ? fnStr : "null",
                             argsStr ? argsStr : "[]",
+                            reqId,
                             reqId
                         );
                         webkit_web_view_evaluate_javascript(view, callScript, -1, nullptr, nullptr, nullptr, nullptr, nullptr);
