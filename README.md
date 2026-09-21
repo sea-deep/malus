@@ -15,7 +15,7 @@
   <a href="https://wpewebkit.org/"><img src="https://img.shields.io/badge/WPE%20WebKit-2.52-506B82?style=flat-square&logo=webkit&logoColor=white" alt="WPE WebKit"></a>
   <img src="https://img.shields.io/badge/Platform-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux">
   <img src="https://img.shields.io/badge/Audio-Widevine%20AAC--LC-FA243C?style=flat-square&logo=apple-music&logoColor=white" alt="Widevine DRM">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue?style=flat-square" alt="License"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0--or--later-blue?style=flat-square" alt="License: GPL-3.0-or-later"></a>
 </p>
 
 <p align="center">
@@ -243,6 +243,14 @@ cargo test -p malus-gtk --lib
 ```
 
 For information on building the relocatable WPE WebKit runtime from source, refer to [Building the WPE WebKit Runtime](docs/building-wpe-runtime.md).
+
+---
+
+## License
+
+This project is licensed under the **GNU General Public License v3.0 or later** ([GPL-3.0-or-later](LICENSE)).
+
+Copyright © 2026 sea-deep and Malus Contributors.
 
 ---
 
