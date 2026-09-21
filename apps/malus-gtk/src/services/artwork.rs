@@ -51,7 +51,7 @@ pub const THUMB_HERO: u32 = 1200;
 pub fn normalize_target_size(size: u32) -> u32 {
     if size <= 160 {
         THUMB_SMALL
-    } else if size <= 480 {
+    } else if size <= 320 {
         THUMB_MEDIUM
     } else if size <= 800 {
         THUMB_LARGE
@@ -62,20 +62,64 @@ pub fn normalize_target_size(size: u32) -> u32 {
 
 pub fn resolve_artwork_url(url: &str, target_size: u32) -> String {
     let bucket = normalize_target_size(target_size);
-    let url = url
-        .replace("{w}", &bucket.to_string())
-        .replace("{h}", &bucket.to_string())
-        .replace("{c}", "bb")
-        .replace("{f}", "jpg");
-    if url.contains("/600x600bb.") {
-        url.replace("/600x600bb.", &format!("/{bucket}x{bucket}bb."))
-    } else if url.contains("/600x600sr.") {
-        url.replace("/600x600sr.", &format!("/{bucket}x{bucket}sr."))
-    } else if url.contains("/600x600.") {
-        url.replace("/600x600.", &format!("/{bucket}x{bucket}bb."))
-    } else {
-        url
+    if url.contains("{w}") || url.contains("{h}") {
+        return url
+            .replace("{w}", &bucket.to_string())
+            .replace("{h}", &bucket.to_string())
+            .replace("{c}", "bb")
+            .replace("{f}", "jpg");
     }
+    if url.contains(".mzstatic.com/")
+        && let Some(rewritten) = rewrite_mzstatic_dimensions(url, bucket)
+    {
+        return rewritten;
+    }
+    url.to_string()
+}
+
+fn rewrite_mzstatic_dimensions(url: &str, bucket: u32) -> Option<String> {
+    let (base, query) = match url.split_once('?') {
+        Some((b, q)) => (b, Some(q)),
+        None => (url, None),
+    };
+
+    let last_slash_idx = base.rfind('/')?;
+    let prefix = &base[..last_slash_idx];
+    let filename = &base[last_slash_idx + 1..];
+
+    let x_pos = filename.find('x')?;
+    let w_str = &filename[..x_pos];
+    if w_str.is_empty() || !w_str.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+
+    let rest = &filename[x_pos + 1..];
+    let h_end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    let h_str = &rest[..h_end];
+    if h_str.is_empty() {
+        return None;
+    }
+
+    let after_h = &rest[h_end..];
+    let (suffix, ext) = if let Some(dot_pos) = after_h.rfind('.') {
+        (&after_h[..dot_pos], &after_h[dot_pos + 1..])
+    } else {
+        ("", "jpg")
+    };
+
+    let crop_flag = if suffix.is_empty() { "bb" } else { suffix };
+
+    let ext = if ext.is_empty() { "jpg" } else { ext };
+    let new_filename = format!("{bucket}x{bucket}{crop_flag}.{ext}");
+
+    let mut result = format!("{prefix}/{new_filename}");
+    if let Some(q) = query {
+        result.push('?');
+        result.push_str(q);
+    }
+    Some(result)
 }
 
 type InFlightMap = HashMap<String, broadcast::Sender<Option<relm4::gtk::glib::Bytes>>>;
@@ -158,11 +202,34 @@ impl Default for ArtworkService {
     }
 }
 
+fn spawn_task<F>(future: F)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.spawn(future);
+    } else {
+        relm4::spawn(future);
+    }
+}
+
 impl ArtworkService {
     pub fn new() -> Self {
         let cache_dir = dirs_fallback().map(|base| base.join("malus").join("artwork"));
         if let Some(ref dir) = cache_dir {
             let _ = std::fs::create_dir_all(dir);
+            let cleanup_dir = dir.clone();
+            spawn_task(async move {
+                if let Ok(mut entries) = tokio::fs::read_dir(cleanup_dir).await {
+                    while let Ok(Some(entry)) = entries.next_entry().await {
+                        let name = entry.file_name();
+                        let name_str = name.to_string_lossy();
+                        if !name_str.starts_with("v3_") {
+                            let _ = tokio::fs::remove_file(entry.path()).await;
+                        }
+                    }
+                }
+            });
         }
 
         let http_client = reqwest::Client::builder()
@@ -250,7 +317,7 @@ impl ArtworkService {
     pub fn prefetch(&self, url: &str, target_size: u32) {
         let service = self.clone();
         let url = url.to_string();
-        tokio::spawn(async move {
+        spawn_task(async move {
             let _ = service.load_bytes_sized(&url, target_size).await;
         });
     }
@@ -272,26 +339,15 @@ impl ArtworkService {
             .ok()?
             .ok()?;
 
-        // Check disk cache: first sized file, then fallback to original URL file
+        // Check disk cache for the sized file
         if let Some(ref dir) = self.cache_dir {
-            let sized_filename = format!("{:016x}", fnv1a_hash(fetch_url.as_bytes()));
+            let sized_filename = format!("v3_{:016x}", fnv1a_hash(fetch_url.as_bytes()));
             let sized_path = dir.join(sized_filename);
             if let Ok(metadata) = tokio::fs::metadata(&sized_path).await
                 && metadata.len() <= MAX_IMAGE_RESPONSE_BYTES as u64
                 && let Ok(bytes) = tokio::fs::read(&sized_path).await
             {
                 return Some(relm4::gtk::glib::Bytes::from_owned(bytes));
-            }
-
-            if fetch_url != original_url {
-                let orig_filename = format!("{:016x}", fnv1a_hash(original_url.as_bytes()));
-                let orig_path = dir.join(orig_filename);
-                if let Ok(metadata) = tokio::fs::metadata(&orig_path).await
-                    && metadata.len() <= MAX_IMAGE_RESPONSE_BYTES as u64
-                    && let Ok(bytes) = tokio::fs::read(&orig_path).await
-                {
-                    return Some(relm4::gtk::glib::Bytes::from_owned(bytes));
-                }
             }
         }
 
@@ -324,7 +380,7 @@ impl ArtworkService {
 
         // Write to disk cache
         if let Some(ref dir) = self.cache_dir {
-            let filename = format!("{:016x}", fnv1a_hash(fetch_url.as_bytes()));
+            let filename = format!("v3_{:016x}", fnv1a_hash(fetch_url.as_bytes()));
             let path = dir.join(filename);
             let _ = tokio::fs::write(&path, &bytes).await;
         }
@@ -399,9 +455,9 @@ fn decode_image_sync(bytes: Vec<u8>, max_dimension: u32) -> Option<DecodedImage>
     drop(bytes);
     let target = max_dimension.clamp(16, 1200);
     let rgba = if width > target || height > target {
-        let thumb = img.thumbnail(target, target);
+        let resized = img.resize(target, target, image::imageops::FilterType::CatmullRom);
         drop(img);
-        thumb.into_rgba8()
+        resized.into_rgba8()
     } else {
         img.into_rgba8()
     };
@@ -546,4 +602,69 @@ fn dirs_fallback() -> Option<PathBuf> {
         return Some(PathBuf::from(home).join(".cache"));
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_target_size() {
+        assert_eq!(normalize_target_size(64), THUMB_SMALL);
+        assert_eq!(normalize_target_size(160), THUMB_SMALL);
+        assert_eq!(normalize_target_size(200), THUMB_MEDIUM);
+        assert_eq!(normalize_target_size(320), THUMB_MEDIUM);
+        assert_eq!(normalize_target_size(464), THUMB_LARGE);
+        assert_eq!(normalize_target_size(800), THUMB_LARGE);
+        assert_eq!(normalize_target_size(1200), THUMB_HERO);
+        assert_eq!(normalize_target_size(1400), THUMB_HERO);
+    }
+
+    #[test]
+    fn test_resolve_artwork_url_template() {
+        let templ = "https://is1-ssl.mzstatic.com/image/thumb/Features/v4/source/{w}x{h}{c}.{f}";
+        assert_eq!(
+            resolve_artwork_url(templ, 464),
+            "https://is1-ssl.mzstatic.com/image/thumb/Features/v4/source/800x800bb.jpg"
+        );
+        assert_eq!(
+            resolve_artwork_url(templ, 128),
+            "https://is1-ssl.mzstatic.com/image/thumb/Features/v4/source/160x160bb.jpg"
+        );
+    }
+
+    #[test]
+    fn test_resolve_artwork_url_fixed_dimensions() {
+        // Standard 600x600bb
+        let u1 = "https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/e8/43/5f/e8435ffa-b6b9-b171-40ab-4ff3959ab661/886443919266.jpg/600x600bb.jpg";
+        assert_eq!(
+            resolve_artwork_url(u1, 464),
+            "https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/e8/43/5f/e8435ffa-b6b9-b171-40ab-4ff3959ab661/886443919266.jpg/800x800bb.jpg"
+        );
+
+        // Special suffix with query param (e.g. Pop Chill on New page)
+        let u2 = "https://is1-ssl.mzstatic.com/image/thumb/Features122/v4/b4/e4/3e/b4e43e28-d2cb-2169-0106-6b9c80163b34/e581e29d-a3f4-40c5-9ec4-8c747b5fc7dc.png/600x600SC.DN01.jpg?l=en-GB";
+        assert_eq!(
+            resolve_artwork_url(u2, 464),
+            "https://is1-ssl.mzstatic.com/image/thumb/Features122/v4/b4/e4/3e/b4e43e28-d2cb-2169-0106-6b9c80163b34/e581e29d-a3f4-40c5-9ec4-8c747b5fc7dc.png/800x800SC.DN01.jpg?l=en-GB"
+        );
+
+        // Smart-rectangle crop (e.g. Daily Top 100 / City Charts / Radio stations)
+        let u3 = "https://is1-ssl.mzstatic.com/image/thumb/Features116/v4/c6/05/b6/c605b65a-427f-0165-33c1-a8d2f99877e9/5f02f9bb-8eb2-4c79-bdb8-6bfb24a57e96.png/1200x300sr.jpg";
+        assert_eq!(
+            resolve_artwork_url(u3, 464),
+            "https://is1-ssl.mzstatic.com/image/thumb/Features116/v4/c6/05/b6/c605b65a-427f-0165-33c1-a8d2f99877e9/5f02f9bb-8eb2-4c79-bdb8-6bfb24a57e96.png/800x800sr.jpg"
+        );
+
+        // Smart playlist canvas crop (e.g. "Playlists Made for You": Your Essentials, Chill, Get Up!)
+        let u4 = "https://is1-ssl.mzstatic.com/image/thumb/Features/v4/94/ba/6e/94ba6ea4-bdf0-476e-669b-b2613ae8fd0c/03c6932b-81b6-404e-9b1e-ffc2bda36f9e.png/1200x300cc.jpg";
+        assert_eq!(
+            resolve_artwork_url(u4, 464),
+            "https://is1-ssl.mzstatic.com/image/thumb/Features/v4/94/ba/6e/94ba6ea4-bdf0-476e-669b-b2613ae8fd0c/03c6932b-81b6-404e-9b1e-ffc2bda36f9e.png/800x800cc.jpg"
+        );
+
+        // Non-Apple URL left intact
+        let non_apple = "https://example.com/artwork.jpg";
+        assert_eq!(resolve_artwork_url(non_apple, 464), non_apple);
+    }
 }

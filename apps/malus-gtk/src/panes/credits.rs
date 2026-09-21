@@ -47,12 +47,19 @@ pub fn show_credits_dialog(
         .build();
     content_box.append(&track_label);
 
-    let spinner = gtk::Spinner::new();
-    spinner.set_spinning(true);
-    spinner.set_size_request(24, 24);
-    spinner.set_halign(gtk::Align::Center);
-    spinner.set_margin_top(32);
-    content_box.append(&spinner);
+    let skeleton_box = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(16)
+        .margin_top(16)
+        .build();
+    for _ in 0..3 {
+        let sec = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        sec.append(&crate::widgets::skeleton::skeleton_text(Some(90), 12));
+        sec.append(&crate::widgets::skeleton::skeleton_text(Some(180), 15));
+        sec.append(&crate::widgets::skeleton::skeleton_text(Some(140), 13));
+        skeleton_box.append(&sec);
+    }
+    content_box.append(&skeleton_box);
 
     scrolled.set_child(Some(&content_box));
     toolbar_view.set_content(Some(&scrolled));
@@ -62,7 +69,7 @@ pub fn show_credits_dialog(
     let client_clone = client.clone();
     let track_ref_clone = track_ref.clone();
     let content_box_weak = content_box.downgrade();
-    let spinner_weak = spinner.downgrade();
+    let skeleton_weak = skeleton_box.downgrade();
     let track_label = track_label.downgrade();
 
     gtk::glib::MainContext::default().spawn_local(async move {
@@ -76,8 +83,8 @@ pub fn show_credits_dialog(
             label.set_text(&track.title);
         }
 
-        if let (Some(cb), Some(sp)) = (content_box_weak.upgrade(), spinner_weak.upgrade()) {
-            cb.remove(&sp);
+        if let (Some(cb), Some(sk)) = (content_box_weak.upgrade(), skeleton_weak.upgrade()) {
+            cb.remove(&sk);
 
             match res {
                 Ok(credits) if !credits.is_empty() => {

@@ -31,11 +31,9 @@ pub struct Transport {
     pub play: gtk::Button,
     play_stack: gtk::Stack,
     play_icon: gtk::Image,
-    spinner: gtk::Spinner,
     pub shuffle: gtk::Button,
     pub repeat: gtk::Button,
     immersive: bool,
-    timeout_id: Rc<RefCell<Option<relm4::gtk::glib::SourceId>>>,
 }
 impl Transport {
     pub fn new(player: &SharedPlayer, send: &CommandHandler, immersive: bool) -> Self {
@@ -57,17 +55,27 @@ impl Transport {
         } else {
             "player-play-btn"
         });
+        play.set_focus_on_click(false);
         play.set_tooltip_text(Some("Play / Pause"));
         play.update_property(&[gtk::accessible::Property::Label("Play / Pause")]);
-        play.set_focus_on_click(false);
 
         let play_stack = gtk::Stack::new();
         play_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
-        play_stack.set_transition_duration(120);
+        play_stack.set_transition_duration(150);
 
         let play_icon = gtk::Image::from_icon_name(ICON_PLAY);
-        let spinner = gtk::Spinner::new();
-        spinner.add_css_class("play-spinner");
+        if immersive {
+            play_icon.set_pixel_size(36);
+        } else {
+            play_icon.set_pixel_size(22);
+        }
+
+        let spinner = adw::Spinner::new();
+        if immersive {
+            spinner.set_size_request(36, 36);
+        } else {
+            spinner.set_size_request(22, 22);
+        }
 
         play_stack.add_named(&play_icon, Some("icon"));
         play_stack.add_named(&spinner, Some("spinner"));
@@ -77,118 +85,13 @@ impl Transport {
         let next = icon_button(ICON_NEXT, "Next", class);
         let repeat = icon_button(ICON_REPEAT, "Repeat", class);
 
-        let timeout_id: Rc<RefCell<Option<relm4::gtk::glib::SourceId>>> =
-            Rc::new(RefCell::new(None));
-        let last_click = Rc::new(std::cell::Cell::new(
-            std::time::Instant::now() - std::time::Duration::from_secs(5),
-        ));
-
-        // Skip Previous with debounce & pulse
-        {
-            let prev_click = last_click.clone();
-            let prev_btn = previous.clone();
-            let p_send = send.clone();
-            let p_stack = play_stack.clone();
-            let p_spin = spinner.clone();
-            let p_timeout = timeout_id.clone();
-            previous.connect_clicked(move |_| {
-                let now = std::time::Instant::now();
-                if now.duration_since(prev_click.get()) < std::time::Duration::from_millis(300) {
-                    return;
-                }
-                prev_click.set(now);
-                prev_btn.add_css_class("btn-active-pulse");
-                let b = prev_btn.clone();
-                relm4::gtk::glib::timeout_add_local_once(
-                    std::time::Duration::from_millis(220),
-                    move || {
-                        b.remove_css_class("btn-active-pulse");
-                    },
-                );
-                p_spin.set_spinning(true);
-                p_stack.set_visible_child_name("spinner");
-                let mut timeout = p_timeout.borrow_mut();
-                if let Some(id) = timeout.take() {
-                    id.remove();
-                }
-                let s = p_stack.clone();
-                let sp = p_spin.clone();
-                *timeout = Some(relm4::gtk::glib::timeout_add_local_once(
-                    std::time::Duration::from_millis(4500),
-                    move || {
-                        sp.set_spinning(false);
-                        s.set_visible_child_name("icon");
-                    },
-                ));
-                p_send(PlayerCommand::Previous);
-            });
-        }
-
-        // Play/Pause with loading circle
-        {
-            let pl_send = send.clone();
-            let pl_stack = play_stack.clone();
-            let pl_spin = spinner.clone();
-            let pl_timeout = timeout_id.clone();
-            play.connect_clicked(move |_| {
-                pl_spin.set_spinning(true);
-                pl_stack.set_visible_child_name("spinner");
-                let mut timeout = pl_timeout.borrow_mut();
-                if let Some(id) = timeout.take() {
-                    id.remove();
-                }
-                let s = pl_stack.clone();
-                let sp = pl_spin.clone();
-                *timeout = Some(relm4::gtk::glib::timeout_add_local_once(
-                    std::time::Duration::from_millis(4500),
-                    move || {
-                        sp.set_spinning(false);
-                        s.set_visible_child_name("icon");
-                    },
-                ));
-                pl_send(PlayerCommand::TogglePlay);
-            });
-        }
-
-        // Skip Next with debounce & pulse
-        {
-            let next_click = last_click.clone();
-            let next_btn = next.clone();
-            let n_send = send.clone();
-            let n_stack = play_stack.clone();
-            let n_spin = spinner.clone();
-            let n_timeout = timeout_id.clone();
-            next.connect_clicked(move |_| {
-                let now = std::time::Instant::now();
-                if now.duration_since(next_click.get()) < std::time::Duration::from_millis(300) {
-                    return;
-                }
-                next_click.set(now);
-                next_btn.add_css_class("btn-active-pulse");
-                let b = next_btn.clone();
-                relm4::gtk::glib::timeout_add_local_once(
-                    std::time::Duration::from_millis(220),
-                    move || {
-                        b.remove_css_class("btn-active-pulse");
-                    },
-                );
-                n_spin.set_spinning(true);
-                n_stack.set_visible_child_name("spinner");
-                let mut timeout = n_timeout.borrow_mut();
-                if let Some(id) = timeout.take() {
-                    id.remove();
-                }
-                let s = n_stack.clone();
-                let sp = n_spin.clone();
-                *timeout = Some(relm4::gtk::glib::timeout_add_local_once(
-                    std::time::Duration::from_millis(4500),
-                    move || {
-                        sp.set_spinning(false);
-                        s.set_visible_child_name("icon");
-                    },
-                ));
-                n_send(PlayerCommand::Next);
-            });
+        for (button, command) in [
+            (&previous, PlayerCommand::Previous),
+            (&play, PlayerCommand::TogglePlay),
+            (&next, PlayerCommand::Next),
+        ] {
+            let cb = send.clone();
+            button.connect_clicked(move |_| cb(command.clone()));
         }
 
         let p = player.clone();
@@ -207,68 +110,32 @@ impl Transport {
             play,
             play_stack,
             play_icon,
-            spinner,
             shuffle,
             repeat,
             immersive,
-            timeout_id,
-        }
-    }
-
-    pub fn set_loading(&self, loading: bool) {
-        if loading {
-            self.spinner.set_spinning(true);
-            self.play_stack.set_visible_child_name("spinner");
-            let mut timeout = self.timeout_id.borrow_mut();
-            if let Some(id) = timeout.take() {
-                id.remove();
-            }
-            let s = self.play_stack.clone();
-            let sp = self.spinner.clone();
-            *timeout = Some(relm4::gtk::glib::timeout_add_local_once(
-                std::time::Duration::from_millis(4500),
-                move || {
-                    sp.set_spinning(false);
-                    s.set_visible_child_name("icon");
-                },
-            ));
-        } else {
-            let mut timeout = self.timeout_id.borrow_mut();
-            if let Some(id) = timeout.take() {
-                id.remove();
-            }
-            self.spinner.set_spinning(false);
-            self.play_stack.set_visible_child_name("icon");
         }
     }
 
     pub fn refresh(&self, player: &SharedPlayer) {
         let state = player.borrow();
-        self.root.set_sensitive(state.now.current_track.is_some());
-        self.play_icon
-            .set_icon_name(Some(if state.now.is_playing() {
-                ICON_PAUSE
-            } else {
-                ICON_PLAY
-            }));
-        if state.now.action_in_flight {
-            self.set_loading(true);
+        self.root
+            .set_sensitive(state.now.current_track.is_some() || state.now.is_changing_track);
+
+        if state.now.is_changing_track {
+            self.play_stack.set_visible_child_name("spinner");
+            self.play
+                .update_property(&[gtk::accessible::Property::Label("Loading")]);
+            self.play.set_tooltip_text(Some("Loading"));
         } else {
-            self.set_loading(false);
+            self.play_stack.set_visible_child_name("icon");
+            let is_playing = state.now.is_playing();
+            self.play_icon
+                .set_icon_name(Some(if is_playing { ICON_PAUSE } else { ICON_PLAY }));
+            let label = if is_playing { "Pause" } else { "Play" };
+            self.play
+                .update_property(&[gtk::accessible::Property::Label(label)]);
+            self.play.set_tooltip_text(Some(label));
         }
-        self.play
-            .update_property(&[gtk::accessible::Property::Label(
-                if state.now.is_playing() {
-                    "Pause"
-                } else {
-                    "Play"
-                },
-            )]);
-        self.play.set_tooltip_text(Some(if state.now.is_playing() {
-            "Pause"
-        } else {
-            "Play"
-        }));
         let base_class = if self.immersive {
             "np-control"
         } else {
@@ -349,7 +216,11 @@ impl SeekControl {
                 ));
             },
             move |value| {
-                if let Some(track) = &state.borrow().now.current_track {
+                let p = state.borrow();
+                if p.now.is_live() {
+                    return;
+                }
+                if let Some(track) = &p.now.current_track {
                     cb(PlayerCommand::Seek {
                         track: track.id.clone(),
                         position_ms: value as u64,
@@ -398,23 +269,30 @@ impl SeekControl {
             self.slider.cancel();
             *self.track.borrow_mut() = id;
         }
+        let is_live = p.now.is_live();
         let duration = p.now.duration_ms;
         let is_stopped = p.now.playback_state == PlaybackState::Stopped;
-        self.slider
-            .widget
-            .set_sensitive(!is_stopped && duration > 0 && p.now.current_track.is_some());
-        let pos = if is_stopped {
-            0
+        self.slider.widget.set_sensitive(
+            !is_stopped && !is_live && duration > 0 && p.now.current_track.is_some(),
+        );
+        if is_live {
+            self.elapsed.set_text("LIVE");
+            self.remaining.set_text("");
+            self.slider.sync(0.0, 1.0, 1500.0);
         } else {
-            p.now.extrapolated_position_ms()
-        };
-        let value = self.slider.sync(pos as f64, duration as f64, 1500.0) as u64;
-        self.elapsed.set_text(&format_time(value));
-        self.remaining.set_text(&if duration == 0 {
-            "--:--".to_string()
-        } else {
-            format_remaining_time(value, duration)
-        });
+            let pos = if is_stopped {
+                0
+            } else {
+                p.now.extrapolated_position_ms()
+            };
+            let value = self.slider.sync(pos as f64, duration as f64, 1500.0) as u64;
+            self.elapsed.set_text(&format_time(value));
+            self.remaining.set_text(&if duration == 0 {
+                "--:--".to_string()
+            } else {
+                format_remaining_time(value, duration)
+            });
+        }
     }
 }
 

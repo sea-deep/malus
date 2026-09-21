@@ -27,11 +27,14 @@ pub mod live_station_pill;
 pub mod multirow_episode_row;
 pub mod multirow_track_row;
 pub mod player_controls;
+pub mod rectangular_artwork;
 pub mod square_artwork;
 pub mod station_card;
 pub mod virtual_track_list;
 
 pub use category_card::{CategoryCard, CategoryCardInit, CategoryCardInput, CategoryCardOutput};
+pub use rectangular_artwork::RectangularArtwork;
+pub use square_artwork::SquareArtwork;
 
 pub use featured_banner_card::{
     FeaturedBannerCard, FeaturedBannerCardInit, FeaturedBannerCardInput, FeaturedBannerCardOutput,

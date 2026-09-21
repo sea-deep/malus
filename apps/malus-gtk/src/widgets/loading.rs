@@ -1,5 +1,6 @@
 //! Subtle loading spinner indicator widget.
 
+use relm4::adw;
 use relm4::gtk::{self, prelude::*};
 
 pub fn create_loading_spinner(message: Option<&str>) -> gtk::Box {
@@ -14,8 +15,7 @@ pub fn create_loading_spinner(message: Option<&str>) -> gtk::Box {
         .margin_bottom(48)
         .build();
 
-    let spinner = gtk::Spinner::new();
-    spinner.set_spinning(true);
+    let spinner = adw::Spinner::new();
     spinner.set_size_request(32, 32);
     spinner.set_halign(gtk::Align::Center);
 

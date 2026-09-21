@@ -245,7 +245,7 @@ impl Component for QueuePane {
             artwork_service,
             queue: Queue::default(),
             playback_state: PlaybackState::Stopped,
-            autoplay: false,
+            autoplay: malus_ipc::PlayerPreferences::load().autoplay,
             close,
             immersive,
             current_row: None,
@@ -321,14 +321,14 @@ impl Component for QueuePane {
     fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
         match message {
             QueueInput::SetQueue(q) => {
+                let track_changed =
+                    self.queue.current_track().map(|t| &t.id) != q.current_track().map(|t| &t.id);
+                if track_changed {
+                    self.needs_scroll_to_now_playing = true;
+                }
                 if self.queue != q {
-                    let track_changed = self.queue.current_track().map(|t| &t.id)
-                        != q.current_track().map(|t| &t.id);
                     self.queue = q;
                     self.needs_rerender = true;
-                    if track_changed {
-                        self.needs_scroll_to_now_playing = true;
-                    }
                 }
             }
             QueueInput::SetPlaybackState(state) => {
@@ -356,6 +356,8 @@ impl Component for QueuePane {
             QueueInput::ToggleAutoplay => {
                 let next = !self.autoplay;
                 self.autoplay = next;
+                self.needs_rerender = true;
+                let _ = malus_ipc::PlayerPreferences { autoplay: next }.save();
                 let c = self.client.clone();
                 sender.oneshot_command(async move {
                     let _ = c.set_autoplay(next).await;
@@ -374,17 +376,24 @@ impl Component for QueuePane {
                 self.needs_scroll_to_now_playing = true;
             }
             QueueInput::Jump(idx) => {
+                let expected_id = self.queue.items.get(idx).map(|t| t.id.id().to_string());
+                if idx < self.queue.items.len() {
+                    self.queue.current_index = Some(idx);
+                    self.playback_state = PlaybackState::Playing;
+                    self.needs_rerender = true;
+                }
                 let c = self.client.clone();
                 sender.oneshot_command(async move {
-                    let _ = c.queue_jump(idx).await;
+                    let _ = c.queue_jump_checked(idx, expected_id).await;
                     let q = c.get_queue().await.unwrap_or_default();
                     QueueCmd::QueueLoaded(q)
                 });
             }
             QueueInput::Remove(idx) => {
+                let expected_id = self.queue.items.get(idx).map(|t| t.id.id().to_string());
                 let c = self.client.clone();
                 sender.oneshot_command(async move {
-                    let _ = c.queue_remove(idx).await;
+                    let _ = c.queue_remove_checked(idx, expected_id).await;
                     let q = c.get_queue().await.unwrap_or_default();
                     QueueCmd::QueueLoaded(q)
                 });
@@ -623,6 +632,7 @@ impl QueuePane {
         // 3. Upcoming Sections: UP NEXT and/or AUTOPLAY
         let start_idx = current_idx_val + 1;
         let items_len = items.len();
+        let is_live = self.queue.current_track().is_some_and(|t| t.is_live());
 
         if start_idx < items_len {
             // Use same label style as sidebar in all modes
@@ -744,12 +754,51 @@ impl QueuePane {
                     widgets.content_box.append(&up_next_box);
                 }
             }
-        } else {
-            let empty_label = gtk::Label::builder()
-                .label("No upcoming songs")
+        } else if self.autoplay && !is_live && self.queue.current_track().is_some() {
+            let auto_title = "AUTOPLAY";
+            let header_widget = if sections_list.is_empty() {
+                None
+            } else {
+                let header = Self::build_section_header(auto_title);
+                widgets.content_box.append(&header);
+                Some(header)
+            };
+            sections_list.push((auto_title, header_widget));
+
+            let loading_box = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(SPACING_SM)
+                .margin_start(SPACING_MD)
+                .margin_end(SPACING_MD)
+                .margin_top(SPACING_MD)
+                .margin_bottom(SPACING_MD)
+                .valign(gtk::Align::Center)
+                .build();
+
+            let spinner = gtk::Spinner::builder().spinning(true).build();
+            loading_box.append(&spinner);
+
+            let label = gtk::Label::builder()
+                .label("Finding similar songs…")
                 .css_classes(vec!["queue-empty-subtext".to_string()])
-                .margin_top(16)
-                .margin_bottom(16)
+                .build();
+            loading_box.append(&label);
+
+            if self.immersive && current_idx_val > 0 {
+                *self.anchor_target.borrow_mut() = Some(loading_box.clone().upcast());
+            }
+            widgets.content_box.append(&loading_box);
+        } else {
+            let empty_text = if is_live {
+                "Live broadcast"
+            } else {
+                "No upcoming songs"
+            };
+            let empty_label = gtk::Label::builder()
+                .label(empty_text)
+                .css_classes(vec!["queue-empty-subtext".to_string()])
+                .margin_top(SPACING_MD)
+                .margin_bottom(SPACING_MD)
                 .build();
             if self.immersive && current_idx_val > 0 {
                 *self.anchor_target.borrow_mut() = Some(empty_label.clone().upcast());

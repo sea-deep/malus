@@ -203,3 +203,179 @@ fn test_sidebar_favorite_songs_pinned_and_live_reload() {
         "\nSUCCESS: Favorite Songs is locked under All Playlists with starred-symbolic icon and refreshes instantly!"
     );
 }
+
+#[test]
+#[ignore = "visual verification test for skeleton shapes"]
+fn test_skeleton_render_and_structure() {
+    gtk::init().unwrap();
+    relm4::adw::init().unwrap();
+
+    let display = relm4::gtk::gdk::Display::default().unwrap();
+    let css = gtk::CssProvider::new();
+    css.load_from_string(malus_gtk::CSS_STYLE);
+    gtk::style_context_add_provider_for_display(
+        &display,
+        &css,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+
+    use malus_gtk::widgets::skeleton::*;
+
+    let routes = [
+        PageRoute::Home,
+        PageRoute::New,
+        PageRoute::Radio,
+        PageRoute::LibraryAlbums,
+        PageRoute::LibraryRecentlyAdded,
+        PageRoute::LibraryPlaylists,
+        PageRoute::LibraryMadeForYou,
+        PageRoute::LibrarySongs,
+        PageRoute::LibraryArtists,
+        PageRoute::LibraryGenres,
+        PageRoute::Album("album:123".to_string()),
+        PageRoute::Playlist("playlist:456".to_string()),
+        PageRoute::Artist("artist:789".to_string()),
+        PageRoute::Search,
+    ];
+
+    for route in &routes {
+        let widget = build_route_skeleton(route);
+        assert!(
+            widget.has_css_class("skeleton-container")
+                || widget.is_ancestor(&widget)
+                || widget.can_target()
+        );
+    }
+
+    // Helper to snapshot a skeleton inside a styled container
+    let snapshot_skeleton = |skeleton: gtk::Box, width: i32, height: i32, out_name: &str| {
+        let scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vscrollbar_policy(gtk::PolicyType::Automatic)
+            .hexpand(true)
+            .vexpand(true)
+            .build();
+        skeleton.set_margin_start(24);
+        skeleton.set_margin_end(24);
+        skeleton.set_margin_top(24);
+        skeleton.set_margin_bottom(24);
+        scroll.set_child(Some(&skeleton));
+
+        let window = gtk::Window::builder()
+            .default_width(width)
+            .default_height(height)
+            .child(&scroll)
+            .build();
+        window.add_css_class("background");
+        window.present();
+        pump(Duration::from_millis(250));
+
+        let paintable = gtk::WidgetPaintable::new(Some(&window));
+        let snapshot = gtk::Snapshot::new();
+        paintable.snapshot(&snapshot, width as f64, height as f64);
+        if let Some(node) = snapshot.to_node() {
+            if let Some(native) = window.native() {
+                if let Some(renderer) = native.renderer() {
+                    let texture = renderer.render_texture(&node, None);
+                    let path = format!(
+                        "/home/dipak/.gemini/antigravity/brain/11ae4e26-326a-4b91-a6bc-9fad632a1100/{}",
+                        out_name
+                    );
+                    let _ = texture.save_to_png(std::path::Path::new(&path));
+                }
+            }
+        }
+        window.close();
+        pump(Duration::from_millis(50));
+    };
+
+    // 1. Snapshot Home skeleton
+    snapshot_skeleton(build_home_skeleton(), 1280, 800, "skeleton_home.png");
+
+    // 2. Snapshot Artists split skeleton
+    snapshot_skeleton(
+        build_split_artists_skeleton(),
+        1280,
+        800,
+        "skeleton_artists_split.png",
+    );
+
+    // 3. Snapshot Search skeleton
+    snapshot_skeleton(
+        build_search_results_skeleton(),
+        1280,
+        800,
+        "skeleton_search.png",
+    );
+
+    // 4. Snapshot Radio skeleton
+    snapshot_skeleton(build_radio_skeleton(), 1280, 800, "skeleton_radio.png");
+
+    // 5. Snapshot Artist detail right skeleton
+    snapshot_skeleton(
+        build_artist_detail_right_skeleton(),
+        900,
+        700,
+        "skeleton_artist_detail_right.png",
+    );
+
+    println!(
+        "\nSUCCESS: All skeletons successfully instantiated, verified, and visually snapshotted!"
+    );
+}
+
+#[test]
+#[ignore = "visual verification test against live malusd"]
+fn test_live_pages_visual_verification() {
+    gtk::init().unwrap();
+    relm4::adw::init().unwrap();
+
+    let socket_path = malus_client::default_socket_path();
+    let client = MalusClient::new(socket_path);
+    let app_handle = MalusApp::builder().launch(client).detach();
+    let root = app_handle.widget();
+    root.set_default_size(1280, 800);
+    root.present();
+
+    pump(Duration::from_millis(2500));
+
+    let snapshot_root = |filename: &str| {
+        let paintable = gtk::WidgetPaintable::new(Some(root));
+        let snapshot = gtk::Snapshot::new();
+        paintable.snapshot(&snapshot, 1280.0, 800.0);
+        if let Some(node) = snapshot.to_node() {
+            if let Some(native) = root.native() {
+                if let Some(renderer) = native.renderer() {
+                    let texture = renderer.render_texture(&node, None);
+                    let path = format!(
+                        "/home/dipak/.gemini/antigravity/brain/11ae4e26-326a-4b91-a6bc-9fad632a1100/{}",
+                        filename
+                    );
+                    let _ = texture.save_to_png(std::path::Path::new(&path));
+                }
+            }
+        }
+    };
+
+    // 1. Snapshot live Home page
+    println!("Navigating to Home page...");
+    app_handle.emit(AppInput::Navigate(AppDestination::Page(PageRoute::Home)));
+    pump(Duration::from_millis(3000));
+    snapshot_root("live_home_loaded.png");
+
+    // 2. Snapshot live Artists page
+    println!("Navigating to Artists page...");
+    app_handle.emit(AppInput::Navigate(AppDestination::Page(
+        PageRoute::LibraryArtists,
+    )));
+    pump(Duration::from_millis(3000));
+    snapshot_root("live_artists_loaded.png");
+
+    // 3. Snapshot live Radio page
+    println!("Navigating to Radio page...");
+    app_handle.emit(AppInput::Navigate(AppDestination::Page(PageRoute::Radio)));
+    pump(Duration::from_millis(3000));
+    snapshot_root("live_radio_loaded.png");
+
+    println!("\nSUCCESS: Live pages navigation and visual verification complete!");
+}

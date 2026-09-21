@@ -54,6 +54,7 @@ impl Component for Sidebar {
             set_spacing: 0,
             add_css_class: "sidebar",
             set_width_request: SIDEBAR_WIDTH_NORMAL as i32,
+            set_hexpand: false,
 
             // Top Fixed Section: Brand + Search
             gtk::Box {
@@ -90,6 +91,8 @@ impl Component for Sidebar {
             gtk::ScrolledWindow {
                 set_hscrollbar_policy: gtk::PolicyType::Never,
                 set_vscrollbar_policy: gtk::PolicyType::Automatic,
+                set_propagate_natural_width: false,
+                set_propagate_natural_height: false,
                 set_vexpand: true,
                 add_css_class: "sidebar-scrolled-window",
 

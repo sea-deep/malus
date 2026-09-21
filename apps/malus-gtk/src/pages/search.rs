@@ -118,6 +118,7 @@ impl Component for SearchPage {
                 set_margin_bottom: SPACING_XXL,
 
                 // Search Header: Search Entry Bar + Scope Switcher
+                #[name(search_header_box)]
                 gtk::Box {
                     set_orientation: gtk::Orientation::Horizontal,
                     set_spacing: SPACING_MD,
@@ -146,6 +147,7 @@ impl Component for SearchPage {
                     },
 
                     // Right: Scope Switcher [ Apple Music | Your Library ]
+                    #[name(scope_switcher)]
                     gtk::Box {
                         set_orientation: gtk::Orientation::Horizontal,
                         set_halign: gtk::Align::End,
@@ -197,14 +199,11 @@ impl Component for SearchPage {
                     ),
                 },
 
-                // Loading Spinner
-                #[name(spinner)]
-                gtk::Spinner {
-                    set_size_request: (CONTROL_SM, CONTROL_SM),
-                    set_halign: gtk::Align::Center,
-                    set_margin_top: SPACING_XXL,
-                    #[watch]
-                    set_spinning: model.is_loading,
+                // Loading Skeleton Container
+                #[name(skeleton_container)]
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_spacing: SPACING_LG,
                     #[watch]
                     set_visible: model.is_loading,
                 },
@@ -245,11 +244,14 @@ impl Component for SearchPage {
         };
 
         let mut widgets = view_output!();
+
         widgets
             .library_toggle
             .set_group(Some(&widgets.catalog_toggle));
 
         let content = widgets.content_box.clone();
+        let header_box = widgets.search_header_box.clone();
+        let switcher_box = widgets.scope_switcher.clone();
         let last_narrow = std::cell::Cell::new(None::<bool>);
         root.add_tick_callback(move |page, _| {
             let w = page.width();
@@ -264,6 +266,16 @@ impl Component for SearchPage {
                     };
                     content.set_margin_start(padding);
                     content.set_margin_end(padding);
+
+                    if narrow {
+                        header_box.set_orientation(gtk::Orientation::Vertical);
+                        header_box.set_spacing(SPACING_SM);
+                        switcher_box.set_halign(gtk::Align::Start);
+                    } else {
+                        header_box.set_orientation(gtk::Orientation::Horizontal);
+                        header_box.set_spacing(SPACING_MD);
+                        switcher_box.set_halign(gtk::Align::End);
+                    }
                 }
             }
             gtk::glib::ControlFlow::Continue
@@ -637,6 +649,16 @@ impl Component for SearchPage {
         };
         self.update(message, sender.clone(), root);
         self.update_view(widgets, sender.clone());
+        if self.is_loading {
+            if widgets.skeleton_container.first_child().is_none() {
+                let skeleton = crate::widgets::skeleton::build_search_results_skeleton();
+                widgets.skeleton_container.append(&skeleton);
+            }
+        } else {
+            while let Some(child) = widgets.skeleton_container.first_child() {
+                widgets.skeleton_container.remove(&child);
+            }
+        }
         if should_rerender {
             self.render_content(widgets, sender);
         }
@@ -667,11 +689,50 @@ impl Component for SearchPage {
         }
         self.update_cmd(message, sender.clone(), root);
         self.update_view(widgets, sender.clone());
+        if !self.is_loading {
+            while let Some(child) = widgets.skeleton_container.first_child() {
+                widgets.skeleton_container.remove(&child);
+            }
+        }
         self.render_content(widgets, sender);
     }
 }
 
 impl SearchPage {
+    pub fn find_track(&self, media_ref: &MediaRef) -> Option<Track> {
+        for tc in &self.track_controllers {
+            if &tc.model().track.id == media_ref {
+                return Some(tc.model().track.clone());
+            }
+        }
+        if let Some(results) = &self.results {
+            if let Some(tracks) = &results.tracks {
+                if let Some(item) = tracks.items.iter().find(|i| &i.id == media_ref) {
+                    return Some(item.clone());
+                }
+            }
+            if let Some(top) = &results.top_results {
+                for item in top {
+                    if item.entity.as_ref() == Some(media_ref) || item.id == media_ref.id() {
+                        let mut track = Track::new(
+                            media_ref.clone(),
+                            &item.title,
+                            item.subtitle.as_deref().unwrap_or_default(),
+                        );
+                        if let Some(artwork) = &item.artwork {
+                            track = track.with_artwork(artwork.clone());
+                        }
+                        if let Some(dur) = item.duration_ms {
+                            track = track.with_duration_ms(dur);
+                        }
+                        return Some(track);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     fn render_content(&mut self, widgets: &mut SearchPageWidgets, sender: ComponentSender<Self>) {
         if self.is_loading {
             return;
@@ -1275,7 +1336,7 @@ impl SearchPage {
 
         let flow = gtk::FlowBox::builder()
             .selection_mode(gtk::SelectionMode::None)
-            .min_children_per_line(2)
+            .min_children_per_line(1)
             .max_children_per_line(10)
             .column_spacing(GRID_GAP)
             .row_spacing(GRID_GAP)
@@ -1354,7 +1415,7 @@ impl SearchPage {
 
         let flow = gtk::FlowBox::builder()
             .selection_mode(gtk::SelectionMode::None)
-            .min_children_per_line(2)
+            .min_children_per_line(1)
             .max_children_per_line(10)
             .column_spacing(GRID_GAP)
             .row_spacing(GRID_GAP)
@@ -1433,7 +1494,7 @@ impl SearchPage {
 
         let flow = gtk::FlowBox::builder()
             .selection_mode(gtk::SelectionMode::None)
-            .min_children_per_line(2)
+            .min_children_per_line(1)
             .max_children_per_line(10)
             .column_spacing(GRID_GAP)
             .row_spacing(GRID_GAP)
@@ -1512,7 +1573,7 @@ impl SearchPage {
 
         let flow = gtk::FlowBox::builder()
             .selection_mode(gtk::SelectionMode::None)
-            .min_children_per_line(2)
+            .min_children_per_line(1)
             .max_children_per_line(10)
             .column_spacing(GRID_GAP)
             .row_spacing(GRID_GAP)

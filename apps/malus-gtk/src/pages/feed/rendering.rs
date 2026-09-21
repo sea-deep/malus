@@ -10,8 +10,8 @@ impl FeedPage {
             .margin_top(16)
             .margin_bottom(24)
             .build();
-        let spinner = gtk::Spinner::new();
-        spinner.start();
+        let spinner = adw::Spinner::new();
+        spinner.set_size_request(20, 20);
         let label = gtk::Label::new(Some("Loading more…"));
         label.add_css_class("dim-label");
         spinner_box.append(&spinner);
@@ -812,15 +812,42 @@ impl FeedPage {
             .vexpand(true)
             .build();
 
-        let title_lbl = gtk::Label::builder()
-            .label("Artists")
-            .xalign(0.0)
-            .css_classes(vec!["page-title".to_string()])
+        let sidebar_header = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
             .margin_start(12)
+            .margin_end(12)
             .margin_top(8)
             .margin_bottom(8)
             .build();
-        sidebar_box.append(&title_lbl);
+
+        let title_lbl = gtk::Label::builder()
+            .label("Artists")
+            .xalign(0.0)
+            .hexpand(true)
+            .css_classes(vec!["page-title".to_string()])
+            .build();
+        sidebar_header.append(&title_lbl);
+
+        let close_sidebar_btn = gtk::Button::builder()
+            .icon_name(ICON_CLOSE)
+            .tooltip_text("Close")
+            .css_classes(vec!["flat".to_string(), "circular".to_string()])
+            .valign(gtk::Align::Center)
+            .focus_on_click(false)
+            .visible(split.is_collapsed())
+            .build();
+        let split_close = split.clone();
+        close_sidebar_btn.connect_clicked(move |_| {
+            split_close.set_show_sidebar(false);
+        });
+        let close_c = close_sidebar_btn.clone();
+        split.connect_collapsed_notify(move |s| {
+            close_c.set_visible(s.is_collapsed());
+        });
+        sidebar_header.append(&close_sidebar_btn);
+
+        sidebar_box.append(&sidebar_header);
 
         let search_entry = gtk::SearchEntry::builder()
             .placeholder_text("Find in Artists")
@@ -892,38 +919,47 @@ impl FeedPage {
         sidebar_box.append(&scroll);
         split.set_sidebar(Some(&sidebar_box));
 
-        let (detail_scroll, back_box_opt) = self.build_artist_detail_content(sender);
-        *self.active_artist_back_box.borrow_mut() = back_box_opt;
+        let (detail_scroll, back_box_opt) = self.build_artist_detail_content(sender, &split);
+        *self.active_artist_back_box.borrow_mut() = back_box_opt.clone();
         split.set_content(Some(&detail_scroll));
 
         let show_cell = std::rc::Rc::new(std::cell::Cell::new(self.show_artist_detail));
         self.show_artist_detail_cell = Some(show_cell.clone());
         self.active_artist_split = Some(split.clone());
 
-        // Responsive behavior
-        let split_ref = split.clone();
-        let last_w = std::cell::Cell::new(0);
-        let back_box_cell = self.active_artist_back_box.clone();
-        let show_cell_ref = show_cell;
-        split.add_tick_callback(move |widget, _| {
-            let win_w = widget
+        let w = split.width();
+        let is_narrow = if w > 0 {
+            w < 720
+        } else {
+            split
                 .root()
                 .and_then(|r| r.downcast::<gtk::Window>().ok())
-                .map(|w| w.width())
-                .unwrap_or(0);
-            if win_w > 0 && last_w.replace(win_w) != win_w {
-                let is_narrow = win_w < 850;
-                let show_detail = show_cell_ref.get();
-                split_ref.set_collapsed(is_narrow);
-                if is_narrow {
-                    split_ref.set_show_sidebar(!show_detail);
-                    if let Some(b) = back_box_cell.borrow().as_ref() {
-                        b.set_visible(show_detail);
-                    }
-                } else {
-                    split_ref.set_show_sidebar(true);
-                    if let Some(b) = back_box_cell.borrow().as_ref() {
-                        b.set_visible(false);
+                .map(|win| win.width() > 0 && win.width() < 850)
+                .unwrap_or(false)
+        };
+        split.set_collapsed(is_narrow);
+        if is_narrow {
+            split.set_show_sidebar(!self.show_artist_detail);
+        } else {
+            split.set_show_sidebar(true);
+        }
+
+        // Responsive behavior
+        let split_ref = split.clone();
+        let last_is_narrow = std::cell::Cell::new(is_narrow);
+        let show_cell_ref = show_cell;
+        split.add_tick_callback(move |widget, _| {
+            let cur_w = widget.width();
+            if cur_w > 0 {
+                let is_narrow = cur_w < 720;
+                if is_narrow != last_is_narrow.get() {
+                    last_is_narrow.set(is_narrow);
+                    split_ref.set_collapsed(is_narrow);
+                    if is_narrow {
+                        let show_detail = show_cell_ref.get();
+                        split_ref.set_show_sidebar(!show_detail);
+                    } else {
+                        split_ref.set_show_sidebar(true);
                     }
                 }
             }
@@ -936,6 +972,7 @@ impl FeedPage {
     pub(super) fn build_artist_detail_content(
         &mut self,
         sender: ComponentSender<Self>,
+        split: &adw::OverlaySplitView,
     ) -> (gtk::ScrolledWindow, Option<gtk::Box>) {
         let detail_scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
@@ -955,30 +992,46 @@ impl FeedPage {
             .hexpand(true)
             .build();
 
-        let mut back_box_opt = None;
+        let toggle_btn = gtk::Button::builder()
+            .tooltip_text("Choose Artist")
+            .css_classes(vec![
+                "flat".to_string(),
+                "sidebar-chooser-toggle".to_string(),
+            ])
+            .valign(gtk::Align::Center)
+            .focus_on_click(false)
+            .visible(split.is_collapsed())
+            .build();
+
+        let btn_content = adw::ButtonContent::builder()
+            .icon_name(ICON_SIDEBAR_TOGGLE)
+            .label("Artists")
+            .build();
+        toggle_btn.set_child(Some(&btn_content));
+
+        let split_c = split.clone();
+        toggle_btn.connect_clicked(move |_| {
+            split_c.set_show_sidebar(!split_c.shows_sidebar());
+        });
+
+        let toggle_row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .halign(gtk::Align::Start)
+            .visible(split.is_collapsed())
+            .build();
+        toggle_row.append(&toggle_btn);
+
+        let row_c = toggle_row.clone();
+        let btn_c = toggle_btn.clone();
+        split.connect_collapsed_notify(move |s| {
+            let collapsed = s.is_collapsed();
+            btn_c.set_visible(collapsed);
+            row_c.set_visible(collapsed);
+        });
+
+        detail_box.append(&toggle_row);
 
         if let Some(detail) = self.artist_detail.clone() {
-            // Narrow window back button (hidden by default on desktop)
-            let back_box = gtk::Box::builder()
-                .orientation(gtk::Orientation::Horizontal)
-                .spacing(6)
-                .margin_bottom(8)
-                .visible(false)
-                .build();
-
-            let back_btn = gtk::Button::builder()
-                .icon_name(ICON_BACK)
-                .label("Artists")
-                .css_classes(vec!["flat".to_string()])
-                .build();
-            let s = sender.clone();
-            back_btn.connect_clicked(move |_| {
-                s.input(FeedInput::BackToArtistList);
-            });
-            back_box.append(&back_btn);
-            detail_box.append(&back_box);
-            back_box_opt = Some(back_box);
-
             // Header
             if let Some(ref header) = detail.header {
                 let header_box = gtk::Box::builder()
@@ -986,6 +1039,12 @@ impl FeedPage {
                     .spacing(10)
                     .margin_top(4)
                     .margin_bottom(12)
+                    .build();
+
+                let title_row = gtk::Box::builder()
+                    .orientation(gtk::Orientation::Horizontal)
+                    .spacing(8)
+                    .valign(gtk::Align::Center)
                     .build();
 
                 let title_lbl = gtk::Label::builder()
@@ -1030,10 +1089,11 @@ impl FeedPage {
                     title_btn.connect_clicked(move |_| {
                         let _ = s.output(FeedOutput::Navigate(PageRoute::Artist(cid.clone())));
                     });
-                    header_box.append(&title_btn);
+                    title_row.append(&title_btn);
                 } else {
-                    header_box.append(&title_lbl);
+                    title_row.append(&title_lbl);
                 }
+                header_box.append(&title_row);
 
                 // Action buttons beneath title
                 let actions = self.build_header_actions(header, sender.clone());
@@ -1050,15 +1110,8 @@ impl FeedPage {
                 detail_box.append(&sec_widget);
             }
         } else if self.artist_detail_loading {
-            let spinner = gtk::Spinner::builder()
-                .spinning(true)
-                .width_request(32)
-                .height_request(32)
-                .halign(gtk::Align::Center)
-                .valign(gtk::Align::Center)
-                .vexpand(true)
-                .build();
-            detail_box.append(&spinner);
+            let skel = crate::widgets::skeleton::build_artist_detail_right_skeleton();
+            detail_box.append(&skel);
         } else if let Some(error) = &self.artist_error {
             let status = crate::widgets::empty_state::create_empty_state(
                 "network-error-symbolic",
@@ -1067,18 +1120,35 @@ impl FeedPage {
             );
             detail_box.append(&status);
         } else {
-            let empty_lbl = gtk::Label::builder()
-                .label("Select an artist to view library albums")
-                .css_classes(vec!["dim-label".to_string()])
+            let empty_box = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .spacing(16)
                 .halign(gtk::Align::Center)
                 .valign(gtk::Align::Center)
                 .vexpand(true)
                 .build();
-            detail_box.append(&empty_lbl);
+            let empty_lbl = gtk::Label::builder()
+                .label("Select an artist to view library albums")
+                .css_classes(vec!["dim-label".to_string()])
+                .build();
+            empty_box.append(&empty_lbl);
+
+            let choose_btn = gtk::Button::builder()
+                .label("Choose Artist")
+                .css_classes(vec!["suggested-action".to_string(), "pill".to_string()])
+                .halign(gtk::Align::Center)
+                .focus_on_click(false)
+                .build();
+            let split_choose = split.clone();
+            choose_btn.connect_clicked(move |_| {
+                split_choose.set_show_sidebar(true);
+            });
+            empty_box.append(&choose_btn);
+            detail_box.append(&empty_box);
         }
 
         detail_scroll.set_child(Some(&detail_box));
-        (detail_scroll, back_box_opt)
+        (detail_scroll, Some(toggle_row))
     }
 
     pub(super) fn update_artist_view_inplace(
@@ -1102,27 +1172,26 @@ impl FeedPage {
             }
         }
 
-        let (detail_scroll, back_box) = self.build_artist_detail_content(sender);
+        let (detail_scroll, back_box) = self.build_artist_detail_content(sender, split);
         *self.active_artist_back_box.borrow_mut() = back_box.clone();
         split.set_content(Some(&detail_scroll));
 
-        let win_narrow = split
-            .root()
-            .and_then(|r| r.downcast::<gtk::Window>().ok())
-            .map(|w| w.width() > 0 && w.width() < 850)
-            .unwrap_or(false);
-        let is_narrow = split.is_collapsed() || win_narrow;
+        let w = split.width();
+        let is_narrow = if w > 0 {
+            w < 720
+        } else {
+            split.is_collapsed()
+                || split
+                    .root()
+                    .and_then(|r| r.downcast::<gtk::Window>().ok())
+                    .map(|win| win.width() > 0 && win.width() < 850)
+                    .unwrap_or(false)
+        };
+        split.set_collapsed(is_narrow);
         if is_narrow {
-            split.set_collapsed(true);
             split.set_show_sidebar(!self.show_artist_detail);
-            if let Some(b) = &back_box {
-                b.set_visible(self.show_artist_detail);
-            }
         } else {
             split.set_show_sidebar(true);
-            if let Some(b) = &back_box {
-                b.set_visible(false);
-            }
         }
     }
 
@@ -1204,15 +1273,42 @@ impl FeedPage {
             .vexpand(true)
             .build();
 
-        let title_lbl = gtk::Label::builder()
-            .label("Genres")
-            .xalign(0.0)
-            .css_classes(vec!["page-title".to_string()])
+        let sidebar_header = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
             .margin_start(12)
+            .margin_end(12)
             .margin_top(8)
             .margin_bottom(8)
             .build();
-        sidebar_box.append(&title_lbl);
+
+        let title_lbl = gtk::Label::builder()
+            .label("Genres")
+            .xalign(0.0)
+            .hexpand(true)
+            .css_classes(vec!["page-title".to_string()])
+            .build();
+        sidebar_header.append(&title_lbl);
+
+        let close_sidebar_btn = gtk::Button::builder()
+            .icon_name(ICON_CLOSE)
+            .tooltip_text("Close")
+            .css_classes(vec!["flat".to_string(), "circular".to_string()])
+            .valign(gtk::Align::Center)
+            .focus_on_click(false)
+            .visible(split.is_collapsed())
+            .build();
+        let split_close = split.clone();
+        close_sidebar_btn.connect_clicked(move |_| {
+            split_close.set_show_sidebar(false);
+        });
+        let close_c = close_sidebar_btn.clone();
+        split.connect_collapsed_notify(move |s| {
+            close_c.set_visible(s.is_collapsed());
+        });
+        sidebar_header.append(&close_sidebar_btn);
+
+        sidebar_box.append(&sidebar_header);
 
         let search_entry = gtk::SearchEntry::builder()
             .placeholder_text("Find in Genres")
@@ -1307,38 +1403,47 @@ impl FeedPage {
         sidebar_box.append(&scroll);
         split.set_sidebar(Some(&sidebar_box));
 
-        let (detail_scroll, back_box_opt) = self.build_genre_detail_content(page, sender);
-        *self.active_genre_back_box.borrow_mut() = back_box_opt;
+        let (detail_scroll, back_box_opt) = self.build_genre_detail_content(page, sender, &split);
+        *self.active_genre_back_box.borrow_mut() = back_box_opt.clone();
         split.set_content(Some(&detail_scroll));
 
         let show_cell = std::rc::Rc::new(std::cell::Cell::new(self.show_genre_detail));
         self.show_genre_detail_cell = Some(show_cell.clone());
         self.active_genre_split = Some(split.clone());
 
-        // Responsive behavior
-        let split_ref = split.clone();
-        let last_w = std::cell::Cell::new(0);
-        let back_box_cell = self.active_genre_back_box.clone();
-        let show_cell_ref = show_cell;
-        split.add_tick_callback(move |widget, _| {
-            let win_w = widget
+        let w = split.width();
+        let is_narrow = if w > 0 {
+            w < 720
+        } else {
+            split
                 .root()
                 .and_then(|r| r.downcast::<gtk::Window>().ok())
-                .map(|w| w.width())
-                .unwrap_or(0);
-            if win_w > 0 && last_w.replace(win_w) != win_w {
-                let is_narrow = win_w < 850;
-                let show_detail = show_cell_ref.get();
-                split_ref.set_collapsed(is_narrow);
-                if is_narrow {
-                    split_ref.set_show_sidebar(!show_detail);
-                    if let Some(b) = back_box_cell.borrow().as_ref() {
-                        b.set_visible(show_detail);
-                    }
-                } else {
-                    split_ref.set_show_sidebar(true);
-                    if let Some(b) = back_box_cell.borrow().as_ref() {
-                        b.set_visible(false);
+                .map(|win| win.width() > 0 && win.width() < 850)
+                .unwrap_or(false)
+        };
+        split.set_collapsed(is_narrow);
+        if is_narrow {
+            split.set_show_sidebar(!self.show_genre_detail);
+        } else {
+            split.set_show_sidebar(true);
+        }
+
+        // Responsive behavior
+        let split_ref = split.clone();
+        let last_is_narrow = std::cell::Cell::new(is_narrow);
+        let show_cell_ref = show_cell;
+        split.add_tick_callback(move |widget, _| {
+            let cur_w = widget.width();
+            if cur_w > 0 {
+                let is_narrow = cur_w < 720;
+                if is_narrow != last_is_narrow.get() {
+                    last_is_narrow.set(is_narrow);
+                    split_ref.set_collapsed(is_narrow);
+                    if is_narrow {
+                        let show_detail = show_cell_ref.get();
+                        split_ref.set_show_sidebar(!show_detail);
+                    } else {
+                        split_ref.set_show_sidebar(true);
                     }
                 }
             }
@@ -1352,6 +1457,7 @@ impl FeedPage {
         &mut self,
         page: &PageWire,
         sender: ComponentSender<Self>,
+        split: &adw::OverlaySplitView,
     ) -> (gtk::ScrolledWindow, Option<gtk::Box>) {
         let all_items: Vec<_> = page
             .sections
@@ -1379,27 +1485,44 @@ impl FeedPage {
             .hexpand(true)
             .build();
 
-        // Narrow window back button
-        let back_box = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(6)
-            .margin_bottom(8)
-            .visible(false)
+        let toggle_btn = gtk::Button::builder()
+            .tooltip_text("Choose Genre")
+            .css_classes(vec![
+                "flat".to_string(),
+                "sidebar-chooser-toggle".to_string(),
+            ])
+            .valign(gtk::Align::Center)
+            .focus_on_click(false)
+            .visible(split.is_collapsed())
             .build();
 
-        let back_btn = gtk::Button::builder()
-            .icon_name(ICON_BACK)
+        let btn_content = adw::ButtonContent::builder()
+            .icon_name(ICON_SIDEBAR_TOGGLE)
             .label("Genres")
-            .css_classes(vec!["flat".to_string()])
-            .focus_on_click(false)
             .build();
-        let s_back = sender.clone();
-        back_btn.connect_clicked(move |_| {
-            s_back.input(FeedInput::BackToGenreList);
+        toggle_btn.set_child(Some(&btn_content));
+
+        let split_c = split.clone();
+        toggle_btn.connect_clicked(move |_| {
+            split_c.set_show_sidebar(!split_c.shows_sidebar());
         });
-        back_box.append(&back_btn);
-        detail_box.append(&back_box);
-        let back_box_opt = Some(back_box);
+
+        let toggle_row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .halign(gtk::Align::Start)
+            .visible(split.is_collapsed())
+            .build();
+        toggle_row.append(&toggle_btn);
+
+        let row_c = toggle_row.clone();
+        let btn_c = toggle_btn.clone();
+        split.connect_collapsed_notify(move |s| {
+            let collapsed = s.is_collapsed();
+            btn_c.set_visible(collapsed);
+            row_c.set_visible(collapsed);
+        });
+
+        detail_box.append(&toggle_row);
 
         // Filter items
         let mut filtered_items: Vec<_> = all_items
@@ -1452,6 +1575,7 @@ impl FeedPage {
         let title_lbl = gtk::Label::builder()
             .label(display_title)
             .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
             .css_classes(vec!["page-title".to_string()])
             .build();
         title_box.append(&title_lbl);
@@ -1528,7 +1652,7 @@ impl FeedPage {
             let flow = gtk::FlowBox::builder()
                 .valign(gtk::Align::Start)
                 .max_children_per_line(30)
-                .min_children_per_line(2)
+                .min_children_per_line(1)
                 .selection_mode(gtk::SelectionMode::None)
                 .column_spacing(16)
                 .row_spacing(16)
@@ -1608,7 +1732,7 @@ impl FeedPage {
         let vadj_c = vadj;
         detail_scroll.connect_map(move |_| check_scroll(&vadj_c));
 
-        (detail_scroll, back_box_opt)
+        (detail_scroll, Some(toggle_row))
     }
 
     pub(super) fn update_genre_view_inplace(
@@ -1639,27 +1763,26 @@ impl FeedPage {
             }
         }
 
-        let (detail_scroll, back_box) = self.build_genre_detail_content(&page, sender);
+        let (detail_scroll, back_box) = self.build_genre_detail_content(&page, sender, split);
         *self.active_genre_back_box.borrow_mut() = back_box.clone();
         split.set_content(Some(&detail_scroll));
 
-        let win_narrow = split
-            .root()
-            .and_then(|r| r.downcast::<gtk::Window>().ok())
-            .map(|w| w.width() > 0 && w.width() < 850)
-            .unwrap_or(false);
-        let is_narrow = split.is_collapsed() || win_narrow;
+        let w = split.width();
+        let is_narrow = if w > 0 {
+            w < 720
+        } else {
+            split.is_collapsed()
+                || split
+                    .root()
+                    .and_then(|r| r.downcast::<gtk::Window>().ok())
+                    .map(|win| win.width() > 0 && win.width() < 850)
+                    .unwrap_or(false)
+        };
+        split.set_collapsed(is_narrow);
         if is_narrow {
-            split.set_collapsed(true);
             split.set_show_sidebar(!self.show_genre_detail);
-            if let Some(b) = &back_box {
-                b.set_visible(self.show_genre_detail);
-            }
         } else {
             split.set_show_sidebar(true);
-            if let Some(b) = &back_box {
-                b.set_visible(false);
-            }
         }
     }
 

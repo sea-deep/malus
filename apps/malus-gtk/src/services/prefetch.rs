@@ -26,6 +26,17 @@ impl Default for PageCache {
     }
 }
 
+fn spawn_task<F>(future: F)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.spawn(future);
+    } else {
+        relm4::spawn(future);
+    }
+}
+
 impl PageCache {
     pub fn new() -> Self {
         Self {
@@ -87,10 +98,23 @@ impl PageCache {
         }
     }
 
+    /// Invalidates a specific route in the cache.
+    pub fn invalidate(&self, route: &PageRoute) {
+        if let Ok(mut entries) = self.entries.try_lock() {
+            entries.remove(route);
+        } else {
+            let entries = self.entries.clone();
+            let route = route.clone();
+            spawn_task(async move {
+                entries.lock().await.remove(&route);
+            });
+        }
+    }
+
     /// Prefetches a specific route in the background if not already cached.
     pub fn prefetch(&self, client: MalusClient, route: PageRoute) {
         let cache = self.clone();
-        tokio::spawn(async move {
+        spawn_task(async move {
             // Check if already in cache or in flight
             if cache.get(&route).await.is_some() {
                 return;
@@ -115,10 +139,7 @@ impl PageCache {
     /// Prefetches logical adjacent routes based on the user's current navigation.
     pub fn prefetch_related(&self, client: &MalusClient, current: &PageRoute) {
         match current {
-            PageRoute::Home => {
-                self.prefetch(client.clone(), PageRoute::New);
-                self.prefetch(client.clone(), PageRoute::Radio);
-            }
+            PageRoute::Home => {}
             PageRoute::LibraryRecentlyAdded => {
                 self.prefetch(client.clone(), PageRoute::LibraryAlbums);
                 self.prefetch(client.clone(), PageRoute::LibrarySongs);
@@ -132,5 +153,21 @@ impl PageCache {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_page_cache_insert_and_invalidate() {
+        let cache = PageCache::new();
+        let page = PageWire::new("home", "Home");
+        cache.try_insert(PageRoute::Home, page.clone());
+        assert!(cache.try_get(&PageRoute::Home).is_some());
+
+        cache.invalidate(&PageRoute::Home);
+        assert!(cache.try_get(&PageRoute::Home).is_none());
     }
 }

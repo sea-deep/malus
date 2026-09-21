@@ -6,6 +6,8 @@ use relm4::gtk::{self, prelude::*};
 use relm4::prelude::*;
 
 use crate::design::tokens::*;
+use crate::services::{ArtworkService, THUMB_LARGE, bind_artwork};
+use crate::widgets::SquareArtwork;
 
 pub struct StationCard {
     pub id: String,
@@ -24,6 +26,8 @@ pub struct StationCardInit {
     pub subtitle: Option<String>,
     pub bg_color: Option<String>,
     pub entity: Option<MediaRef>,
+    pub artwork_url: Option<String>,
+    pub artwork_service: Option<ArtworkService>,
 }
 
 #[derive(Debug)]
@@ -55,13 +59,16 @@ impl Component for StationCard {
             set_halign: gtk::Align::Center,
             set_valign: gtk::Align::Start,
 
-            // Gradient canvas with Apple logo and bold genre typography
+            // Canvas with artwork or gradient
             #[name(canvas_overlay)]
             gtk::Overlay {
                 set_width_request: STATION_CARD_SIZE,
                 set_height_request: STATION_CARD_SIZE,
                 set_halign: gtk::Align::Center,
                 set_valign: gtk::Align::Center,
+
+                #[name(art)]
+                SquareArtwork::new(STATION_CARD_SIZE, "station-card-artwork"),
 
                 #[name(canvas_box)]
                 gtk::Box {
@@ -164,24 +171,38 @@ impl Component for StationCard {
 
         let widgets = view_output!();
 
-        // Apply authentic CSS linear gradient based on station's bgColor
-        let hex = init.bg_color.as_deref().unwrap_or("#5b7bdc");
-        let clean_hex = hex.trim();
-        let safe_id = init.id.replace(|c: char| !c.is_alphanumeric(), "_");
-        let class_name = format!("station-grad-{safe_id}");
-        let css = format!(
-            ".{class_name} {{ background-image: linear-gradient(145deg, {clean_hex} 0%, rgba(0, 0, 0, 0.42) 100%); background-color: {clean_hex}; }}"
-        );
-        let provider = gtk::CssProvider::new();
-        provider.load_from_string(&css);
-        if let Some(display) = gtk::gdk::Display::default() {
-            gtk::style_context_add_provider_for_display(
-                &display,
-                &provider,
-                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        if let (Some(url), Some(service)) = (&init.artwork_url, &init.artwork_service) {
+            widgets.canvas_box.set_visible(false);
+            widgets.art.set_visible(true);
+            bind_artwork(
+                widgets.art.picture(),
+                service,
+                Some(url.clone()),
+                THUMB_LARGE,
             );
+        } else {
+            widgets.art.set_visible(false);
+            widgets.canvas_box.set_visible(true);
+
+            // Apply authentic CSS linear gradient based on station's bgColor
+            let hex = init.bg_color.as_deref().unwrap_or("#5b7bdc");
+            let clean_hex = hex.trim();
+            let safe_id = init.id.replace(|c: char| !c.is_alphanumeric(), "_");
+            let class_name = format!("station-grad-{safe_id}");
+            let css = format!(
+                ".{class_name} {{ background-image: linear-gradient(145deg, {clean_hex} 0%, rgba(0, 0, 0, 0.42) 100%); background-color: {clean_hex}; }}"
+            );
+            let provider = gtk::CssProvider::new();
+            provider.load_from_string(&css);
+            if let Some(display) = gtk::gdk::Display::default() {
+                gtk::style_context_add_provider_for_display(
+                    &display,
+                    &provider,
+                    gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+                );
+            }
+            widgets.canvas_box.add_css_class(&class_name);
         }
-        widgets.canvas_box.add_css_class(&class_name);
 
         // Click gesture
         let s = sender.clone();

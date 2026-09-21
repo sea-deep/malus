@@ -172,7 +172,7 @@ impl Component for MediaCard {
         let artwork = SquareArtwork::new(model.size, css_class);
         model.picture = artwork.picture().clone();
         widgets.artwork_overlay.set_child(Some(&artwork));
-        let target_size = (model.size * 2).clamp(128, 480) as u32;
+        let target_size = (model.size * 2).clamp(160, 800) as u32;
 
         if init.eager {
             model.artwork_loaded = true;
@@ -247,7 +247,7 @@ impl Component for MediaCard {
             MediaCardInput::LoadArtwork => {
                 if !self.artwork_loaded {
                     self.artwork_loaded = true;
-                    let target_size = (self.size * 2).clamp(128, 480) as u32;
+                    let target_size = (self.size * 2).clamp(160, 800) as u32;
                     bind_artwork(
                         &self.picture,
                         &self.artwork_service,
@@ -259,7 +259,7 @@ impl Component for MediaCard {
             MediaCardInput::Clicked => {
                 if !self.artwork_loaded {
                     self.artwork_loaded = true;
-                    let target_size = (self.size * 2).clamp(128, 480) as u32;
+                    let target_size = (self.size * 2).clamp(160, 800) as u32;
                     bind_artwork(
                         &self.picture,
                         &self.artwork_service,

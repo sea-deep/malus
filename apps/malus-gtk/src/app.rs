@@ -13,7 +13,7 @@
 
 use malus_client::{ClientEvent, ConnectionStatus, MalusClient};
 use malus_ipc::wire::PageActionWire;
-use malus_model::{AccountMediaState, Lyrics, MediaRef, PageRoute, PlayerStatus, Queue};
+use malus_model::{AccountMediaState, Lyrics, MediaRef, PageRoute, PlayerStatus, Queue, Track};
 use relm4::adw::{self, prelude::*};
 use relm4::gtk;
 use relm4::prelude::*;
@@ -170,6 +170,7 @@ impl Component for MalusApp {
                 set_transition_duration: 220,
                 set_hhomogeneous: false,
                 set_vhomogeneous: false,
+                set_interpolate_size: true,
                 add_named[Some("browse")] = &adw::ToolbarView {
                     // Top HeaderBar: Window controls & navigation
                     #[name(top_header_bar)]
@@ -262,6 +263,7 @@ impl Component for MalusApp {
                                     set_transition_type: gtk::StackTransitionType::Crossfade,
                                     set_hhomogeneous: false,
                                     set_vhomogeneous: false,
+                                    set_interpolate_size: true,
                                     set_vexpand: true,
                                     set_hexpand: true,
                                 },
@@ -588,11 +590,6 @@ impl Component for MalusApp {
             Some(&true.to_value()),
         );
         nav_breakpoint.add_setter(
-            &widgets.outer_split_view,
-            "show-sidebar",
-            Some(&false.to_value()),
-        );
-        nav_breakpoint.add_setter(
             &widgets.inner_split_view,
             "collapsed",
             Some(&true.to_value()),
@@ -751,10 +748,9 @@ impl Component for MalusApp {
                     self.player_bar.refresh(&self.player, self.utility_mode);
                 }
                 widgets.shell_stack.set_visible_child_name("browse");
-                let searching = dest.is_search();
                 self.history.navigate_to(dest.clone());
                 self.show_destination(dest, widgets);
-                if widgets.outer_split_view.is_collapsed() && !searching {
+                if widgets.outer_split_view.is_collapsed() {
                     widgets.outer_split_view.set_show_sidebar(false);
                 }
             }
@@ -763,6 +759,9 @@ impl Component for MalusApp {
                     sender.input(AppInput::CloseNowPlaying);
                 } else if let Some(dest) = self.history.go_back().cloned() {
                     self.show_destination(dest, widgets);
+                    if widgets.outer_split_view.is_collapsed() {
+                        widgets.outer_split_view.set_show_sidebar(false);
+                    }
                 } else {
                     sender.input(AppInput::CloseUtility);
                 }
@@ -772,6 +771,9 @@ impl Component for MalusApp {
                     && let Some(dest) = self.history.go_forward().cloned()
                 {
                     self.show_destination(dest, widgets);
+                    if widgets.outer_split_view.is_collapsed() {
+                        widgets.outer_split_view.set_show_sidebar(false);
+                    }
                 }
             }
             AppInput::ToggleSidebar => {
@@ -824,7 +826,9 @@ impl Component for MalusApp {
                     self.player_bar.refresh(&self.player, self.utility_mode);
                 }
                 widgets.shell_stack.set_visible_child_name("browse");
-                widgets.outer_split_view.set_show_sidebar(true);
+                if widgets.outer_split_view.is_collapsed() {
+                    widgets.outer_split_view.set_show_sidebar(false);
+                }
                 if widgets.inner_split_view.is_collapsed() && self.utility_mode.is_open() {
                     sender.input(AppInput::CloseUtility);
                 }
@@ -838,7 +842,7 @@ impl Component for MalusApp {
                 widgets.toast_overlay.add_toast(adw::Toast::new(&message));
             }
             AppInput::PlayCollection { reference, shuffle } => {
-                self.player.borrow_mut().now.action_in_flight = true;
+                self.player.borrow_mut().now.is_changing_track = true;
                 self.refresh_player();
                 let client = self.client.clone();
                 sender.oneshot_command(async move {
@@ -851,37 +855,83 @@ impl Component for MalusApp {
                 });
             }
             AppInput::PlayMedia(media_ref) => {
-                self.player.borrow_mut().now.action_in_flight = true;
+                let track = self.find_track_metadata(&media_ref);
+                {
+                    let mut p = self.player.borrow_mut();
+                    p.now.is_changing_track = true;
+                    if let Some(t) = track.clone() {
+                        p.now.current_track = Some(t);
+                        p.now.clock = malus_model::PresentationClock::new();
+                    }
+                }
+                if let Some(t) = &track {
+                    let url = t.artwork.as_ref().map(|a| a.url.clone());
+                    if self.artwork_url != url {
+                        self.artwork_url = url.clone();
+                        self.artwork_generation = self.artwork_generation.wrapping_add(1);
+                        let generation = self.artwork_generation;
+                        let service = self.artwork_service.clone();
+                        sender.oneshot_command(async move {
+                            AppCmd::ArtworkLoaded {
+                                generation,
+                                image: match url.as_deref() {
+                                    Some(u) => service.load(u).await,
+                                    None => None,
+                                },
+                            }
+                        });
+                    }
+                }
                 self.refresh_player();
                 let c = self.client.clone();
-                let s = sender.clone();
-                relm4::spawn(async move {
-                    if let Err(e) = c.play_media(&media_ref).await {
-                        s.input(AppInput::ShowToast(format!("Playback failed: {e}")));
-                    }
+                let m = media_ref.clone();
+                sender.oneshot_command(async move {
+                    AppCmd::PlayerFinished(c.play_media(&m).await.map_err(|e| e.to_string()))
                 });
-                self.now_playing_page.reload_queue();
-                self.utility_pane.reload_queue();
             }
             AppInput::PlayTrack {
                 track,
                 collection,
                 index,
             } => {
-                self.player.borrow_mut().now.action_in_flight = true;
+                let t_meta = self.find_track_metadata(&track);
+                {
+                    let mut p = self.player.borrow_mut();
+                    p.now.is_changing_track = true;
+                    if let Some(t) = t_meta.clone() {
+                        p.now.current_track = Some(t);
+                        p.now.clock = malus_model::PresentationClock::new();
+                    }
+                }
+                if let Some(t) = &t_meta {
+                    let url = t.artwork.as_ref().map(|a| a.url.clone());
+                    if self.artwork_url != url {
+                        self.artwork_url = url.clone();
+                        self.artwork_generation = self.artwork_generation.wrapping_add(1);
+                        let generation = self.artwork_generation;
+                        let service = self.artwork_service.clone();
+                        sender.oneshot_command(async move {
+                            AppCmd::ArtworkLoaded {
+                                generation,
+                                image: match url.as_deref() {
+                                    Some(u) => service.load(u).await,
+                                    None => None,
+                                },
+                            }
+                        });
+                    }
+                }
                 self.refresh_player();
                 let c = self.client.clone();
-                let s = sender.clone();
-                relm4::spawn(async move {
-                    if let Err(e) = c
-                        .play_media_with_context(&track, collection.as_ref(), index)
-                        .await
-                    {
-                        s.input(AppInput::ShowToast(format!("Playback failed: {e}")));
-                    }
+                let t_ref = track.clone();
+                let col = collection.clone();
+                sender.oneshot_command(async move {
+                    AppCmd::PlayerFinished(
+                        c.play_media_with_context(&t_ref, col.as_ref(), index)
+                            .await
+                            .map_err(|e| e.to_string()),
+                    )
                 });
-                self.now_playing_page.reload_queue();
-                self.utility_pane.reload_queue();
             }
             AppInput::ReloadPlaylists => {
                 self.sidebar.emit(SidebarInput::ReloadPlaylists);
@@ -1056,6 +1106,17 @@ impl Component for MalusApp {
                 sender.input(AppInput::OpenNowPlaying(mode));
             }
             AppInput::Tick => {
+                {
+                    let mut p = self.player.borrow_mut();
+                    if p.now.is_changing_track
+                        && p.now.is_playing()
+                        && (p.now.extrapolated_position_ms() > 0 || p.now.clock.position_ms() > 0)
+                    {
+                        p.now.is_changing_track = false;
+                        drop(p);
+                        self.refresh_player();
+                    }
+                }
                 let mut p = self.player.borrow_mut();
                 let position = p.now.extrapolated_position_ms();
                 p.lyrics.update_position(position);
@@ -1080,15 +1141,7 @@ impl Component for MalusApp {
                 return;
             }
             AppInput::Player(command) => self.dispatch_player(command, &sender),
-            AppInput::TogglePlayback => {
-                let c = self.client.clone();
-                let s = sender.clone();
-                relm4::spawn(async move {
-                    if let Err(e) = c.toggle_play().await {
-                        s.input(AppInput::ShowToast(format!("Playback error: {e}")));
-                    }
-                });
-            }
+            AppInput::TogglePlayback => self.dispatch_player(PlayerCommand::TogglePlay, &sender),
             AppInput::CopyLink(url) => {
                 widgets.top_header_bar.clipboard().set_text(&url);
                 sender.input(AppInput::ShowToast("Link copied to clipboard".to_string()));
@@ -1139,6 +1192,7 @@ impl Component for MalusApp {
             AppCmd::DaemonEvent(ev) => match ev {
                 ClientEvent::StatusChanged(status) => self.receive_status(status, &sender),
                 ClientEvent::QueueChanged(queue) => {
+                    self.player.borrow_mut().queue = Some(queue.clone());
                     self.now_playing_page.set_queue(queue.clone());
                     self.utility_pane.set_queue(queue);
                 }
@@ -1173,6 +1227,7 @@ impl Component for MalusApp {
             }
             AppCmd::InitialQueue(queue) => {
                 if let Some(queue) = queue {
+                    self.player.borrow_mut().queue = Some(queue.clone());
                     self.now_playing_page.set_queue(queue.clone());
                     self.utility_pane.set_queue(queue);
                 }
@@ -1214,10 +1269,10 @@ impl Component for MalusApp {
             }
             AppCmd::PlayerFinished(result) => {
                 if let Err(error) = result {
-                    self.player.borrow_mut().now.action_in_flight = false;
-                    self.refresh_player();
                     self.player_bar.cancel_interactions();
                     self.now_playing_page.cancel_interactions();
+                    self.player.borrow_mut().now.is_changing_track = false;
+                    self.refresh_player();
                     sender.input(AppInput::ShowToast(format!("Playback failed: {error}")));
                 }
             }
@@ -1297,15 +1352,35 @@ impl MalusApp {
         }
         self.player_bar.refresh(&self.player, self.utility_mode);
     }
+    fn find_track_metadata(&self, media_ref: &MediaRef) -> Option<Track> {
+        if let Some(cur) = &self.player.borrow().now.current_track {
+            if &cur.id == media_ref {
+                return Some(cur.clone());
+            }
+        }
+        if let Some(queue) = &self.player.borrow().queue {
+            if let Some(item) = queue.items.iter().find(|i| &i.id == media_ref) {
+                return Some(item.clone());
+            }
+        }
+        if let Some(track) = self.feed_page.model().find_track(media_ref) {
+            return Some(track);
+        }
+        if let Some(track) = self.search_page.model().find_track(media_ref) {
+            return Some(track);
+        }
+        None
+    }
     fn refresh_player(&self) {
         self.player_bar.refresh(&self.player, self.utility_mode);
         self.now_playing_page.refresh(&self.player);
     }
     fn receive_status(&mut self, status: PlayerStatus, sender: &ComponentSender<Self>) {
         let mut p = self.player.borrow_mut();
-        let changed = p.now.current_track.as_ref().map(|t| &t.id)
-            != status.current_track.as_ref().map(|t| &t.id);
+        let old_id = p.now.current_track.as_ref().map(|t| t.id.clone());
         p.now.update_from_status(&status);
+        let new_id = p.now.current_track.as_ref().map(|t| t.id.clone());
+        let changed = old_id != new_id;
         let url = p
             .now
             .current_track
@@ -1313,50 +1388,61 @@ impl MalusApp {
             .and_then(|t| t.artwork.as_ref())
             .map(|a| a.url.clone());
         if changed {
+            self.feed_page
+                .emit(FeedInput::InvalidateRoute(PageRoute::Home));
             self.utility_pane.reload_queue();
             self.utility_pane.scroll_to_now_playing();
             p.lyrics.generation = p.lyrics.generation.wrapping_add(1);
             p.lyrics.content = None;
             p.lyrics.active = None;
             p.lyrics.error = None;
-            p.lyrics.loading = p.now.current_track.is_some();
+            let is_station = p
+                .now
+                .current_track
+                .as_ref()
+                .map(|t| matches!(t.id, MediaRef::Station(_)))
+                .unwrap_or(false);
+            p.lyrics.loading = p.now.current_track.is_some() && !is_station;
             let generation = p.lyrics.generation;
             if let Some(track) = &p.now.current_track {
-                let id = track.id.clone();
-                let c = self.client.clone();
-                sender.oneshot_command(async move {
-                    AppCmd::LyricsLoaded {
-                        generation,
-                        result: c.get_lyrics(&id).await.map_err(|e| e.to_string()),
-                    }
-                });
-                let id = track.id.clone();
-                let c = self.client.clone();
-                sender.oneshot_command(async move {
-                    AppCmd::MediaStateLoaded {
-                        generation,
-                        state: c.get_media_state(&id).await.ok(),
-                    }
-                });
-                let needs_enrichment = track.album.as_ref().and_then(|a| a.id.as_ref()).is_none()
-                    || track.artists.iter().any(|a| a.id.is_none())
-                    || (track.artists.len() == 1
-                        && (track.artists[0].name.contains(" & ")
-                            || track.artists[0].name.contains(", ")));
-                if needs_enrichment {
+                if !is_station {
                     let id = track.id.clone();
                     let c = self.client.clone();
                     sender.oneshot_command(async move {
-                        match c.get_catalog_item(&id).await {
-                            Ok(malus_ipc::wire::CatalogItemWire::Track(enriched)) => {
-                                AppCmd::TrackEnriched {
-                                    generation,
-                                    track: enriched,
-                                }
-                            }
-                            _ => AppCmd::TrackEnrichedFailed,
+                        AppCmd::LyricsLoaded {
+                            generation,
+                            result: c.get_lyrics(&id).await.map_err(|e| e.to_string()),
                         }
                     });
+                    let id = track.id.clone();
+                    let c = self.client.clone();
+                    sender.oneshot_command(async move {
+                        AppCmd::MediaStateLoaded {
+                            generation,
+                            state: c.get_media_state(&id).await.ok(),
+                        }
+                    });
+                    let needs_enrichment =
+                        track.album.as_ref().and_then(|a| a.id.as_ref()).is_none()
+                            || track.artists.iter().any(|a| a.id.is_none())
+                            || (track.artists.len() == 1
+                                && (track.artists[0].name.contains(" & ")
+                                    || track.artists[0].name.contains(", ")));
+                    if needs_enrichment {
+                        let id = track.id.clone();
+                        let c = self.client.clone();
+                        sender.oneshot_command(async move {
+                            match c.get_catalog_item(&id).await {
+                                Ok(malus_ipc::wire::CatalogItemWire::Track(enriched)) => {
+                                    AppCmd::TrackEnriched {
+                                        generation,
+                                        track: enriched,
+                                    }
+                                }
+                                _ => AppCmd::TrackEnrichedFailed,
+                            }
+                        });
+                    }
                 }
             }
         }
@@ -1393,27 +1479,63 @@ impl MalusApp {
             let _ = self.volume_tx.send(Some(volume));
             return;
         }
-        if let PlayerCommand::Seek { ref track, .. } = command
-            && self
-                .player
-                .borrow()
-                .now
-                .current_track
-                .as_ref()
-                .map(|t| &t.id)
-                != Some(track)
-        {
-            return;
+        if let PlayerCommand::Seek { ref track, .. } = command {
+            if self.player.borrow().now.is_live()
+                || self
+                    .player
+                    .borrow()
+                    .now
+                    .current_track
+                    .as_ref()
+                    .map(|t| &t.id)
+                    != Some(track)
+            {
+                return;
+            }
         }
-        if matches!(
-            command,
-            PlayerCommand::TogglePlay
-                | PlayerCommand::Pause
-                | PlayerCommand::Previous
-                | PlayerCommand::Next
-        ) {
-            self.player.borrow_mut().now.action_in_flight = true;
-            self.refresh_player();
+        match &command {
+            PlayerCommand::Next => {
+                let mut p = self.player.borrow_mut();
+                p.now.is_changing_track = true;
+                if let Some(queue) = &p.queue {
+                    if let Some(idx) = queue.current_index {
+                        if let Some(next_item) = queue.items.get(idx + 1) {
+                            p.now.current_track = Some(next_item.clone());
+                            p.now.clock = malus_model::PresentationClock::new();
+                        }
+                    }
+                }
+                drop(p);
+                self.refresh_player();
+            }
+            PlayerCommand::Previous => {
+                let mut p = self.player.borrow_mut();
+                p.now.is_changing_track = true;
+                if let Some(queue) = &p.queue {
+                    if let Some(idx) = queue.current_index {
+                        if idx > 0 {
+                            if let Some(prev_item) = queue.items.get(idx - 1) {
+                                p.now.current_track = Some(prev_item.clone());
+                                p.now.clock = malus_model::PresentationClock::new();
+                            }
+                        }
+                    }
+                }
+                drop(p);
+                self.refresh_player();
+            }
+            PlayerCommand::TogglePlay => {
+                let state = self.player.borrow().now.playback_state;
+                if state != malus_model::PlaybackState::Playing {
+                    self.player.borrow_mut().now.is_changing_track = true;
+                    self.refresh_player();
+                }
+            }
+            PlayerCommand::Pause => {
+                self.player.borrow_mut().now.is_changing_track = false;
+                self.refresh_player();
+            }
+            _ => {}
         }
         let c = self.client.clone();
         sender.oneshot_command(async move {

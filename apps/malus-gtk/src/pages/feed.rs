@@ -132,6 +132,7 @@ pub enum FeedInput {
     GenreSearchChanged(String),
     BackToGenreList,
     Reload,
+    InvalidateRoute(PageRoute),
     RetryContinuation,
 }
 
@@ -529,6 +530,12 @@ impl Component for FeedPage {
                 }
             }
             FeedInput::Reload => self.load_page(&sender),
+            FeedInput::InvalidateRoute(route) => {
+                self.page_cache.invalidate(&route);
+                if self.route == route && !self.is_loading {
+                    self.silent_refresh(&sender);
+                }
+            }
             FeedInput::RetryContinuation => {
                 self.continuation_error = None;
                 self.trigger_next_continuation(&sender);
@@ -607,8 +614,12 @@ impl Component for FeedPage {
                             }
                         }
                         Err(e) => {
-                            self.page_data = None;
-                            self.error_message = Some(format!("Failed to load page: {e}"));
+                            if self.page_data.is_none() {
+                                self.page_data = None;
+                                self.error_message = Some(format!("Failed to load page: {e}"));
+                            } else {
+                                tracing::warn!("Background page refresh failed: {e}");
+                            }
                         }
                     }
                 }
@@ -713,12 +724,16 @@ impl Component for FeedPage {
                 widgets.skeleton_container.append(&skeleton);
                 self.skeleton_route = Some(self.route.clone());
             }
-        } else if self.page_data.is_some() && route_changes {
-            self.skeleton_route = None;
-            while let Some(child) = widgets.skeleton_container.first_child() {
-                widgets.skeleton_container.remove(&child);
+        } else {
+            if self.skeleton_route.is_some() {
+                self.skeleton_route = None;
+                while let Some(child) = widgets.skeleton_container.first_child() {
+                    widgets.skeleton_container.remove(&child);
+                }
             }
-            self.render_content(widgets, sender.clone());
+            if self.page_data.is_some() && route_changes {
+                self.render_content(widgets, sender.clone());
+            }
         }
         if route_changes {
             widgets.scrolled_window.vadjustment().set_value(0.0);
@@ -815,6 +830,39 @@ impl Component for FeedPage {
 }
 
 impl FeedPage {
+    pub fn find_track(&self, media_ref: &MediaRef) -> Option<Track> {
+        for tc in &self.track_controllers {
+            if &tc.model().track.id == media_ref {
+                return Some(tc.model().track.clone());
+            }
+        }
+        for tc in &self.compact_track_controllers {
+            let m = tc.model();
+            if m.entity.as_ref() == Some(media_ref) || m.id == media_ref.id() {
+                let mut track = Track::new(
+                    media_ref.clone(),
+                    &m.title,
+                    m.artist.as_deref().unwrap_or_default(),
+                );
+                if let Some(url) = &m.artwork_url {
+                    track = track.with_artwork(malus_model::Artwork::new(url.clone()));
+                }
+                return Some(track);
+            }
+        }
+        if let Some(page) = &self.page_data {
+            if let Some(track) = find_track_in_page_data(page, media_ref) {
+                return Some(track);
+            }
+        }
+        if let Some(artist_page) = &self.artist_detail {
+            if let Some(track) = find_track_in_page_data(artist_page, media_ref) {
+                return Some(track);
+            }
+        }
+        None
+    }
+
     fn update_header_state(
         &mut self,
         state: &malus_model::AccountMediaState,
@@ -903,6 +951,26 @@ impl FeedPage {
         });
     }
 
+    fn silent_refresh(&mut self, sender: &ComponentSender<Self>) {
+        self.generation = self.generation.wrapping_add(1);
+        let client = self.client.clone();
+        let cache = self.page_cache.clone();
+        let route = self.route.clone();
+        let generation = self.generation;
+        sender.oneshot_command(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            let res = client.get_page(&route).await.map_err(|e| e.to_string());
+            if let Ok(ref page) = res {
+                cache.insert(route.clone(), page.clone()).await;
+            }
+            FeedCmd::PageLoaded {
+                generation,
+                result: res,
+                route,
+            }
+        });
+    }
+
     fn stop_continuation_spinner(&mut self) {
         if let Some(list) = &self.virtual_track_list {
             list.set_loading(false);
@@ -976,4 +1044,26 @@ impl FeedPage {
             });
         }
     }
+}
+
+fn find_track_in_page_data(page: &PageWire, media_ref: &MediaRef) -> Option<Track> {
+    for section in &page.sections {
+        for item in &section.items {
+            if item.entity.as_ref() == Some(media_ref) || item.id == media_ref.id() {
+                let mut track = Track::new(
+                    media_ref.clone(),
+                    &item.title,
+                    item.subtitle.as_deref().unwrap_or_default(),
+                );
+                if let Some(artwork) = &item.artwork {
+                    track = track.with_artwork(artwork.clone());
+                }
+                if let Some(dur) = item.duration_ms {
+                    track = track.with_duration_ms(dur);
+                }
+                return Some(track);
+            }
+        }
+    }
+    None
 }

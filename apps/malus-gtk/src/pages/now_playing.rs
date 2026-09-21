@@ -781,7 +781,13 @@ impl NowPlayingPage {
                 .current_track
                 .as_ref()
                 .map(|t| t.title.as_str())
-                .unwrap_or("Not Playing");
+                .unwrap_or_else(|| {
+                    if state.now.is_changing_track {
+                        "Loading…"
+                    } else {
+                        "Not Playing"
+                    }
+                });
 
             self.title.set_text(title_text);
             self.compact_title.set_text(title_text);

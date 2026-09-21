@@ -674,6 +674,11 @@ impl FeedPage {
 
                 for (idx, item) in items.iter().enumerate() {
                     let eager = section_index < 3 && idx < 6;
+                    let card_is_artist = item
+                        .open_route
+                        .as_ref()
+                        .map(|r| matches!(r, PageRoute::Artist(_)))
+                        .unwrap_or(false);
                     let card = MediaCard::builder()
                         .launch(MediaCardInit {
                             id: item.id.clone(),
@@ -684,8 +689,8 @@ impl FeedPage {
                             artwork_url: item.artwork.as_ref().map(|a| a.url.clone()),
                             entity: item.entity.clone(),
                             open_route: item.open_route.clone(),
-                            size: ARTWORK_TOP_PICKS_SIZE,
-                            is_circular: false,
+                            size: ARTWORK_SHELF_SIZE,
+                            is_circular: card_is_artist,
                             artwork_service: self.artwork_service.clone(),
                             eager,
                         })
@@ -704,17 +709,14 @@ impl FeedPage {
                     self.card_controllers.push(card);
                 }
 
-                let senders_ref = hook_shelf_artwork_trigger(
-                    &scrolled,
-                    ARTWORK_TOP_PICKS_SIZE as f64,
-                    shelf_senders,
-                );
+                let senders_ref =
+                    hook_shelf_artwork_trigger(&scrolled, ARTWORK_SHELF_SIZE as f64, shelf_senders);
 
                 self.mounted_sections.insert(
                     section.id.clone(),
                     MountedSection::Shelf {
                         shelf_box: shelf_box.clone(),
-                        card_size: ARTWORK_TOP_PICKS_SIZE,
+                        card_size: ARTWORK_SHELF_SIZE,
                         is_artist: false,
                         shelf_senders: senders_ref,
                     },
@@ -764,6 +766,8 @@ impl FeedPage {
                             subtitle: item.subtitle.clone(),
                             bg_color: item.bg_color.clone(),
                             entity: item.entity.clone(),
+                            artwork_url: item.artwork.as_ref().map(|a| a.url.clone()),
+                            artwork_service: Some(self.artwork_service.clone()),
                         })
                         .forward(sender.output_sender(), |out| match out {
                             StationCardOutput::Play(r) => FeedOutput::Play(r),

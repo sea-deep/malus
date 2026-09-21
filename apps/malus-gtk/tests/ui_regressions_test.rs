@@ -119,7 +119,7 @@ fn same_query_and_route_races_keep_newer_results_and_whitespace_does_not_cancel_
     assert!(
         labels(search.widget())
             .iter()
-            .any(|label| label == "Search")
+            .any(|label| label == "Browse Categories")
     );
     search.emit(SearchInput::ExecuteSearch("same".into()));
     pump(Duration::from_millis(80));
@@ -144,7 +144,7 @@ fn same_query_and_route_races_keep_newer_results_and_whitespace_does_not_cancel_
     assert!(
         labels(search.widget())
             .iter()
-            .any(|label| label == "Search")
+            .any(|label| label == "Browse Categories")
     );
 
     let feed = FeedPage::builder()

@@ -450,12 +450,10 @@ fn soft_surfaces_css(is_dark: bool) -> &'static str {
              background-color: alpha(mix(@headerbar_bg_color, @view_bg_color, 0.35), 0.84);\n\
              background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, transparent 70%);\n\
              border-top: 1px solid rgba(255, 255, 255, 0.08);\n\
-             transition: background-color 200ms ease;\n\
          }\n\
          .sidebar {\n\
              background-color: alpha(mix(@window_bg_color, @view_bg_color, 0.30), 0.82);\n\
              border-right: 1px solid rgba(255, 255, 255, 0.06);\n\
-             transition: background-color 200ms ease;\n\
          }\n\
          .master-split-view > .sidebar,\n\
          .master-split-view .sidebar,\n\
@@ -472,13 +470,11 @@ fn soft_surfaces_css(is_dark: bool) -> &'static str {
          .utility-pane {\n\
              background-color: alpha(mix(@window_bg_color, @view_bg_color, 0.30), 0.82);\n\
              border-left: 1px solid rgba(255, 255, 255, 0.06);\n\
-             transition: background-color 200ms ease;\n\
          }\n\
          .malus-window headerbar {\n\
              background-color: alpha(@headerbar_bg_color, 0.84);\n\
              background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, transparent 80%);\n\
              border-bottom: 1px solid rgba(255, 255, 255, 0.06);\n\
-             transition: background-color 200ms ease;\n\
          }\n\
          .malus-window headerbar button:hover {\n\
              background-color: alpha(currentColor, 0.08);\n\
@@ -494,12 +490,10 @@ fn soft_surfaces_css(is_dark: bool) -> &'static str {
              background-color: alpha(mix(@headerbar_bg_color, @view_bg_color, 0.35), 0.88);\n\
              background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.50) 0%, transparent 70%);\n\
              border-top: 1px solid rgba(0, 0, 0, 0.08);\n\
-             transition: background-color 200ms ease;\n\
          }\n\
          .sidebar {\n\
              background-color: alpha(mix(@window_bg_color, @view_bg_color, 0.30), 0.86);\n\
              border-right: 1px solid rgba(0, 0, 0, 0.07);\n\
-             transition: background-color 200ms ease;\n\
          }\n\
          .master-split-view > .sidebar,\n\
          .master-split-view .sidebar,\n\
@@ -516,13 +510,11 @@ fn soft_surfaces_css(is_dark: bool) -> &'static str {
          .utility-pane {\n\
              background-color: alpha(mix(@window_bg_color, @view_bg_color, 0.30), 0.86);\n\
              border-left: 1px solid rgba(0, 0, 0, 0.07);\n\
-             transition: background-color 200ms ease;\n\
          }\n\
          .malus-window headerbar {\n\
              background-color: alpha(@headerbar_bg_color, 0.88);\n\
              background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.55) 0%, transparent 80%);\n\
              border-bottom: 1px solid rgba(0, 0, 0, 0.07);\n\
-             transition: background-color 200ms ease;\n\
          }\n\
          .malus-window headerbar button:hover {\n\
              background-color: alpha(currentColor, 0.07);\n\

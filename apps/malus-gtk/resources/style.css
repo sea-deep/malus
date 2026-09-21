@@ -38,10 +38,7 @@ window.malus-window {
     transition: background-color 120ms ease;
 }
 .player-play-btn image { -gtk-icon-size: 22px; }
-.player-play-btn spinner { color: @accent_fg_color; -gtk-icon-size: 20px; }
-.np-play spinner { color: currentColor; -gtk-icon-size: 26px; }
 .player-play-btn:hover { background-color: shade(@accent_bg_color, 1.12); }
-.btn-active-pulse { opacity: 0.35; transition: opacity 200ms ease-out; }
 .player-favorite-btn { min-width: 30px; min-height: 30px; padding: 5px; color: alpha(currentColor, 0.55); border-radius: 8px; }
 .player-favorite-btn:hover { background-color: alpha(currentColor, 0.06); color: currentColor; }
 /* Universal active & inactive toggle button states (matching favorite standard) */
@@ -1192,6 +1189,19 @@ listview.track-list-view > row:selected {
     border-radius: 8px;
 }
 
+.sidebar-chooser-toggle {
+    font-size: 13px;
+    font-weight: 550;
+    border-radius: 8px;
+    background-color: alpha(currentColor, 0.07);
+    padding: 6px 12px;
+    transition: background-color 120ms ease;
+}
+
+.sidebar-chooser-toggle:hover {
+    background-color: alpha(currentColor, 0.14);
+}
+
 /* Shared shell details and keyboard focus. */
 .malus-window headerbar { background: transparent; box-shadow: none; }
 .malus-window headerbar button { border-radius: 999px; }
@@ -1246,7 +1256,8 @@ toastoverlay > toast {
     background-color: alpha(currentColor, 0.06);
 }
 
-.station-card-canvas {
+.station-card-canvas,
+.station-card-artwork {
     border-radius: 12px;
     box-shadow: 0 6px 18px alpha(black, 0.22);
 }
@@ -1406,8 +1417,8 @@ toastoverlay > toast {
 
 /* --- Browse Category Brick Cards --- */
 .category-card {
-    min-width: 224px;
-    min-height: 126px;
+    min-width: 180px;
+    min-height: 101px;
     border-radius: 12px;
     transition: transform 140ms ease, box-shadow 140ms ease;
     padding: 0;
@@ -1516,23 +1527,10 @@ toastoverlay > toast {
     background: transparent;
 }
 
-/* ── Skeleton Loading Shimmer / Pulse ─────────────────────────────── */
-@keyframes skeleton_pulse {
-    0% {
-        opacity: 0.32;
-    }
-    50% {
-        opacity: 0.72;
-    }
-    100% {
-        opacity: 0.32;
-    }
-}
-
+/* ── Skeleton Loading Placeholders ────────────────────────────────── */
 .skeleton-block {
-    background-color: alpha(currentColor, 0.08);
+    background-color: alpha(currentColor, 0.07);
     border-radius: 8px;
-    animation: skeleton_pulse 1.5s ease-in-out infinite;
 }
 
 .skeleton-circle {

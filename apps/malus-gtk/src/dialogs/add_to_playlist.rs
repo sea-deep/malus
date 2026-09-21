@@ -89,22 +89,31 @@ pub fn show_add_to_playlist_dialog<F>(
         .selection_mode(gtk::SelectionMode::None)
         .build();
 
-    let spinner = gtk::Spinner::builder()
-        .spinning(true)
-        .halign(gtk::Align::Center)
-        .margin_top(32)
-        .margin_bottom(32)
-        .build();
-
-    let spinner_container = gtk::Box::builder()
+    let skeleton_box = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .halign(gtk::Align::Center)
-        .valign(gtk::Align::Center)
-        .vexpand(true)
+        .spacing(8)
+        .margin_top(8)
+        .margin_bottom(8)
         .build();
-    spinner_container.append(&spinner);
+    for _ in 0..5 {
+        let row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(12)
+            .margin_start(12)
+            .margin_end(12)
+            .margin_top(6)
+            .margin_bottom(6)
+            .build();
+        row.append(&crate::widgets::skeleton::skeleton_box(Some(40), 40, 6));
+        let meta = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        meta.set_valign(gtk::Align::Center);
+        meta.append(&crate::widgets::skeleton::skeleton_text(Some(140), 14));
+        meta.append(&crate::widgets::skeleton::skeleton_text(Some(80), 11));
+        row.append(&meta);
+        skeleton_box.append(&row);
+    }
 
-    scrolled.set_child(Some(&spinner_container));
+    scrolled.set_child(Some(&skeleton_box));
     content_box.append(&scrolled);
 
     // Asynchronously fetch playlists

@@ -6,6 +6,7 @@ use relm4::prelude::*;
 
 use crate::design::tokens::*;
 use crate::services::{ArtworkService, bind_artwork};
+use crate::widgets::RectangularArtwork;
 
 #[derive(Debug, Clone)]
 pub struct CategoryCardInit {
@@ -42,17 +43,12 @@ impl Component for CategoryCard {
         gtk::Button {
             set_cursor_from_name: Some("pointer"),
             add_css_class: "category-card",
-            set_size_request: (CATEGORY_CARD_WIDTH, CATEGORY_CARD_HEIGHT),
+            set_hexpand: true,
 
             #[wrap(Some)]
             set_child = &gtk::Overlay {
-                #[name(pic)]
-                gtk::Picture {
-                    set_can_shrink: true,
-                    set_content_fit: gtk::ContentFit::Cover,
-                    set_size_request: (CATEGORY_CARD_WIDTH, CATEGORY_CARD_HEIGHT),
-                    add_css_class: "category-card-picture",
-                },
+                #[name(art)]
+                RectangularArtwork::new(CATEGORY_CARD_WIDTH, CATEGORY_CARD_HEIGHT, "category-card-picture"),
 
                 add_overlay = &gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
@@ -85,7 +81,7 @@ impl Component for CategoryCard {
         let widgets = view_output!();
 
         bind_artwork(
-            &widgets.pic,
+            widgets.art.picture(),
             &artwork_service,
             Some(model.info.artwork_url.clone()),
             800,

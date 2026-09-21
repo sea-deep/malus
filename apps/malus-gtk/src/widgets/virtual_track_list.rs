@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use malus_ipc::wire::{PageActionWire, PageItemWire};
 use malus_model::MediaRef;
 use relm4::ComponentSender;
+use relm4::adw;
 use relm4::gtk::{self, gio, glib, prelude::*, subclass::prelude::*};
 
 use crate::design::tokens::*;
@@ -524,8 +525,8 @@ impl VirtualTrackList {
             .margin_bottom(16)
             .visible(false)
             .build();
-        let spinner = gtk::Spinner::new();
-        spinner.start();
+        let spinner = adw::Spinner::new();
+        spinner.set_size_request(20, 20);
         let label = gtk::Label::new(Some("Loading more songs…"));
         label.add_css_class("dim-label");
         spinner_box.append(&spinner);
